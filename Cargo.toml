@@ -1,0 +1,12 @@
+[package]
+name = "image-canvas"
+description = "An allocated buffer suitable for image data."
+version = "0.0.1-a"
+authors = ["Andreas Molzer <andreas.molzer@gmx.de>"]
+edition = "2018"
+license = "MIT"
+readme = "README.md"
+documentation = "https://docs.rs/image-canvas"
+categories = ["multimedia::images"]
+
+[dependencies]
