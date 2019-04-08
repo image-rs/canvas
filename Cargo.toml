@@ -9,5 +9,8 @@ readme = "README.md"
 documentation = "https://docs.rs/image-canvas"
 categories = ["multimedia::images"]
 
+[lib]
+name = "canvas"
+
 [dependencies]
 zerocopy = "0.2.2"
