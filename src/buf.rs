@@ -1,44 +1,35 @@
 use core::mem;
-use core::alloc::{Layout, LayoutErr};
 use core::ptr::NonNull;
 
 use crate::pixels::{MAX_ALIGN, MaxAligned};
-use zerocopy::{ByteSlice, FromBytes, LayoutVerified};
+use crate::Pixel;
+use zerocopy::{AsBytes, ByteSlice, FromBytes, LayoutVerified};
 
 /// Allocates and manages the raw bytes.
 ///
 /// The inner invariants are:
 /// * `ptr` points to region with `layout`
 /// * `layout` is aligned to at least `MAX_ALIGN`
-struct Buf {
+pub struct Buf {
     /// The backing memory.
-    inner: Box<[u8]>,
+    ///
+    /// We never access the memory this way though, this exists merely for the `Drop` semantics.
+    _inner: Box<[u8]>,
 
     /// Pointer to the beginning of the aligned, valid region.
     ///
     /// Note that this may become redundant once `alloc` is fully stable. Then, we'd rather
     /// allocate the byte region with the correct alignment.
-    ptr: Option<NonNull<[u8]>>,
+    ptr: NonNull<[u8]>,
 }
 
 impl Buf {
     pub fn as_bytes(&self) -> &[u8] {
-        match &self.ptr {
-            Some(ptr) => unsafe { ptr.as_ref() },
-            None => &[],
-        }
+        unsafe { self.ptr.as_ref() }
     }
 
     pub fn as_bytes_mut(&mut self) -> &mut [u8] {
-        match &mut self.ptr {
-            Some(ptr) => unsafe { ptr.as_mut() },
-            None => &mut [],
-        }
-    }
-
-    fn layout(bytes: usize) -> Layout {
-        Layout::from_size_align(bytes, MAX_ALIGN)
-            .unwrap_or_else(layout_panic)
+        unsafe { self.ptr.as_mut() }
     }
 
     /// Allocate a new `Buf` with a number of bytes.
@@ -59,9 +50,36 @@ impl Buf {
         };
 
         Buf {
-            inner: boxed,
-            ptr: Some(aligned_ptr),
+            _inner: boxed,
+            ptr: aligned_ptr,
         }
+    }
+
+    /// Reinterpret the buffer for the specific pixel type.
+    ///
+    /// The alignment of `P` is already checked to be smaller than `MAX_ALIGN` through the
+    /// constructor of `Pixel`. The slice will have the maximum length possible but may leave
+    /// unused bytes in the end.
+    pub fn as_pixels<P>(&self, _: Pixel<P>) -> &[P]
+        where P: FromBytes
+    {
+        let (bytes, _) = prefix_slice::<_, P>(self.as_bytes());
+        LayoutVerified::<_, [P]>::new_slice(bytes).unwrap_or_else(
+            || unreachable!("Verified alignment in Pixel and len dynamically")
+        ).into_slice()
+    }
+
+    /// Reinterpret the buffer mutable for the specific pixel type.
+    ///
+    /// The alignment of `P` is already checked to be smaller than `MAX_ALIGN` through the
+    /// constructor of `Pixel`.
+    pub fn as_mut_pixels<P>(&mut self, _: Pixel<P>) -> &mut [P]
+        where P: AsBytes + FromBytes
+    {
+        let (bytes, _) = prefix_slice::<_, P>(self.as_bytes_mut());
+        LayoutVerified::<_, [P]>::new_slice(bytes).unwrap_or_else(
+            || unreachable!("Verified alignment in Pixel and len dynamically")
+        ).into_mut_slice()
     }
 }
 
@@ -73,7 +91,6 @@ fn align_to<B, T>(slice: B) -> (B, LayoutVerified<B, [T]>, B)
     where B: ByteSlice, T: FromBytes
 {
     let align = mem::align_of::<T>();
-    let size = mem::size_of::<T>();
     let addr = slice.as_ptr() as usize;
 
     // Calculate the next aligned address. We don't particularly care about overflows as they do
@@ -84,34 +101,28 @@ fn align_to<B, T>(slice: B) -> (B, LayoutVerified<B, [T]>, B)
     let (pre, slice) = slice.split_at(padding);
 
     // Now calculate the remaining length for the slice.
-    let len = (slice.len() / size) * size;
-    let (slice, post) = slice.split_at(len);
+    let (slice, post) = prefix_slice::<_, T>(slice);
     let layout = LayoutVerified::new_slice(slice).unwrap_or_else(
         || unreachable!("Verified len and align"));
     (pre, layout, post)
 }
 
-#[inline(always)]
-fn layout_panic<T>(err: LayoutErr) -> T {
-    layout_panic_impl(err)
-}
-
-#[inline(never)]
-#[cold]
-fn layout_panic_impl(err: LayoutErr) -> ! {
-    panic!("Could not allocate memory with the required layout {}", err)
+fn prefix_slice<B, T>(slice: B) -> (B, B) where B: ByteSlice
+{
+    let size = mem::size_of::<T>();
+    let len = (slice.len() / size) * size;
+    slice.split_at(len)
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::pixels::MAX;
 
     #[test]
     fn single_max_element() {
         let mut buf = Buf::new(mem::size_of::<MaxAligned>());
-        let layout = LayoutVerified::<_, [MaxAligned]>::new_slice(buf.as_bytes_mut())
-            .expect("Buffer is aligned");
-        let slice = layout.into_mut_slice();
+        let slice = buf.as_mut_pixels(MAX);
         assert!(slice.len() == 1);
     }
 }
