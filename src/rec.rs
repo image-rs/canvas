@@ -1,6 +1,6 @@
 use core::ops::{Deref, DerefMut};
 
-use crate::Pixel;
+use crate::{AsPixel, Pixel};
 use crate::buf::Buf;
 use zerocopy::{AsBytes, FromBytes};
 
@@ -15,14 +15,22 @@ pub struct Rec<P: AsBytes + FromBytes> {
 
 impl<P: AsBytes + FromBytes> Rec<P> {
     /// Allocate a pixel buffer by the pixel count.
-    pub fn new(pixel: Pixel<P>, count: usize) -> Self {
+    pub fn new(count: usize) -> Self where P: AsPixel {
+        Self::new_for_pixel(P::pixel(), count)
+    }
+
+    /// Allocate a pixel buffer by the pixel count.
+    ///
+    /// Provides the opportunity to construct the pixel argument via other means than the trait,
+    /// for example a dynamically checked expression.
+    pub fn new_for_pixel(pixel: Pixel<P>, count: usize) -> Self {
         let mem_size = pixel.size().checked_mul(count).unwrap_or_else(
-            || panic!("Requested size overflow"));
-        Self::new_bytes(pixel, mem_size)
+            || panic!("Requested count overflows memory size"));
+        Self::bytes_for_pixel(pixel, mem_size)
     }
 
     /// Allocate a pixel buffer by providing the byte count you wish to allocate.
-    pub fn new_bytes(pixel: Pixel<P>, mem_size: usize) -> Self {
+    pub fn bytes_for_pixel(pixel: Pixel<P>, mem_size: usize) -> Self {
         Rec {
             inner: Buf::new(mem_size),
             pixel,
@@ -49,13 +57,26 @@ impl<P: AsBytes + FromBytes> Rec<P> {
         self.inner.as_bytes_mut()
     }
 
+    pub fn byte_len(&self) -> usize {
+        self.as_bytes().len()
+    }
+
+    /// Reinterpret the buffer for a different type of pixel.
+    ///
+    /// See `reinterpret_to` for details.
+    pub fn reinterpret<Q>(self) -> Rec<Q>
+        where Q: AsPixel + AsBytes + FromBytes
+    {
+        self.reinterpret_to(Q::pixel())
+    }
+
     /// Reinterpret the buffer for a different type of pixel.
     ///
     /// Note that this may leave some of the underlying pixels unaccessible if the new type is
     /// larger than the old one and the allocation was not a multiple of the new size. Conversely,
     /// some new bytes may become accessible if the memory length was not a multiple of the
     /// previous pixel type's length.
-    pub fn reinterpret<Q>(self, pixel: Pixel<Q>) -> Rec<Q>
+    pub fn reinterpret_to<Q>(self, pixel: Pixel<Q>) -> Rec<Q>
         where Q: AsBytes + FromBytes
     {
         Rec {

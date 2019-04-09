@@ -25,7 +25,7 @@ impl<P: AsBytes + FromBytes> Canvas<P> {
     /// When allocation of memory fails.
     pub fn with_layout(layout: Layout<P>) -> Self {
         Canvas {
-            inner: Rec::new_bytes(layout.pixel, layout.byte_len()),
+            inner: Rec::bytes_for_pixel(layout.pixel, layout.byte_len()),
             layout,
         }
     }
@@ -51,10 +51,30 @@ impl<P: AsBytes + FromBytes> Canvas<P> {
     pub fn as_mut_slice(&mut self) -> &mut [P] {
         &mut self.inner.as_mut_slice()[..self.layout.len()]
     }
+
+    /// Reinterpret to another, same size pixel type.
+    ///
+    /// See `transmute_to` for details.
+    pub fn transmute<Q: AsPixel + AsBytes + FromBytes>(self) -> Canvas<Q> {
+        self.transmute_to(Q::pixel())
+    }
+
+    /// Reinterpret to another, same size pixel type.
+    ///
+    /// See `transmute_to` for details.
+    pub fn transmute_to<Q: AsBytes + FromBytes>(self, pixel: Pixel<Q>) -> Canvas<Q> {
+        let layout = self.layout.transmute_to(pixel);
+        let inner = self.inner.reinterpret_to(pixel);
+
+        Canvas {
+            layout,
+            inner,
+        }
+    }
 }
 
 impl<P> Layout<P> {
-    pub fn from_width_height_pixel(width: usize, height: usize, pixel: Pixel<P>)
+    pub fn width_and_height_for_pixel(pixel: Pixel<P>, width: usize, height: usize)
         -> Option<Self> 
     {
         let max_index = Self::max_index(width, height)?;
@@ -67,7 +87,7 @@ impl<P> Layout<P> {
         })
     }
 
-    pub fn from_width_and_height(width: usize, height: usize) -> Option<Self>
+    pub fn width_and_height(width: usize, height: usize) -> Option<Self>
         where P: AsPixel
     {
         Self::from_width_height_pixel(width, height, P::pixel())
@@ -82,6 +102,39 @@ impl<P> Layout<P> {
     /// The number of pixels in this layout
     pub fn len(self) -> usize {
         self.width * self.height
+    }
+
+    pub fn width(self) -> usize {
+        self.width
+    }
+
+    pub fn height(self) -> usize {
+        self.height
+    }
+
+    pub fn pixel(self) -> Pixel<P> {
+        self.pixel
+    }
+
+    /// Reinterpret to another, same size pixel type.
+    ///
+    /// See `transmute_to` for details.
+    pub fn transmute<Q: AsPixel>(self) -> Layout<Q> {
+        self.transmute_to(Q::pixel())
+    }
+
+    /// Reinterpret to another, same size pixel type.
+    ///
+    /// # Panics
+    /// Like `std::mem::transmute`, the size of the two types need to be equal. This ensures that
+    /// all indices are valid in both directions.
+    pub fn transmute_to<Q>(self, pixel: Pixel<Q>) -> Layout<Q> {
+        assert!(self.pixel.size() == pixel.size());
+        Layout {
+            width: self.width,
+            height: self.height,
+            pixel,
+        }
     }
 
     fn max_index(width: usize, height: usize) -> Option<usize> {
