@@ -1,6 +1,33 @@
 // Distributed under The MIT License (MIT)
 //
 // Copyright (c) 2019 The `image-rs` developers
+//! # Canvas
+//!
+//! An image canvas compatible with transmuting its byte content.
+//!
+//! ## Usage
+//!
+//! ```
+//! # fn send_over_network(_: &[u8]) { };
+//! use canvas::Canvas;
+//! let mut canvas = Canvas::with_width_and_height(400, 400);
+//!
+//! // Draw a bright red line.
+//! for i in 0..400 {
+//!     // Assign color as u8-RGBA
+//!     canvas[(i, i)] = [0xFF, 0x00, 0x00, 0xFF];
+//! }
+//!
+//! // Encode to network endian.
+//! let mut encoded = canvas.transmute::<u32>();
+//! encoded 
+//!     .as_mut_slice()
+//!     .iter_mut()
+//!     .for_each(|p| *p = p.to_be());
+//!
+//! // Send the raw bytes
+//! send_over_network(encoded.as_bytes());
+//! ```
 mod buf;
 mod canvas;
 mod rec;
@@ -60,6 +87,8 @@ pub mod pixels {
         (U8, u8),
         (I16, i16),
         (U16, u16),
+        (I32, i32),
+        (U32, u32),
         (RGB, [u8; 3]),
         (RGBA, [u8; 4]),
         (MAX, MaxAligned)

@@ -1,6 +1,8 @@
 // Distributed under The MIT License (MIT)
 //
 // Copyright (c) 2019 The `image-rs` developers
+use core::ops::{Index, IndexMut};
+
 use zerocopy::{AsBytes, FromBytes};
 use crate::{AsPixel, Rec, Pixel};
 
@@ -55,6 +57,14 @@ impl<P: AsBytes + FromBytes> Canvas<P> {
         &mut self.inner.as_mut_slice()[..self.layout.len()]
     }
 
+    pub fn as_bytes(&self) -> &[u8] {
+        &self.inner.as_bytes()[..self.layout.byte_len()]
+    }
+
+    pub fn as_bytes_mut(&mut self) -> &mut [u8] {
+        &mut self.inner.as_bytes_mut()[..self.layout.byte_len()]
+    }
+
     /// Reinterpret to another, same size pixel type.
     ///
     /// See `transmute_to` for details.
@@ -73,6 +83,13 @@ impl<P: AsBytes + FromBytes> Canvas<P> {
             layout,
             inner,
         }
+    }
+
+    fn index_of(&self, x: usize, y: usize) -> usize {
+        assert!(self.layout.in_bounds(x, y));
+
+        // Can't overflow, surely smaller than `layout.max_index()`.
+        y*self.layout.width() + x
     }
 }
 
@@ -140,6 +157,10 @@ impl<P> Layout<P> {
         }
     }
 
+    fn in_bounds(self, x: usize, y: usize) -> bool {
+        x < self.width && y < self.height
+    }
+
     fn max_index(width: usize, height: usize) -> Option<usize> {
         width.checked_mul(height)
     }
@@ -162,5 +183,20 @@ impl<P: AsPixel> Default for Layout<P> {
             height: 0,
             pixel: P::pixel(),
         }
+    }
+}
+
+impl<P: AsBytes + FromBytes> Index<(usize, usize)> for Canvas<P> {
+    type Output = P;
+
+    fn index(&self, (x, y): (usize, usize)) -> &P {
+        &self.as_slice()[self.index_of(x, y)]
+    }
+}
+
+impl<P: AsBytes + FromBytes> IndexMut<(usize, usize)> for Canvas<P> {
+    fn index_mut(&mut self, (x, y): (usize, usize)) -> &mut P {
+        let index = self.index_of(x, y);
+        &mut self.as_mut_slice()[index]
     }
 }
