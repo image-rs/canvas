@@ -1,3 +1,6 @@
+// Distributed under The MIT License (MIT)
+//
+// Copyright (c) 2019 The `image-rs` developers
 use zerocopy::{AsBytes, FromBytes};
 use crate::{AsPixel, Rec, Pixel};
 

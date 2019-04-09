@@ -1,3 +1,6 @@
+// Distributed under The MIT License (MIT)
+//
+// Copyright (c) 2019 The `image-rs` developers
 use core::mem;
 use core::ptr::NonNull;
 

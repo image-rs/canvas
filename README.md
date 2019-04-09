@@ -17,8 +17,7 @@ images and the necessary transmutations of the representated binary data are
 ## Not
 
 This library is not yet ready for use, and mostly a reservation in `crates.io`
-for future use for PistonDevelopers or another organization managing the
-`image` crate.
+for future use within the `image-rs` organization managing the `image` crate.
 
 It is also not intended to provide nd-algebra or other matrix style operations.
 This firstly keeps the implementation complexity low, allows other

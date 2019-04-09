@@ -1,3 +1,6 @@
+// Distributed under The MIT License (MIT)
+//
+// Copyright (c) 2019 The `image-rs` developers
 mod buf;
 mod canvas;
 mod rec;
