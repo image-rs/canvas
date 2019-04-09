@@ -39,7 +39,7 @@ impl<P: AsBytes + FromBytes> Canvas<P> {
     pub fn with_width_and_height(width: usize, height: usize) -> Self
         where P: AsPixel
     {
-        let layout = Layout::from_width_and_height(width, height)
+        let layout = Layout::width_and_height(width, height)
             .expect("Pixel layout can not fit into memory");
         Self::with_layout(layout)
     }
@@ -90,7 +90,7 @@ impl<P> Layout<P> {
     pub fn width_and_height(width: usize, height: usize) -> Option<Self>
         where P: AsPixel
     {
-        Self::from_width_height_pixel(width, height, P::pixel())
+        Self::width_and_height_for_pixel(P::pixel(), width, height)
     }
 
     /// Get the required bytes for this layout.
