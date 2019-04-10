@@ -1,0 +1,9 @@
+language: rust
+sudo: false
+os:
+    - linux
+    - osx
+rust:
+    - nightly
+script:
+    - cargo build -v && cargo test -v && cargo doc -v
