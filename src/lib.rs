@@ -65,10 +65,10 @@ pub mod pixels {
     /// A byte-like-type that is aligned to the required max alignment.
     ///
     /// This type does not contain padding and implements `FromBytes`.
-    #[derive(AsBytes, FromBytes)]
+    #[derive(Clone, Copy, AsBytes, FromBytes)]
     #[repr(align(16))]
     #[repr(C)]
-    pub struct MaxAligned([u8; 16]);
+    pub struct MaxAligned(pub [u8; 16]);
 
     macro_rules! constant_pixels {
         ($(($name:ident, $type:ty)),*) => {
