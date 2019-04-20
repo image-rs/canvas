@@ -48,6 +48,7 @@ impl<P: AsBytes + FromBytes> Rec<P> {
         self.inner.as_mut_pixels(self.pixel)
     }
 
+    /// The number of accessible elements for the current type.
     pub fn len(&self) -> usize {
         self.as_slice().len()
     }
@@ -60,6 +61,10 @@ impl<P: AsBytes + FromBytes> Rec<P> {
         self.inner.as_bytes_mut()
     }
 
+    /// The total number of managed bytes.
+    ///
+    /// This will not change even through a reinterpretation casts. This corresponds to the
+    /// capacity of the storage.
     pub fn byte_len(&self) -> usize {
         self.as_bytes().len()
     }

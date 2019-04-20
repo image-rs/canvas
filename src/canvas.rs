@@ -7,6 +7,54 @@ use zerocopy::{AsBytes, FromBytes};
 use crate::{AsPixel, Rec, Pixel};
 
 /// A 2d matrix of pixels.
+///
+/// The layout describes placement of samples within the memory buffer. An abstraction layer that
+/// provides strided access to such pixel data is not intended to be baked into this struct.
+/// Instead, it will always store the data in a row-major layout without holes.
+///
+/// There are two levels of control over the allocation behaviour of a `Canvas`. The direct
+/// methods, currently `with_width_and_height` only, lead to a canvas without intermediate steps
+/// but may panic due to an invalid layout. Manually using the intermediate [`Layout`] gives custom
+/// error handling options and additional offers inspection of the details of the to-be-allocated
+/// buffer. A third option is currently not available and depends on support from the Rust standard
+/// library, which could also handle allocation failures.
+///
+/// ## Usage for trusted inputs
+///
+/// Directly allocate your desired layout with `with_width_and_height`. This may panic when the
+/// allocation itself fails or when the allocation for the layout could not described, as the
+/// layout would not fit inside the available memory space (i.e. the indices would overflow a
+/// `usize`).
+///
+/// ## Usage for untrusted inputs
+///
+/// In some cases, for untrusted input such as in image parsing libraries, more control is desired.
+/// There is no way to currently catch an allocation failure in stable Rust. Thus, even reasonable
+/// bounds can lead to a `panic`, and this is unpreventable (note: when the `try_*` methods of
+/// `Vec` become stable this will change).  But one still may want to check the required size
+/// before allocation.
+///
+/// Firstly, no method will implicitely try to allocate memory and methods that will note the
+/// potential panic from allocation failure.
+///
+/// Secondly, an instance of [`Layout`] can be constructed in a panic free manner without any
+/// allocation and independently from the `Canvas` instance. By providing it to the `with_layout`
+/// constructor ensures that all potential intermediate failures–except as mentioned before–can be
+/// explicitely handled by the caller. Furthermore, some utility methods allow inspection of the
+/// eventual allocation size before the reservation of memory.
+///
+/// ## Restrictions
+///
+/// As previously mentioned, the samples in the internal buffer layout always appear without any
+/// holes. Therefore a fast `crop` operation requires wrapping the abstraction layer provided here
+/// into another layer describing the *accessible image*, independent from the layout of the actual
+/// *pixel data*. This separation of concern–layout vs. acess logic–simplifies the implementation
+/// and keeps it agnostic of the desired low-cost operations. Consider that other use cases may
+/// require operatios other than `crop` with constant time. Instead of choosing some consistent by
+/// limited set here, the mechanism to achieve it is deferred to an upper layer for further
+/// freedom. Other structs may, in the future, provide other pixel layouts.
+///
+/// [`Layout`]: ./struct.Layout.html
 pub struct Canvas<P: AsBytes + FromBytes> {
     inner: Rec<P>,
     layout: Layout<P>,
@@ -74,7 +122,10 @@ impl<P: AsBytes + FromBytes> Canvas<P> {
 
     /// Reinterpret to another, same size pixel type.
     ///
-    /// See `transmute_to` for details.
+    /// # Panics
+    ///
+    /// Like `std::mem::transmute`, the size of the two types need to be equal. This ensures that
+    /// all indices are valid in both directions.
     pub fn transmute_to<Q: AsBytes + FromBytes>(self, pixel: Pixel<Q>) -> Canvas<Q> {
         let layout = self.layout.transmute_to(pixel);
         let inner = self.inner.reinterpret_to(pixel);
