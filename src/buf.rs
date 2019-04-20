@@ -14,7 +14,7 @@ use zerocopy::{AsBytes, ByteSlice, FromBytes, LayoutVerified};
 /// * `layout` is aligned to at least `MAX_ALIGN`
 pub struct Buf {
     /// The backing memory.
-    inner: Box<[MaxAligned]>,
+    inner: Vec<MaxAligned>,
 }
 
 impl Buf {
@@ -34,7 +34,7 @@ impl Buf {
         // We allocate one alignment more, so that we always find a correctly aligned subslice in
         // the allocated region.
         let alloc_len = length/CHUNK_SIZE + (length % CHUNK_SIZE != 0) as usize;
-        let inner = vec![MaxAligned([0; 16]); alloc_len].into_boxed_slice();
+        let inner = vec![MaxAligned([0; 16]); alloc_len];
 
         Buf {
             inner,
