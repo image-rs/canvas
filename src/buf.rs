@@ -24,6 +24,8 @@ pub(crate) struct Buffer {
 pub(crate) struct buf([u8]);
 
 impl Buffer {
+    const ELEMENT: MaxAligned = MaxAligned([0; 16]);
+
     pub fn as_buf(&self) -> &buf {
         buf::new(self.inner.as_slice())
     }
@@ -36,15 +38,37 @@ impl Buffer {
     ///
     /// Panics if the length is too long to find a properly aligned subregion.
     pub fn new(length: usize) -> Self {
-        const CHUNK_SIZE: usize = mem::size_of::<MaxAligned>();
-        // We allocate one alignment more, so that we always find a correctly aligned subslice in
-        // the allocated region.
-        let alloc_len = length/CHUNK_SIZE + (length % CHUNK_SIZE != 0) as usize;
-        let inner = vec![MaxAligned([0; 16]); alloc_len];
+        let alloc_len = Self::alloc_len(length);
+        let inner = vec![Self::ELEMENT; alloc_len];
 
         Buffer {
             inner,
         }
+    }
+
+    /// Retrieve the byte capacity of the allocated storage.
+    pub fn capacity(&self) -> usize {
+        self.inner.len() * mem::size_of::<MaxAligned>()
+    }
+
+    /// Change the size of the storage.
+    ///
+    /// Only allocates when the new size is larger than the previous one.
+    pub fn resize(&mut self, bytes: usize) {
+        let new_len = Self::alloc_len(bytes);
+        self.inner.resize(new_len, Self::ELEMENT);
+    }
+
+    pub fn shrink_to_fit(&mut self) {
+        self.inner.shrink_to_fit()
+    }
+
+    fn alloc_len(length: usize) -> usize {
+        const CHUNK_SIZE: usize = mem::size_of::<MaxAligned>();
+        assert!(CHUNK_SIZE > 1);
+
+        // We allocated enough chunks for at least the length. This can never overflow.
+        length/CHUNK_SIZE + (length % CHUNK_SIZE != 0) as usize
     }
 }
 
@@ -178,5 +202,18 @@ mod tests {
             .enumerate()
             .for_each(|(idx, p)| *p = idx as u8);
         assert_eq!(u32::from_be(buffer.as_pixels(U32)[0]), 0x00010203);
+    }
+
+    #[test]
+    fn resize() {
+        let mut buffer = Buffer::new(0);
+        assert!(buffer.capacity() == 0);
+        buffer.resize(4);
+        assert!(buffer.capacity() >= 4);
+        buffer.resize(2);
+        assert!(buffer.capacity() >= 2);
+        buffer.resize(0);
+        buffer.shrink_to_fit();
+        assert!(buffer.capacity() == 0);
     }
 }
