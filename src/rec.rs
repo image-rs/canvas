@@ -4,7 +4,7 @@
 use core::ops::{Deref, DerefMut};
 
 use crate::{AsPixel, Pixel};
-use crate::buf::Buf;
+use crate::buf::Buffer;
 use zerocopy::{AsBytes, FromBytes};
 
 /// A **r**einterpretable v**ec**tor for an array of pixels.
@@ -12,7 +12,7 @@ use zerocopy::{AsBytes, FromBytes};
 /// It allows efficient conversion to other pixel representations, that is effective
 /// reinterpretation casts.
 pub struct Rec<P: AsBytes + FromBytes> {
-    inner: Buf,
+    inner: Buffer,
     pixel: Pixel<P>,
 }
 
@@ -35,7 +35,7 @@ impl<P: AsBytes + FromBytes> Rec<P> {
     /// Allocate a pixel buffer by providing the byte count you wish to allocate.
     pub fn bytes_for_pixel(pixel: Pixel<P>, mem_size: usize) -> Self {
         Rec {
-            inner: Buf::new(mem_size),
+            inner: Buffer::new(mem_size),
             pixel,
         }
     }
