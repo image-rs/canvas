@@ -2,7 +2,7 @@
 //
 // Copyright (c) 2019 The `image-rs` developers
 use core::mem;
-use core::ops::{Deref, DerefMut};
+use core::ops;
 
 use crate::pixels::{MaxAligned, MAX_ALIGN};
 use crate::Pixel;
@@ -160,7 +160,7 @@ fn prefix_slice<B, T>(slice: B) -> (B, B) where B: ByteSlice
     slice.split_at(len)
 }
 
-impl Deref for Buffer {
+impl ops::Deref for Buffer {
     type Target = buf;
 
     fn deref(&self) -> &buf {
@@ -168,9 +168,23 @@ impl Deref for Buffer {
     }
 }
 
-impl DerefMut for Buffer {
+impl ops::DerefMut for Buffer {
     fn deref_mut(&mut self) -> &mut buf {
         self.as_buf_mut()
+    }
+}
+
+impl ops::Index<ops::RangeTo<usize>> for buf {
+    type Output = buf;
+
+    fn index(&self, idx: ops::RangeTo<usize>) -> &buf {
+        Self::from_bytes(&self.0[idx]).unwrap()
+    }
+}
+
+impl ops::IndexMut<ops::RangeTo<usize>> for buf {
+    fn index_mut(&mut self, idx: ops::RangeTo<usize>) -> &mut buf {
+        Self::from_bytes_mut(&mut self.0[idx]).unwrap()
     }
 }
 

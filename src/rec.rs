@@ -4,7 +4,7 @@
 use core::ops::{Deref, DerefMut};
 
 use crate::{AsPixel, Pixel};
-use crate::buf::Buffer;
+use crate::buf::{Buffer, buf};
 use zerocopy::{AsBytes, FromBytes};
 
 /// A **r**einterpretable v**ec**tor for an array of pixels.
@@ -13,6 +13,7 @@ use zerocopy::{AsBytes, FromBytes};
 /// reinterpretation casts.
 pub struct Rec<P: AsBytes + FromBytes> {
     inner: Buffer,
+    length: usize,
     pixel: Pixel<P>,
 }
 
@@ -34,6 +35,7 @@ impl<P: AsBytes + FromBytes> Rec<P> {
     pub fn bytes_for_pixel(pixel: Pixel<P>, mem_size: usize) -> Self {
         Rec {
             inner: Buffer::new(mem_size),
+            length: mem_size,
             pixel,
         }
     }
@@ -52,7 +54,8 @@ impl<P: AsBytes + FromBytes> Rec<P> {
     ///
     /// This will always reallocate the buffer if the size exceeds the current capacity.
     pub fn resize_bytes(&mut self, bytes: usize) {
-        self.inner.resize(bytes)
+        self.inner.resize(bytes);
+        self.length = bytes;
     }
 
     /// Reallocate the slice to contain exactly as many bytes as necessary.
@@ -79,11 +82,12 @@ impl<P: AsBytes + FromBytes> Rec<P> {
     }
 
     pub fn as_slice(&self) -> &[P] {
-        self.inner.as_pixels(self.pixel)
+        self.buf().as_pixels(self.pixel)
     }
 
     pub fn as_mut_slice(&mut self) -> &mut [P] {
-        self.inner.as_mut_pixels(self.pixel)
+        let pixel = self.pixel;
+        self.buf_mut().as_mut_pixels(pixel)
     }
 
     /// The number of accessible elements for the current type.
@@ -97,11 +101,11 @@ impl<P: AsBytes + FromBytes> Rec<P> {
     }
 
     pub fn as_bytes(&self) -> &[u8] {
-        self.inner.as_bytes()
+        self.buf().as_bytes()
     }
 
     pub fn as_bytes_mut(&mut self) -> &mut [u8] {
-        self.inner.as_bytes_mut()
+        self.buf_mut().as_bytes_mut()
     }
 
     /// The total number of managed bytes.
@@ -137,8 +141,17 @@ impl<P: AsBytes + FromBytes> Rec<P> {
     {
         Rec {
             inner: self.inner,
+            length: self.length,
             pixel,
         }
+    }
+
+    fn buf(&self) -> &buf {
+        &self.inner[..self.length]
+    }
+
+    fn buf_mut(&mut self) -> &mut buf {
+        &mut self.inner[..self.length]
     }
 }
 
