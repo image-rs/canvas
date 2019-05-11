@@ -8,11 +8,19 @@ use crate::pixels::{MaxAligned, MAX_ALIGN};
 use crate::Pixel;
 use zerocopy::{AsBytes, ByteSlice, FromBytes, LayoutVerified};
 
-/// Allocates and manages the raw bytes.
+/// Allocates and manages raw bytes.
 ///
-/// The inner invariants are:
-/// * `ptr` points to region with `layout`
-/// * `layout` is aligned to at least `MAX_ALIGN`
+/// Provides a utility to allocate a slice of bytes aligned to the maximally required alignment.
+/// Since the elements are much larger than single bytes the inner storage will **not** have exact
+/// sizes as one would be used from by using a `Vec` as an allocator. This is instead more close to
+/// a `RawVec` and most operations have the same drawback as `Vec::reserve_exact` in not actually
+/// being exact.
+///
+/// Since exact length and capacity semantics are hard to guarantee for most operations, no effort
+/// is made to uphold them. Instead. keeping track of the exact, wanted logical length of the
+/// requested byte slice is the obligation of the user *under all circumstances*. As a consequence,
+/// there are also no operations which explicitely uncouple length and capacity. All operations
+/// simply work on best effort of making some number of bytes available.
 pub(crate) struct Buffer {
     /// The backing memory.
     inner: Vec<MaxAligned>,
@@ -48,21 +56,31 @@ impl Buffer {
 
     /// Retrieve the byte capacity of the allocated storage.
     pub fn capacity(&self) -> usize {
-        self.inner.len() * mem::size_of::<MaxAligned>()
+        self.inner.capacity() * mem::size_of::<MaxAligned>()
     }
 
-    /// Change the size of the storage.
+    /// Ensure to contain a minimum number of bytes.
     ///
-    /// Only allocates when the new size is larger than the previous one.
-    pub fn resize(&mut self, bytes: usize) {
+    /// Only allocates when the new required size is larger than the previous one. Note that this
+    /// does not ensure that the new length is exactly the byte count, it may be longer. If the
+    /// current length is already large enough then this will not do anything.
+    pub fn grow_to(&mut self, bytes: usize) {
+        let new_len = Self::alloc_len(bytes);
+        if self.len() < new_len {
+            self.inner.resize(new_len, Self::ELEMENT);
+        }
+    }
+
+    /// Reallocate to fit as closely as possible.
+    ///
+    /// The size after resizing may still be larger than requested.
+    pub fn resize_to(&mut self, bytes: usize) {
         let new_len = Self::alloc_len(bytes);
         self.inner.resize(new_len, Self::ELEMENT);
-    }
-
-    pub fn shrink_to_fit(&mut self) {
         self.inner.shrink_to_fit()
     }
 
+    /// Calculates the number of elements to have a byte buffer of requested length.
     fn alloc_len(length: usize) -> usize {
         const CHUNK_SIZE: usize = mem::size_of::<MaxAligned>();
         assert!(CHUNK_SIZE > 1);
@@ -174,6 +192,20 @@ impl ops::DerefMut for Buffer {
     }
 }
 
+impl ops::Deref for buf {
+    type Target = [u8];
+
+    fn deref(&self) -> &[u8] {
+        self.as_bytes()
+    }
+}
+
+impl ops::DerefMut for buf {
+    fn deref_mut(&mut self) -> &mut [u8] {
+        self.as_bytes_mut()
+    }
+}
+
 impl ops::Index<ops::RangeTo<usize>> for buf {
     type Output = buf;
 
@@ -216,18 +248,5 @@ mod tests {
             .enumerate()
             .for_each(|(idx, p)| *p = idx as u8);
         assert_eq!(u32::from_be(buffer.as_pixels(U32)[0]), 0x00010203);
-    }
-
-    #[test]
-    fn resize() {
-        let mut buffer = Buffer::new(0);
-        assert!(buffer.capacity() == 0);
-        buffer.resize(4);
-        assert!(buffer.capacity() >= 4);
-        buffer.resize(2);
-        assert!(buffer.capacity() >= 2);
-        buffer.resize(0);
-        buffer.shrink_to_fit();
-        assert!(buffer.capacity() == 0);
     }
 }

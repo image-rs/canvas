@@ -1,6 +1,7 @@
 // Distributed under The MIT License (MIT)
 //
 // Copyright (c) 2019 The `image-rs` developers
+use core::fmt;
 use core::ops::{Deref, DerefMut};
 
 use crate::{AsPixel, Pixel};
@@ -17,8 +18,21 @@ pub struct Rec<P: AsBytes + FromBytes> {
     pixel: Pixel<P>,
 }
 
+pub struct ReuseFailed {
+    requested: Option<usize>,
+    capacity: usize,
+}
+
 impl<P: AsBytes + FromBytes> Rec<P> {
     /// Allocate a pixel buffer by the pixel count.
+    ///
+    /// # Panics
+    ///
+    /// This function will panic when the byte-length of the slice with the provided count would
+    /// exceed the possible `usize` values. To avoid this, use `bytes_for_pixel` with manual
+    /// calculation of the byte length instead.
+    ///
+    /// This function will also panic if the allocation fails.
     pub fn new(count: usize) -> Self where P: AsPixel {
         Self::new_for_pixel(P::pixel(), count)
     }
@@ -27,11 +41,23 @@ impl<P: AsBytes + FromBytes> Rec<P> {
     ///
     /// Provides the opportunity to construct the pixel argument via other means than the trait,
     /// for example a dynamically checked expression.
+    ///
+    /// # Panics
+    ///
+    /// This function will panic when the byte-length of the slice with the provided count would
+    /// exceed the possible `usize` values. To avoid this, use `bytes_for_pixel` with manual
+    /// calculation of the byte length instead.
+    ///
+    /// This function will also panic if the allocation fails.
     pub fn new_for_pixel(pixel: Pixel<P>, count: usize) -> Self {
         Self::bytes_for_pixel(pixel, mem_size(pixel, count))
     }
 
     /// Allocate a pixel buffer by providing the byte count you wish to allocate.
+    ///
+    /// # Panics
+    ///
+    /// This function will panic if the allocation fails.
     pub fn bytes_for_pixel(pixel: Pixel<P>, mem_size: usize) -> Self {
         Rec {
             inner: Buffer::new(mem_size),
@@ -43,6 +69,14 @@ impl<P: AsBytes + FromBytes> Rec<P> {
     /// Change the number of pixels.
     ///
     /// This will always reallocate the buffer if the size exceeds the current capacity.
+    ///
+    /// # Panics
+    ///
+    /// This function will panic when the byte-length of the slice with the provided count would
+    /// exceed the possible `usize` values. To avoid this, use `resize_bytes` with manual
+    /// calculation of the byte length instead.
+    ///
+    /// This function will also panic if an allocation is necessary but fails.
     pub fn resize(&mut self, count: usize) {
         self.resize_bytes(mem_size(self.pixel, count))
     }
@@ -53,9 +87,59 @@ impl<P: AsBytes + FromBytes> Rec<P> {
     /// down.
     ///
     /// This will always reallocate the buffer if the size exceeds the current capacity.
+    ///
+    /// # Panics
+    ///
+    /// This function will panic if an allocation is necessary but fails.
     pub fn resize_bytes(&mut self, bytes: usize) {
-        self.inner.resize(bytes);
+        self.inner.grow_to(bytes);
         self.length = bytes;
+    }
+
+    /// Change the number of pixels without reallocation.
+    ///
+    /// Returns `Ok` when the resizing was successfully completed to the requested size and returns
+    /// `Err` if this could not have been performed without a reallocation. This function will also
+    /// never deallocate memory.
+    ///
+    /// ```
+    /// # use canvas::Rec;
+    /// // Initial allocation may panic due to allocation error for now.
+    /// let mut buffer: Rec<u16> = Rec::new(100);
+    /// buffer.reuse(0)
+    ///     .expect("Requested size smaller than allocation");
+    /// buffer.reuse(100)
+    ///     .expect("The buffer didn't shrink from previous reuse");
+    ///
+    /// // Capacity may be larger than requested size at initialization.
+    /// let capacity = buffer.capacity();
+    /// buffer.reuse(capacity)
+    ///     .expect("Set to full underlying allocation size.");
+    /// ```
+    pub fn reuse(&mut self, count: usize) -> Result<(), ReuseFailed> {
+        let bytes = count
+            .checked_mul(self.pixel.size())
+            .ok_or_else(|| ReuseFailed {
+                requested: None,
+                capacity: self.byte_capacity(),
+            })?;
+        self.reuse_bytes(bytes)
+    }
+
+    /// Change the number of bytes without reallocation.
+    ///
+    /// Returns `Ok` when the resizing was successfully completed to the requested size and returns
+    /// `Err` with the new byte size otherwise.
+    pub fn reuse_bytes(&mut self, bytes: usize) -> Result<(), ReuseFailed> {
+        if bytes > self.byte_capacity() {
+            return Err(ReuseFailed {
+                requested: Some(bytes),
+                capacity: self.capacity(),
+            })
+        }
+
+        // Resize within capacity will not reallocate, thus not panic.
+        Ok(self.resize_bytes(bytes))
     }
 
     /// Reallocate the slice to contain exactly as many bytes as necessary.
@@ -75,10 +159,14 @@ impl<P: AsBytes + FromBytes> Rec<P> {
     /// let rec_u8 = rec_u32.reinterpret::<u8>();
     /// assert_eq!(rec_u8.len(), 4);
     /// ```
+    ///
+    /// # Panics
+    ///
+    /// This function will panic if the allocation fails.
     pub fn shrink_to_fit(&mut self) {
         let exact_size = mem_size(self.pixel, self.len());
-        self.resize_bytes(exact_size);
-        self.inner.shrink_to_fit();
+        self.inner.resize_to(exact_size);
+        self.length = exact_size;
     }
 
     pub fn as_slice(&self) -> &[P] {
@@ -171,5 +259,41 @@ impl<P: AsBytes + FromBytes> Deref for Rec<P> {
 impl<P: AsBytes + FromBytes> DerefMut for Rec<P> {
     fn deref_mut(&mut self) -> &mut [P] {
         self.as_mut_slice()
+    }
+}
+
+impl fmt::Debug for ReuseFailed {
+    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+        match self.requested {
+            None => {
+                write!(f, "Buffer reuse failed: Bytes count can not be expressed")
+            },
+            Some(requested) => {
+                write!(f, "Buffer reuse failed: {} bytes requested, only {} available",
+                    requested, self.capacity)
+            },
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn resize() {
+        let mut buffer: Rec<u8> = Rec::new(0);
+        assert_eq!(buffer.capacity(), 0);
+        assert_eq!(buffer.len(), 0);
+        buffer.resize(4);
+        assert!(buffer.capacity() >= 4);
+        assert_eq!(buffer.len(), 4);
+        buffer.resize(2);
+        assert!(buffer.capacity() >= 2);
+        assert_eq!(buffer.len(), 2);
+        buffer.resize(0);
+        buffer.shrink_to_fit();
+        assert_eq!(buffer.capacity(), 0);
+        assert_eq!(buffer.len(), 0);
     }
 }
