@@ -87,7 +87,7 @@ pub struct Layout<P> {
 /// let allocation = rec.as_bytes().as_ptr();
 ///
 /// let bad_layout = Layout::width_and_height(rec.capacity() + 1, 1).unwrap();
-/// let error = match Canvas::reuse_rec(rec, bad_layout) {
+/// let error = match Canvas::from_reused_rec(rec, bad_layout) {
 ///     Ok(_) => unreachable!("The layout requires one too many pixels"),
 ///     Err(error) => error,
 /// };
@@ -97,7 +97,7 @@ pub struct Layout<P> {
 /// assert_eq!(rec.as_bytes().as_ptr(), allocation);
 /// ```
 ///
-/// [`Canvas::from_rec`]: ./struct.Canvas.html#from_rec
+/// [`Canvas::from_rec`]: ./struct.Canvas.html#method.from_rec
 pub struct CanvasReuseError<P: AsBytes + FromBytes> {
     buffer: Rec<P>,
     layout: Layout<P>,
@@ -127,7 +127,7 @@ impl<P: AsBytes + FromBytes> Canvas<P> {
         Self::with_layout(layout)
     }
 
-    /// Interpret an existing buffer as an image.
+    /// Interpret an existing buffer as a pixel canvas.
     ///
     /// The data already contained within the buffer is not modified so that prior initialization
     /// can be performed or one array of samples reinterpreted for an image of other sample type.
@@ -142,11 +142,14 @@ impl<P: AsBytes + FromBytes> Canvas<P> {
         Self::new_raw(buffer, layout)
     }
 
-    /// Reuse an existing buffer for an image.
+    /// Reuse an existing buffer for a pixel canvas.
     ///
     /// Similar to `from_rec` but this function will never reallocate the inner buffer. Instead, it
-    /// will return the `Rec` unmodified in the `Err` variant.
-    pub fn reuse_rec(mut buffer: Rec<P>, layout: Layout<P>)
+    /// will return the `Rec` unmodified if the creation fails. See [`CanvasReuseError`] for
+    /// further information on the error and retrieving the buffer.
+    ///
+    /// [`CanvasReuseError`]: ./struct.CanvasReuseError.html
+    pub fn from_reused_rec(mut buffer: Rec<P>, layout: Layout<P>)
         -> Result<Self, CanvasReuseError<P>>
     {
         match buffer.reuse_bytes(layout.byte_len()) {
@@ -365,7 +368,7 @@ mod tests {
         let rec = Rec::<u8>::new(4);
         assert!(rec.capacity() >= 4);
         let layout = Layout::width_and_height(2, 2).unwrap();
-        let mut canvas = Canvas::reuse_rec(rec, layout)
+        let mut canvas = Canvas::from_reused_rec(rec, layout)
             .expect("Rec is surely large enough");
         canvas.reuse(Layout::width_and_height(1, 1).unwrap())
             .expect("Can scale down the image");
