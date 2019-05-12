@@ -18,7 +18,28 @@ pub struct Rec<P: AsBytes + FromBytes> {
     pixel: Pixel<P>,
 }
 
-pub struct ReuseFailed {
+/// Error representation for a failed buffer reuse.
+///
+/// Indicates that the capacity of the underlying buffer is not large enough to perform the
+/// operation without a reallocation. This may be either since the allocation is simply not large
+/// enough or due to the requested length not having any representation in memory for the chosen
+/// pixel type.
+///
+/// ```
+/// # use canvas::Rec;
+/// let mut rec = Rec::<u16>::new(16);
+/// 
+/// let err = match rec.reuse(rec.capacity() + 1) {
+///     Ok(_) => unreachable!("Increasing capacity would require reallocation"),
+///     Err(err) => err,
+/// };
+///
+/// let err = match rec.reuse(usize::max_value()) {
+///     Ok(_) => unreachable!("A slice of u16 can never have usize::MAX elements"),
+///     Err(err) => err,
+/// };
+/// ```
+pub struct ReuseError {
     requested: Option<usize>,
     capacity: usize,
 }
@@ -116,10 +137,10 @@ impl<P: AsBytes + FromBytes> Rec<P> {
     /// buffer.reuse(capacity)
     ///     .expect("Set to full underlying allocation size.");
     /// ```
-    pub fn reuse(&mut self, count: usize) -> Result<(), ReuseFailed> {
+    pub fn reuse(&mut self, count: usize) -> Result<(), ReuseError> {
         let bytes = count
             .checked_mul(self.pixel.size())
-            .ok_or_else(|| ReuseFailed {
+            .ok_or_else(|| ReuseError {
                 requested: None,
                 capacity: self.byte_capacity(),
             })?;
@@ -130,9 +151,9 @@ impl<P: AsBytes + FromBytes> Rec<P> {
     ///
     /// Returns `Ok` when the resizing was successfully completed to the requested size and returns
     /// `Err` with the new byte size otherwise.
-    pub fn reuse_bytes(&mut self, bytes: usize) -> Result<(), ReuseFailed> {
+    pub fn reuse_bytes(&mut self, bytes: usize) -> Result<(), ReuseError> {
         if bytes > self.byte_capacity() {
-            return Err(ReuseFailed {
+            return Err(ReuseError {
                 requested: Some(bytes),
                 capacity: self.capacity(),
             })
@@ -262,7 +283,7 @@ impl<P: AsBytes + FromBytes> DerefMut for Rec<P> {
     }
 }
 
-impl fmt::Debug for ReuseFailed {
+impl fmt::Debug for ReuseError {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
         match self.requested {
             None => {
