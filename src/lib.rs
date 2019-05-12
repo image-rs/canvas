@@ -37,8 +37,8 @@ use core::mem;
 
 use zerocopy::{AsBytes, FromBytes};
 
-pub use self::rec::Rec;
-pub use self::canvas::{Canvas, Layout};
+pub use self::rec::{Rec, ReuseError};
+pub use self::canvas::{Canvas, CanvasReuseError, Layout};
 
 /// Marker struct to denote a pixel type.
 ///

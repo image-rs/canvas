@@ -29,8 +29,6 @@ other needs.
 
 ## Todo
 
-* `Rec` and underlying `Buf` need `realloc`
-* `Canvas` should implement resizing to smaller image with guaranteed reuse
 * `Canvas` mutation to differently sized types blocked by ..
 * .. `Rec` logical mutations, keeping `len` but not `byte_len`
 * Relaxing internal `Buf` requirements to allow reuse of memory for `f32` (only

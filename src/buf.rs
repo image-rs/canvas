@@ -2,17 +2,25 @@
 //
 // Copyright (c) 2019 The `image-rs` developers
 use core::mem;
-use core::ops::{Deref, DerefMut};
+use core::ops;
 
 use crate::pixels::{MaxAligned, MAX_ALIGN};
 use crate::Pixel;
 use zerocopy::{AsBytes, ByteSlice, FromBytes, LayoutVerified};
 
-/// Allocates and manages the raw bytes.
+/// Allocates and manages raw bytes.
 ///
-/// The inner invariants are:
-/// * `ptr` points to region with `layout`
-/// * `layout` is aligned to at least `MAX_ALIGN`
+/// Provides a utility to allocate a slice of bytes aligned to the maximally required alignment.
+/// Since the elements are much larger than single bytes the inner storage will **not** have exact
+/// sizes as one would be used from by using a `Vec` as an allocator. This is instead more close to
+/// a `RawVec` and most operations have the same drawback as `Vec::reserve_exact` in not actually
+/// being exact.
+///
+/// Since exact length and capacity semantics are hard to guarantee for most operations, no effort
+/// is made to uphold them. Instead. keeping track of the exact, wanted logical length of the
+/// requested byte slice is the obligation of the user *under all circumstances*. As a consequence,
+/// there are also no operations which explicitely uncouple length and capacity. All operations
+/// simply work on best effort of making some number of bytes available.
 pub(crate) struct Buffer {
     /// The backing memory.
     inner: Vec<MaxAligned>,
@@ -24,6 +32,8 @@ pub(crate) struct Buffer {
 pub(crate) struct buf([u8]);
 
 impl Buffer {
+    const ELEMENT: MaxAligned = MaxAligned([0; 16]);
+
     pub fn as_buf(&self) -> &buf {
         buf::new(self.inner.as_slice())
     }
@@ -36,15 +46,47 @@ impl Buffer {
     ///
     /// Panics if the length is too long to find a properly aligned subregion.
     pub fn new(length: usize) -> Self {
-        const CHUNK_SIZE: usize = mem::size_of::<MaxAligned>();
-        // We allocate one alignment more, so that we always find a correctly aligned subslice in
-        // the allocated region.
-        let alloc_len = length/CHUNK_SIZE + (length % CHUNK_SIZE != 0) as usize;
-        let inner = vec![MaxAligned([0; 16]); alloc_len];
+        let alloc_len = Self::alloc_len(length);
+        let inner = vec![Self::ELEMENT; alloc_len];
 
         Buffer {
             inner,
         }
+    }
+
+    /// Retrieve the byte capacity of the allocated storage.
+    pub fn capacity(&self) -> usize {
+        self.inner.capacity() * mem::size_of::<MaxAligned>()
+    }
+
+    /// Ensure to contain a minimum number of bytes.
+    ///
+    /// Only allocates when the new required size is larger than the previous one. Note that this
+    /// does not ensure that the new length is exactly the byte count, it may be longer. If the
+    /// current length is already large enough then this will not do anything.
+    pub fn grow_to(&mut self, bytes: usize) {
+        let new_len = Self::alloc_len(bytes);
+        if self.len() < new_len {
+            self.inner.resize(new_len, Self::ELEMENT);
+        }
+    }
+
+    /// Reallocate to fit as closely as possible.
+    ///
+    /// The size after resizing may still be larger than requested.
+    pub fn resize_to(&mut self, bytes: usize) {
+        let new_len = Self::alloc_len(bytes);
+        self.inner.resize(new_len, Self::ELEMENT);
+        self.inner.shrink_to_fit()
+    }
+
+    /// Calculates the number of elements to have a byte buffer of requested length.
+    fn alloc_len(length: usize) -> usize {
+        const CHUNK_SIZE: usize = mem::size_of::<MaxAligned>();
+        assert!(CHUNK_SIZE > 1);
+
+        // We allocated enough chunks for at least the length. This can never overflow.
+        length/CHUNK_SIZE + (length % CHUNK_SIZE != 0) as usize
     }
 }
 
@@ -136,7 +178,7 @@ fn prefix_slice<B, T>(slice: B) -> (B, B) where B: ByteSlice
     slice.split_at(len)
 }
 
-impl Deref for Buffer {
+impl ops::Deref for Buffer {
     type Target = buf;
 
     fn deref(&self) -> &buf {
@@ -144,9 +186,37 @@ impl Deref for Buffer {
     }
 }
 
-impl DerefMut for Buffer {
+impl ops::DerefMut for Buffer {
     fn deref_mut(&mut self) -> &mut buf {
         self.as_buf_mut()
+    }
+}
+
+impl ops::Deref for buf {
+    type Target = [u8];
+
+    fn deref(&self) -> &[u8] {
+        self.as_bytes()
+    }
+}
+
+impl ops::DerefMut for buf {
+    fn deref_mut(&mut self) -> &mut [u8] {
+        self.as_bytes_mut()
+    }
+}
+
+impl ops::Index<ops::RangeTo<usize>> for buf {
+    type Output = buf;
+
+    fn index(&self, idx: ops::RangeTo<usize>) -> &buf {
+        Self::from_bytes(&self.0[idx]).unwrap()
+    }
+}
+
+impl ops::IndexMut<ops::RangeTo<usize>> for buf {
+    fn index_mut(&mut self, idx: ops::RangeTo<usize>) -> &mut buf {
+        Self::from_bytes_mut(&mut self.0[idx]).unwrap()
     }
 }
 
