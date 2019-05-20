@@ -56,6 +56,7 @@ use crate::{AsPixel, Rec, ReuseError, Pixel};
 /// freedom. Other structs may, in the future, provide other pixel layouts.
 ///
 /// [`Layout`]: ./struct.Layout.html
+#[derive(PartialEq, Eq)]
 pub struct Canvas<P: AsBytes + FromBytes> {
     inner: Rec<P>,
     layout: Layout<P>,
@@ -66,6 +67,7 @@ pub struct Canvas<P: AsBytes + FromBytes> {
 /// The underlying buffer may have more data allocated than this region and cause the overhead to
 /// be reused when resizing the image. All ways to construct this already check that all pixels
 /// within the resulting image can be addressed via an index.
+#[derive(PartialEq, Eq)]
 pub struct Layout<P> {
     width: usize,
     height: usize,

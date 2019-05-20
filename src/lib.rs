@@ -32,6 +32,7 @@ mod buf;
 mod canvas;
 mod rec;
 
+use core::cmp::{PartialEq, Eq, PartialOrd, Ord, Ordering};
 use core::marker::PhantomData;
 use core::mem;
 
@@ -124,6 +125,26 @@ impl<P> Pixel<P> {
 impl<P> Clone for Pixel<P> {
     fn clone(&self) -> Self {
         Pixel(PhantomData)
+    }
+}
+
+impl<P> PartialEq for Pixel<P> {
+    fn eq(&self, _: &Self) -> bool {
+        true
+    }
+}
+
+impl<P> Eq for Pixel<P> { }
+
+impl<P> PartialOrd for Pixel<P> {
+    fn partial_cmp(&self, _: &Self) -> Option<Ordering> {
+        Some(Ordering::Equal)
+    }
+}
+
+impl<P> Ord for Pixel<P> {
+    fn cmp(&self, _: &Self) -> Ordering {
+        Ordering::Equal
     }
 }
 

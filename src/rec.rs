@@ -1,6 +1,7 @@
 // Distributed under The MIT License (MIT)
 //
 // Copyright (c) 2019 The `image-rs` developers
+use core::cmp;
 use core::fmt;
 use core::ops::{Deref, DerefMut};
 
@@ -280,6 +281,26 @@ impl<P: AsBytes + FromBytes> Deref for Rec<P> {
 impl<P: AsBytes + FromBytes> DerefMut for Rec<P> {
     fn deref_mut(&mut self) -> &mut [P] {
         self.as_mut_slice()
+    }
+}
+
+impl<P: AsBytes + FromBytes + cmp::PartialEq> cmp::PartialEq for Rec<P> {
+    fn eq(&self, other: &Self) -> bool {
+        self.as_slice().eq(other.as_slice())
+    }
+}
+
+impl<P: AsBytes + FromBytes + cmp::Eq> cmp::Eq for Rec<P> { }
+
+impl<P: AsBytes + FromBytes + cmp::PartialOrd> cmp::PartialOrd for Rec<P> {
+    fn partial_cmp(&self, other: &Self) -> Option<cmp::Ordering> {
+        self.as_slice().partial_cmp(other.as_slice())
+    }
+}
+
+impl<P: AsBytes + FromBytes + cmp::Ord> cmp::Ord for Rec<P> {
+    fn cmp(&self, other: &Self) -> cmp::Ordering {
+        self.as_slice().cmp(other.as_slice())
     }
 }
 
