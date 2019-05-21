@@ -4,8 +4,7 @@
 use core::mem;
 use core::ops;
 
-use crate::pixels::{MaxAligned, MAX_ALIGN};
-use crate::Pixel;
+use crate::pixel::{MaxAligned, MAX_ALIGN, Pixel};
 use zerocopy::{AsBytes, ByteSlice, FromBytes, LayoutVerified};
 
 /// Allocates and manages raw bytes.
