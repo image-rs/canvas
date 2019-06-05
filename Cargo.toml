@@ -1,7 +1,7 @@
 [package]
 name = "image-canvas"
 description = "An allocated buffer suitable for image data."
-version = "0.0.2"
+version = "0.0.3"
 authors = ["Andreas Molzer <andreas.molzer@gmx.de>"]
 edition = "2018"
 license = "MIT"
@@ -13,4 +13,4 @@ categories = ["multimedia::images"]
 name = "canvas"
 
 [dependencies]
-zerocopy = "0.2.2"
+zerocopy = "0.2.3"
