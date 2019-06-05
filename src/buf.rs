@@ -21,6 +21,7 @@ use zerocopy::{AsBytes, ByteSlice, FromBytes, LayoutVerified};
 /// requested byte slice is the obligation of the user *under all circumstances*. As a consequence,
 /// there are also no operations which explicitely uncouple length and capacity. All operations
 /// simply work on best effort of making some number of bytes available.
+#[derive(Clone, Default)]
 pub(crate) struct Buffer {
     /// The backing memory.
     inner: Vec<MaxAligned>,

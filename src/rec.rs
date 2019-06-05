@@ -284,6 +284,25 @@ impl<P: AsBytes + FromBytes> DerefMut for Rec<P> {
     }
 }
 
+impl<P: AsBytes + FromBytes> Clone for Rec<P> {
+    fn clone(&self) -> Self {
+        Rec {
+            inner: self.inner.clone(),
+            .. *self
+        }
+    }
+}
+
+impl<P: AsBytes + FromBytes + AsPixel> Default for Rec<P> {
+    fn default() -> Self {
+        Rec {
+            inner: Buffer::default(),
+            length: 0,
+            pixel: P::pixel(),
+        }
+    }
+}
+
 impl<P: AsBytes + FromBytes + cmp::PartialEq> cmp::PartialEq for Rec<P> {
     fn eq(&self, other: &Self) -> bool {
         self.as_slice().eq(other.as_slice())
@@ -301,6 +320,14 @@ impl<P: AsBytes + FromBytes + cmp::PartialOrd> cmp::PartialOrd for Rec<P> {
 impl<P: AsBytes + FromBytes + cmp::Ord> cmp::Ord for Rec<P> {
     fn cmp(&self, other: &Self) -> cmp::Ordering {
         self.as_slice().cmp(other.as_slice())
+    }
+}
+
+impl<P: AsBytes + FromBytes + fmt::Debug> fmt::Debug for Rec<P> {
+    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+        f.debug_list()
+            .entries(self.as_slice().iter())
+            .finish()
     }
 }
 

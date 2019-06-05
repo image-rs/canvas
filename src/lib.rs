@@ -34,7 +34,7 @@ mod rec;
 
 use core::cmp::{PartialEq, Eq, PartialOrd, Ord, Ordering};
 use core::marker::PhantomData;
-use core::mem;
+use core::{fmt, mem};
 
 use zerocopy::{AsBytes, FromBytes};
 
@@ -150,3 +150,12 @@ impl<P> Ord for Pixel<P> {
 
 /// This is a pure marker type.
 impl<P> Copy for Pixel<P> { }
+
+impl<P> fmt::Debug for Pixel<P> {
+    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+        f.debug_struct("Pixel")
+            .field("size", &self.size())
+            .field("align", &self.align())
+            .finish()
+    }
+}

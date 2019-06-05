@@ -1,7 +1,7 @@
 // Distributed under The MIT License (MIT)
 //
 // Copyright (c) 2019 The `image-rs` developers
-use core::fmt;
+use core::{cmp, fmt};
 use core::ops::{Index, IndexMut};
 
 use zerocopy::{AsBytes, FromBytes};
@@ -56,7 +56,7 @@ use crate::{AsPixel, Rec, ReuseError, Pixel};
 /// freedom. Other structs may, in the future, provide other pixel layouts.
 ///
 /// [`Layout`]: ./struct.Layout.html
-#[derive(PartialEq, Eq)]
+#[derive(Debug, PartialEq, Eq)]
 pub struct Canvas<P: AsBytes + FromBytes> {
     inner: Rec<P>,
     layout: Layout<P>,
@@ -67,7 +67,6 @@ pub struct Canvas<P: AsBytes + FromBytes> {
 /// The underlying buffer may have more data allocated than this region and cause the overhead to
 /// be reused when resizing the image. All ways to construct this already check that all pixels
 /// within the resulting image can be addressed via an index.
-#[derive(PartialEq, Eq)]
 pub struct Layout<P> {
     width: usize,
     height: usize,
@@ -100,6 +99,7 @@ pub struct Layout<P> {
 /// ```
 ///
 /// [`Canvas::from_rec`]: ./struct.Canvas.html#method.from_rec
+#[derive(PartialEq, Eq)]
 pub struct CanvasReuseError<P: AsBytes + FromBytes> {
     buffer: Rec<P>,
     layout: Layout<P>,
@@ -335,6 +335,56 @@ impl<P: AsPixel> Default for Layout<P> {
             width: 0,
             height: 0,
             pixel: P::pixel(),
+        }
+    }
+}
+
+impl<P> fmt::Debug for Layout<P> {
+    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+        f.debug_struct("Layout")
+            .field("width", &self.width)
+            .field("height", &self.height)
+            .field("pixel", &self.pixel)
+            .finish()
+    }
+}
+
+impl<P> cmp::PartialEq for Layout<P> {
+    fn eq(&self, other: &Self) -> bool {
+        (self.width, self.height) == (other.width, other.height)
+    }
+}
+
+impl<P> cmp::Eq for Layout<P> { }
+
+impl<P> cmp::PartialOrd for Layout<P> {
+    fn partial_cmp(&self, other: &Self) -> Option<cmp::Ordering> {
+        if self.width < other.width && self.height < other.height {
+            Some(cmp::Ordering::Less)
+        } else if self.width > other.width && self.height > other.height {
+            Some(cmp::Ordering::Greater)
+        } else if self.width == other.width && self.height == other.height {
+            Some(cmp::Ordering::Equal)
+        } else {
+            None
+        }
+    }
+}
+
+impl<P: AsBytes + FromBytes> Clone for Canvas<P> {
+    fn clone(&self) -> Self {
+        Canvas {
+            inner: self.inner.clone(),
+            layout: self.layout.clone(),
+        }
+    }
+}
+
+impl<P: AsBytes + FromBytes + AsPixel> Default for Canvas<P> {
+    fn default() -> Self {
+        Canvas {
+            inner: Rec::default(),
+            layout: Layout::default(),
         }
     }
 }
