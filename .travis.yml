@@ -4,6 +4,7 @@ os:
     - linux
     - osx
 rust:
+    - stable
     - nightly
 script:
     - cargo build -v && cargo test -v && cargo doc -v
