@@ -371,7 +371,7 @@ impl<P: AsBytes + FromBytes> Clone for Canvas<P> {
     fn clone(&self) -> Self {
         Canvas {
             inner: self.inner.clone(),
-            layout: self.layout.clone(),
+            layout: self.layout,
         }
     }
 }
