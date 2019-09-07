@@ -20,7 +20,7 @@
 //!
 //! // Encode to network endian.
 //! let mut encoded = canvas.transmute::<u32>();
-//! encoded 
+//! encoded
 //!     .as_mut_slice()
 //!     .iter_mut()
 //!     .for_each(|p| *p = p.to_be());
@@ -30,15 +30,15 @@
 //! ```
 mod buf;
 mod canvas;
-mod rec;
 mod pixel;
+mod rec;
 
-pub use self::rec::{Rec, ReuseError};
 pub use self::canvas::{Canvas, CanvasReuseError, Layout};
 pub use self::pixel::{AsPixel, Pixel};
+pub use self::rec::{Rec, ReuseError};
 
 /// Constants for predefined pixel types.
 pub mod pixels {
-    pub use crate::pixel::MaxAligned;
     pub use crate::pixel::constants::*;
+    pub use crate::pixel::MaxAligned;
 }

@@ -4,7 +4,7 @@
 use core::mem;
 use core::ops;
 
-use crate::pixel::{MaxAligned, MAX_ALIGN, Pixel};
+use crate::pixel::{MaxAligned, Pixel, MAX_ALIGN};
 use zerocopy::{AsBytes, ByteSlice, FromBytes, LayoutVerified};
 
 /// Allocates and manages raw bytes.
@@ -49,9 +49,7 @@ impl Buffer {
         let alloc_len = Self::alloc_len(length);
         let inner = vec![Self::ELEMENT; alloc_len];
 
-        Buffer {
-            inner,
-        }
+        Buffer { inner }
     }
 
     /// Retrieve the byte capacity of the allocated storage.
@@ -86,7 +84,7 @@ impl Buffer {
         assert!(CHUNK_SIZE > 1);
 
         // We allocated enough chunks for at least the length. This can never overflow.
-        length/CHUNK_SIZE + (length % CHUNK_SIZE != 0) as usize
+        length / CHUNK_SIZE + (length % CHUNK_SIZE != 0) as usize
     }
 }
 
@@ -97,20 +95,20 @@ impl buf {
     ///
     /// This method will never panic, as the alignment of the data is guaranteed.
     pub fn new<T>(data: &T) -> &Self
-        where T: AsRef<[MaxAligned]> + ?Sized
+    where
+        T: AsRef<[MaxAligned]> + ?Sized,
     {
-        Self::from_bytes(data.as_ref().as_bytes())
-            .unwrap()
+        Self::from_bytes(data.as_ref().as_bytes()).unwrap()
     }
 
     /// Wraps an aligned mutable buffer into `buf`.
     ///
     /// This method will never panic, as the alignment of the data is guaranteed.
     pub fn new_mut<T>(data: &mut T) -> &mut Self
-        where T: AsMut<[MaxAligned]> + ?Sized
+    where
+        T: AsMut<[MaxAligned]> + ?Sized,
     {
-        Self::from_bytes_mut(data.as_mut().as_bytes_mut())
-            .unwrap()
+        Self::from_bytes_mut(data.as_mut().as_bytes_mut()).unwrap()
     }
 
     /// Wrap bytes in a `buf`.
@@ -149,12 +147,13 @@ impl buf {
     /// constructor of `Pixel`. The slice will have the maximum length possible but may leave
     /// unused bytes in the end.
     pub fn as_pixels<P>(&self, _: Pixel<P>) -> &[P]
-        where P: FromBytes
+    where
+        P: FromBytes,
     {
         let (bytes, _) = prefix_slice::<_, P>(self.as_bytes());
-        LayoutVerified::<_, [P]>::new_slice(bytes).unwrap_or_else(
-            || unreachable!("Verified alignment in Pixel and len dynamically")
-        ).into_slice()
+        LayoutVerified::<_, [P]>::new_slice(bytes)
+            .unwrap_or_else(|| unreachable!("Verified alignment in Pixel and len dynamically"))
+            .into_slice()
     }
 
     /// Reinterpret the buffer mutable for the specific pixel type.
@@ -162,16 +161,19 @@ impl buf {
     /// The alignment of `P` is already checked to be smaller than `MAX_ALIGN` through the
     /// constructor of `Pixel`.
     pub fn as_mut_pixels<P>(&mut self, _: Pixel<P>) -> &mut [P]
-        where P: AsBytes + FromBytes
+    where
+        P: AsBytes + FromBytes,
     {
         let (bytes, _) = prefix_slice::<_, P>(self.as_bytes_mut());
-        LayoutVerified::<_, [P]>::new_slice(bytes).unwrap_or_else(
-            || unreachable!("Verified alignment in Pixel and len dynamically")
-        ).into_mut_slice()
+        LayoutVerified::<_, [P]>::new_slice(bytes)
+            .unwrap_or_else(|| unreachable!("Verified alignment in Pixel and len dynamically"))
+            .into_mut_slice()
     }
 }
 
-fn prefix_slice<B, T>(slice: B) -> (B, B) where B: ByteSlice
+fn prefix_slice<B, T>(slice: B) -> (B, B)
+where
+    B: ByteSlice,
 {
     let size = mem::size_of::<T>();
     let len = (slice.len() / size) * size;
@@ -223,7 +225,7 @@ impl ops::IndexMut<ops::RangeTo<usize>> for buf {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::pixels::{U8, U16, U32, MAX};
+    use crate::pixels::{MAX, U16, U32, U8};
 
     #[test]
     fn single_max_element() {
@@ -236,14 +238,21 @@ mod tests {
     fn reinterpret() {
         let mut buffer = Buffer::new(mem::size_of::<u32>());
         assert!(buffer.as_mut_pixels(U32).len() >= 1);
-        buffer.as_mut_pixels(U16).iter_mut().for_each(
-            |p| *p = 0x0f0f);
-        buffer.as_pixels(U32).iter().for_each(
-            |p| assert_eq!(*p, 0x0f0f0f0f));
-        buffer.as_pixels(U8).iter().for_each(
-            |p| assert_eq!(*p, 0x0f));
+        buffer
+            .as_mut_pixels(U16)
+            .iter_mut()
+            .for_each(|p| *p = 0x0f0f);
+        buffer
+            .as_pixels(U32)
+            .iter()
+            .for_each(|p| assert_eq!(*p, 0x0f0f0f0f));
+        buffer
+            .as_pixels(U8)
+            .iter()
+            .for_each(|p| assert_eq!(*p, 0x0f));
 
-        buffer.as_mut_pixels(U8)
+        buffer
+            .as_mut_pixels(U8)
             .iter_mut()
             .enumerate()
             .for_each(|(idx, p)| *p = idx as u8);
