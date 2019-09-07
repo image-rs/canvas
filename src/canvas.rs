@@ -1,11 +1,11 @@
 // Distributed under The MIT License (MIT)
 //
 // Copyright (c) 2019 The `image-rs` developers
-use core::{cmp, fmt};
 use core::ops::{Index, IndexMut};
+use core::{cmp, fmt};
 
+use crate::{AsPixel, Pixel, Rec, ReuseError};
 use zerocopy::{AsBytes, FromBytes};
-use crate::{AsPixel, Rec, ReuseError, Pixel};
 
 /// A 2d matrix of pixels.
 ///
@@ -122,10 +122,11 @@ impl<P: AsBytes + FromBytes> Canvas<P> {
     /// example due to it being an invalid layout. If you want to handle the layout being invalid,
     /// consider using `Layout::from_width_and_height` and `Canvas::with_layout`.
     pub fn with_width_and_height(width: usize, height: usize) -> Self
-        where P: AsPixel
+    where
+        P: AsPixel,
     {
-        let layout = Layout::width_and_height(width, height)
-            .expect("Pixel layout can not fit into memory");
+        let layout =
+            Layout::width_and_height(width, height).expect("Pixel layout can not fit into memory");
         Self::with_layout(layout)
     }
 
@@ -151,25 +152,20 @@ impl<P: AsBytes + FromBytes> Canvas<P> {
     /// further information on the error and retrieving the buffer.
     ///
     /// [`CanvasReuseError`]: ./struct.CanvasReuseError.html
-    pub fn from_reused_rec(mut buffer: Rec<P>, layout: Layout<P>)
-        -> Result<Self, CanvasReuseError<P>>
-    {
+    pub fn from_reused_rec(
+        mut buffer: Rec<P>,
+        layout: Layout<P>,
+    ) -> Result<Self, CanvasReuseError<P>> {
         match buffer.reuse_bytes(layout.byte_len()) {
             Ok(_) => (),
-            Err(_) => return Err(CanvasReuseError {
-                buffer,
-                layout,
-            }),
+            Err(_) => return Err(CanvasReuseError { buffer, layout }),
         }
         Ok(Self::new_raw(buffer, layout))
     }
 
     fn new_raw(inner: Rec<P>, layout: Layout<P>) -> Self {
         assert_eq!(inner.len(), layout.len(), "Pixel count agrees with buffer");
-        Canvas {
-            inner,
-            layout,
-        }
+        Canvas { inner, layout }
     }
 
     pub fn as_slice(&self) -> &[P] {
@@ -221,10 +217,7 @@ impl<P: AsBytes + FromBytes> Canvas<P> {
         let layout = self.layout.transmute_to(pixel);
         let inner = self.inner.reinterpret_to(pixel);
 
-        Canvas {
-            layout,
-            inner,
-        }
+        Canvas { layout, inner }
     }
 
     pub fn into_rec(self) -> Rec<P> {
@@ -235,14 +228,16 @@ impl<P: AsBytes + FromBytes> Canvas<P> {
         assert!(self.layout.in_bounds(x, y));
 
         // Can't overflow, surely smaller than `layout.max_index()`.
-        y*self.layout.width() + x
+        y * self.layout.width() + x
     }
 }
 
 impl<P> Layout<P> {
-    pub fn width_and_height_for_pixel(pixel: Pixel<P>, width: usize, height: usize)
-        -> Option<Self> 
-    {
+    pub fn width_and_height_for_pixel(
+        pixel: Pixel<P>,
+        width: usize,
+        height: usize,
+    ) -> Option<Self> {
         let max_index = Self::max_index(width, height)?;
         let _ = max_index.checked_mul(pixel.size())?;
 
@@ -254,7 +249,8 @@ impl<P> Layout<P> {
     }
 
     pub fn width_and_height(width: usize, height: usize) -> Option<Self>
-        where P: AsPixel
+    where
+        P: AsPixel,
     {
         Self::width_and_height_for_pixel(P::pixel(), width, height)
     }
@@ -319,15 +315,15 @@ impl<P: AsBytes + FromBytes> CanvasReuseError<P> {
     }
 }
 
-impl<P> Clone for Layout<P> { 
+impl<P> Clone for Layout<P> {
     fn clone(&self) -> Self {
         Layout {
-            .. *self // This is, apparently, legal.
+            ..*self // This is, apparently, legal.
         }
     }
 }
 
-impl<P> Copy for Layout<P> { }
+impl<P> Copy for Layout<P> {}
 
 impl<P: AsPixel> Default for Layout<P> {
     fn default() -> Self {
@@ -355,7 +351,7 @@ impl<P> cmp::PartialEq for Layout<P> {
     }
 }
 
-impl<P> cmp::Eq for Layout<P> { }
+impl<P> cmp::Eq for Layout<P> {}
 
 impl<P> cmp::PartialOrd for Layout<P> {
     fn partial_cmp(&self, other: &Self) -> Option<cmp::Ordering> {
@@ -375,7 +371,7 @@ impl<P: AsBytes + FromBytes> Clone for Canvas<P> {
     fn clone(&self) -> Self {
         Canvas {
             inner: self.inner.clone(),
-            layout: self.layout.clone(),
+            layout: self.layout,
         }
     }
 }
@@ -406,8 +402,12 @@ impl<P: AsBytes + FromBytes> IndexMut<(usize, usize)> for Canvas<P> {
 
 impl<P: AsBytes + FromBytes> fmt::Debug for CanvasReuseError<P> {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
-        write!(f, "Canvas requires {} elements but buffer has capacity for only {}",
-            self.layout.len(), self.buffer.capacity())
+        write!(
+            f,
+            "Canvas requires {} elements but buffer has capacity for only {}",
+            self.layout.len(),
+            self.buffer.capacity()
+        )
     }
 }
 
@@ -420,12 +420,13 @@ mod tests {
         let rec = Rec::<u8>::new(4);
         assert!(rec.capacity() >= 4);
         let layout = Layout::width_and_height(2, 2).unwrap();
-        let mut canvas = Canvas::from_reused_rec(rec, layout)
-            .expect("Rec is surely large enough");
-        canvas.reuse(Layout::width_and_height(1, 1).unwrap())
+        let mut canvas = Canvas::from_reused_rec(rec, layout).expect("Rec is surely large enough");
+        canvas
+            .reuse(Layout::width_and_height(1, 1).unwrap())
             .expect("Can scale down the image");
         canvas.resize(Layout::width_and_height(0, 0).unwrap());
-        canvas.reuse(layout)
+        canvas
+            .reuse(layout)
             .expect("Can still reuse original allocation");
     }
 }

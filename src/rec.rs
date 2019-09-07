@@ -5,8 +5,8 @@ use core::cmp;
 use core::fmt;
 use core::ops::{Deref, DerefMut};
 
+use crate::buf::{buf, Buffer};
 use crate::{AsPixel, Pixel};
-use crate::buf::{Buffer, buf};
 use zerocopy::{AsBytes, FromBytes};
 
 /// A **r**einterpretable v**ec**tor for an array of pixels.
@@ -29,7 +29,7 @@ pub struct Rec<P: AsBytes + FromBytes> {
 /// ```
 /// # use canvas::Rec;
 /// let mut rec = Rec::<u16>::new(16);
-/// 
+///
 /// let err = match rec.reuse(rec.capacity() + 1) {
 ///     Ok(_) => unreachable!("Increasing capacity would require reallocation"),
 ///     Err(err) => err,
@@ -55,7 +55,10 @@ impl<P: AsBytes + FromBytes> Rec<P> {
     /// calculation of the byte length instead.
     ///
     /// This function will also panic if the allocation fails.
-    pub fn new(count: usize) -> Self where P: AsPixel {
+    pub fn new(count: usize) -> Self
+    where
+        P: AsPixel,
+    {
         Self::new_for_pixel(P::pixel(), count)
     }
 
@@ -157,7 +160,7 @@ impl<P: AsBytes + FromBytes> Rec<P> {
             return Err(ReuseError {
                 requested: Some(bytes),
                 capacity: self.capacity(),
-            })
+            });
         }
 
         // Resize within capacity will not reallocate, thus not panic.
@@ -235,7 +238,8 @@ impl<P: AsBytes + FromBytes> Rec<P> {
     ///
     /// See `reinterpret_to` for details.
     pub fn reinterpret<Q>(self) -> Rec<Q>
-        where Q: AsPixel + AsBytes + FromBytes
+    where
+        Q: AsPixel + AsBytes + FromBytes,
     {
         self.reinterpret_to(Q::pixel())
     }
@@ -247,7 +251,8 @@ impl<P: AsBytes + FromBytes> Rec<P> {
     /// some new bytes may become accessible if the memory length was not a multiple of the
     /// previous pixel type's length.
     pub fn reinterpret_to<Q>(self, pixel: Pixel<Q>) -> Rec<Q>
-        where Q: AsBytes + FromBytes
+    where
+        Q: AsBytes + FromBytes,
     {
         Rec {
             inner: self.inner,
@@ -266,8 +271,10 @@ impl<P: AsBytes + FromBytes> Rec<P> {
 }
 
 fn mem_size<P>(pixel: Pixel<P>, count: usize) -> usize {
-    pixel.size().checked_mul(count).unwrap_or_else(
-        || panic!("Requested count overflows memory size"))
+    pixel
+        .size()
+        .checked_mul(count)
+        .unwrap_or_else(|| panic!("Requested count overflows memory size"))
 }
 
 impl<P: AsBytes + FromBytes> Deref for Rec<P> {
@@ -288,7 +295,7 @@ impl<P: AsBytes + FromBytes> Clone for Rec<P> {
     fn clone(&self) -> Self {
         Rec {
             inner: self.inner.clone(),
-            .. *self
+            ..*self
         }
     }
 }
@@ -309,7 +316,7 @@ impl<P: AsBytes + FromBytes + cmp::PartialEq> cmp::PartialEq for Rec<P> {
     }
 }
 
-impl<P: AsBytes + FromBytes + cmp::Eq> cmp::Eq for Rec<P> { }
+impl<P: AsBytes + FromBytes + cmp::Eq> cmp::Eq for Rec<P> {}
 
 impl<P: AsBytes + FromBytes + cmp::PartialOrd> cmp::PartialOrd for Rec<P> {
     fn partial_cmp(&self, other: &Self) -> Option<cmp::Ordering> {
@@ -325,22 +332,19 @@ impl<P: AsBytes + FromBytes + cmp::Ord> cmp::Ord for Rec<P> {
 
 impl<P: AsBytes + FromBytes + fmt::Debug> fmt::Debug for Rec<P> {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
-        f.debug_list()
-            .entries(self.as_slice().iter())
-            .finish()
+        f.debug_list().entries(self.as_slice().iter()).finish()
     }
 }
 
 impl fmt::Debug for ReuseError {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
         match self.requested {
-            None => {
-                write!(f, "Buffer reuse failed: Bytes count can not be expressed")
-            },
-            Some(requested) => {
-                write!(f, "Buffer reuse failed: {} bytes requested, only {} available",
-                    requested, self.capacity)
-            },
+            None => write!(f, "Buffer reuse failed: Bytes count can not be expressed"),
+            Some(requested) => write!(
+                f,
+                "Buffer reuse failed: {} bytes requested, only {} available",
+                requested, self.capacity
+            ),
         }
     }
 }

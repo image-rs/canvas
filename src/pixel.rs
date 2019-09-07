@@ -1,7 +1,7 @@
 // Distributed under The MIT License (MIT)
 //
 // Copyright (c) 2019 The `image-rs` developers
-use core::cmp::{PartialEq, Eq, PartialOrd, Ord, Ordering};
+use core::cmp::{Eq, Ord, Ordering, PartialEq, PartialOrd};
 use core::marker::PhantomData;
 use core::{fmt, mem};
 
@@ -99,7 +99,7 @@ impl<P> PartialEq for Pixel<P> {
     }
 }
 
-impl<P> Eq for Pixel<P> { }
+impl<P> Eq for Pixel<P> {}
 
 impl<P> PartialOrd for Pixel<P> {
     fn partial_cmp(&self, _: &Self) -> Option<Ordering> {
@@ -114,7 +114,7 @@ impl<P> Ord for Pixel<P> {
 }
 
 /// This is a pure marker type.
-impl<P> Copy for Pixel<P> { }
+impl<P> Copy for Pixel<P> {}
 
 impl<P> fmt::Debug for Pixel<P> {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
