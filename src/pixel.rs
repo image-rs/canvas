@@ -55,6 +55,10 @@ pub(crate) mod constants {
         (U16, u16),
         (I32, i32),
         (U32, u32),
+        (F32, f32),
+        (I64, i64),
+        (U64, u64),
+        (F64, f64),
         (RGB, [u8; 3]),
         (RGBA, [u8; 4]),
         (MAX, MaxAligned)
