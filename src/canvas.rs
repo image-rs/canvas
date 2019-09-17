@@ -125,8 +125,8 @@ impl<P: AsBytes + FromBytes> Canvas<P> {
     where
         P: AsPixel,
     {
-        let layout =
-            Layout::width_and_height(width, height).expect("Pixel layout can not fit into memory");
+        let layout = Layout::width_and_height(width, height)
+            .expect("Pixel layout can not fit into memory");
         Self::with_layout(layout)
     }
 
@@ -229,6 +229,46 @@ impl<P: AsBytes + FromBytes> Canvas<P> {
 
         // Can't overflow, surely smaller than `layout.max_index()`.
         y * self.layout.width() + x
+    }
+}
+
+impl<P: AsBytes + FromBytes + Copy> Canvas<P> {
+    /// Apply a function to all pixel values.
+    ///
+    /// See [`map_to`] for the details.
+    ///
+    /// # Panics
+    ///
+    /// This function will panic if the new layout would be invalid (because the new pixel type
+    /// requires a larger buffer than can be allocate) or if the reallocation fails.
+    pub fn map<F, Q>(self, map: F) -> Canvas<Q>
+        where F: Fn(P) -> Q, Q: AsPixel + AsBytes + FromBytes + Copy
+    {
+        self.map_to(map, Q::pixel())
+    }
+
+    /// Apply a function to all pixel values.
+    ///
+    /// Unlike [`transmute_to`] there are no restrictions on the pixel types. This will reuse the
+    /// underlying buffer or resize it if that is not possible.
+    ///
+    /// # Panics
+    ///
+    /// This function will panic if the new layout would be invalid (because the new pixel type
+    /// requires a larger buffer than can be allocate) or if the reallocation fails.
+    pub fn map_to<F, Q>(self, map: F, pixel: Pixel<Q>) -> Canvas<Q>
+        where F: Fn(P) -> Q, Q: AsBytes + FromBytes + Copy
+    {
+        let Layout { width, height, .. } = self.layout;
+        // First compute the new layout ..
+        let layout = Layout::width_and_height_for_pixel(pixel, width, height)
+            .expect("Pixel layout can not fit into memory");
+        // .. then do the actual pixel mapping.
+        let inner = self.inner.map_to(map, pixel);
+        Canvas {
+            layout,
+            inner,
+        }
     }
 }
 
