@@ -64,7 +64,7 @@ impl Buffer {
     /// current length is already large enough then this will not do anything.
     pub fn grow_to(&mut self, bytes: usize) {
         let new_len = Self::alloc_len(bytes);
-        if self.len() < new_len {
+        if self.inner.len() < new_len {
             self.inner.resize(new_len, Self::ELEMENT);
         }
     }
@@ -84,7 +84,7 @@ impl Buffer {
         assert!(CHUNK_SIZE > 1);
 
         // We allocated enough chunks for at least the length. This can never overflow.
-        length / CHUNK_SIZE + (length % CHUNK_SIZE != 0) as usize
+        length / CHUNK_SIZE + usize::from(length % CHUNK_SIZE != 0)
     }
 }
 
@@ -232,6 +232,21 @@ mod tests {
         let mut buffer = Buffer::new(mem::size_of::<MaxAligned>());
         let slice = buffer.as_mut_pixels(MAX);
         assert!(slice.len() == 1);
+    }
+
+    #[test]
+    fn growing() {
+        let mut buffer = Buffer::new(0);
+        assert_eq!(buffer.capacity(), 0);
+        buffer.grow_to(mem::size_of::<MaxAligned>());
+        let capacity = buffer.capacity();
+        assert!(buffer.capacity() > 0);
+        buffer.grow_to(capacity);
+        assert_eq!(buffer.capacity(), capacity);
+        buffer.grow_to(0);
+        assert_eq!(buffer.capacity(), capacity);
+        buffer.grow_to(capacity + 1);
+        assert!(buffer.capacity() > capacity);
     }
 
     #[test]
