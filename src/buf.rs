@@ -169,6 +169,228 @@ impl buf {
             .unwrap_or_else(|| unreachable!("Verified alignment in Pixel and len dynamically"))
             .into_mut_slice()
     }
+
+    /// Apply a mapping function to some elements.
+    ///
+    /// The indices `src` and `dest` are indices as if the slice were interpreted as `[P]` or `[Q]`
+    /// respectively.
+    ///
+    /// The types may differ which allows the use of this function to prepare a reinterpretation
+    /// cast of a typed buffer. This function chooses the order of function applications such that
+    /// values are not overwritten before they are used, i.e. the function arguments are exactly
+    /// the previously visible values. This is even less trivial than for copy if the parameter
+    /// types differ in size.
+    ///
+    /// # Panics
+    ///
+    /// This function panics if `src` or the implied range of `dest` are out of bounds.
+    pub fn map_within<P, Q>(
+        &mut self,
+        src: impl ops::RangeBounds<usize>,
+        dest: usize,
+        f: impl Fn(P) -> Q,
+        p: Pixel<P>,
+        q: Pixel<Q>,
+    ) where
+        P: FromBytes + Copy,
+        Q: AsBytes + FromBytes + Copy,
+    {
+        // By symmetry, a write sequence that map `src` to `dest` without clobbering any values
+        // that need to be read later can be applied in reverse to map `dest` to `src` instead.
+        // Indeed, one explicit formulation of the clobber condition is: for all writes, the bytes
+        // of a write do not overlap with the bytes of any later read. It follows that for all reads
+        // the bytes of the read do not overlap with the bytes of any earlier write. Swapping reads
+        // and writes and the sequence thus performs a dualisation.
+        //
+        // W.l.o.g. we concern ourselves only with `size_of::<P>() >= size_of::<Q>()`. Name the
+        // byte regions (half open intervals) of the sequences of elements (p)_n, (q)_n and name
+        // the indices in the respective indexing space of elements (pi)_n and (qi)_n, let N be the
+        // number of elements to map.
+        //
+        // Let I be the set of indices such that `inf p_I < inf q_I`. We can map p_I to q_I without
+        // clobbering by scheduling the indices I from highest to lowest. Let i be an index from I
+        // during that sequence, and j any other index not yet scheduled.
+        //
+        // Example:
+        //
+        // ```
+        // |2   | 1  |3   |
+        //     |2 |1 |3 |
+        // ```
+        //
+        // If 0 < j < i then j is in I as well, as implied by |P| >= |Q|. It is simply 
+        //  inf p_j = inf p_i - |P|(i-j) <= inf p_i - |Q|(i-j) < inf q_i - |Q|(i-j) = inf q_j
+        // By definition, inf q_i > inf p_i >= sup p_j and thus the ranges of the write does not
+        // overlap those later reads.
+        //
+        // If however i < j then j can not be in I, thus inf q_j <= inf p_j. Since we also have
+        // from the relation j < i; sup q_i <= inf q_j, the write to q_i can not overlap p_j.
+        //
+        // Then, we sechdule the remaining indices in forwards direction. To actually perform this
+        // scheduling, we must find (as we now know range) I.
+        //  inf p_n = |P|*pi_n = |P|(p_start + n)
+        //  inf q_n = |Q|*qi_n = |Q|(q_start + n)
+        //
+        //  inf p_n        < inf q_n       <=>
+        //  |P|(p_start+n) < |Q|(q_start+n)<=>
+        //  |Q|q_start     > |P|p_start + (|P| - |Q|)n<=>
+        //  |Q|q_start - |P|p_start > (|P| - |Q|)n
+        //
+        // if (|P| - |Q|) != 0 then
+        //  n < (|Q|q_start - |P|p_start)/(|P| - |Q|)<=>
+        //  n < ceil((|Q|q_start - |P|p_start)/(|P| - |Q|))
+
+        // Returns the 
+        fn backwards_past_the_end(
+            start_byte_diff: isize,
+            size_diff: isize,
+        ) -> Option<usize> {
+            assert!(size_diff >= 0);
+            if size_diff == 0 {
+                if start_byte_diff > 0 {
+                    Some(0)
+                } else {
+                    None
+                }
+            } else {
+                if start_byte_diff < 0 {
+                    Some(0)
+                } else {
+                    let floor = start_byte_diff/size_diff;
+                    let ceil = (floor as usize) 
+                        + usize::from(start_byte_diff % size_diff != 0);
+                    Some(ceil)
+                }
+            }
+        }
+
+        let p_start = match src.start_bound() {
+            ops::Bound::Included(&bound) => bound,
+            ops::Bound::Excluded(&bound) => bound
+                .checked_add(1)
+                .expect("Range does not specify a valid bound start"),
+            ops::Bound::Unbounded => 0,
+        };
+
+        let p_end = match src.end_bound() {
+            ops::Bound::Excluded(&bound) => bound,
+            ops::Bound::Included(&bound) => bound
+                .checked_add(1)
+                .expect("Range does not specify a valid bound end"),
+            ops::Bound::Unbounded => self.as_pixels(p).len(),
+        };
+
+        let len = p_end
+            .checked_sub(p_start)
+            .expect("Bound violates order");
+
+        let q_start = dest;
+
+        let _ = self
+            .as_pixels(p)
+            .get(p_start..)
+            .and_then(|slice| slice.get(..len))
+            .expect("Source out of bounds");
+
+        let _ = self
+            .as_pixels(q)
+            .get(q_start..)
+            .and_then(|slice| slice.get(..len))
+            .expect("Destination out of bounds");
+
+        assert!(p.size() as isize > 0);
+        assert!(q.size() as isize > 0);
+
+        if p.size() >= q.size() {
+            let start_diff = (q.size()*q_start).wrapping_sub(p.size()*p_start) as isize;
+            let size_diff = p.size() as isize - q.size() as isize;
+
+            let backwards_end = backwards_past_the_end(start_diff, size_diff)
+                .unwrap_or(len)
+                .min(len);
+
+            self.map_backward(
+                p_start,
+                q_start,
+                backwards_end,
+                &f,
+                p,
+                q);
+            self.map_forward(
+                p_start + backwards_end,
+                q_start + backwards_end,
+                len - backwards_end,
+                &f,
+                p,
+                q);
+        } else {
+            let start_diff = (p.size()*p_start).wrapping_sub(q.size()*q_start) as isize;
+            let size_diff = q.size() as isize - p.size() as isize;
+
+            let backwards_end = backwards_past_the_end(start_diff, size_diff)
+                .unwrap_or(len)
+                .min(len);
+
+            self.map_backward(
+                p_start + backwards_end,
+                q_start + backwards_end,
+                len - backwards_end,
+                &f,
+                p,
+                q);
+            self.map_forward(
+                p_start,
+                q_start,
+                backwards_end,
+                &f,
+                p,
+                q);
+        }
+    }
+
+    /// Internally mapping function when the mapping can be done forwards.
+    fn map_forward<P, Q>(
+        &mut self,
+        src: usize,
+        dest: usize,
+        len: usize,
+        f: impl Fn(P) -> Q,
+        p: Pixel<P>,
+        q: Pixel<Q>,
+    ) where
+        P: FromBytes + Copy,
+        Q: AsBytes + FromBytes + Copy,
+    {
+        for idx in 0..len {
+            let source_idx = idx + src;
+            let target_idx = idx + dest;
+            let source = self.as_pixels(p)[source_idx];
+            let target = f(source);
+            self.as_mut_pixels(q)[target_idx] = target;
+        }
+    }
+
+    /// Internally mapping function when the mapping can be done backwards.
+    fn map_backward<P, Q>(
+        &mut self,
+        src: usize,
+        dest: usize,
+        len: usize,
+        f: impl Fn(P) -> Q,
+        p: Pixel<P>,
+        q: Pixel<Q>,
+    ) where
+        P: FromBytes + Copy,
+        Q: AsBytes + FromBytes + Copy,
+    {
+        for idx in (0..len).rev() {
+            let source_idx = idx + src;
+            let target_idx = idx + dest;
+            let source = self.as_pixels(p)[source_idx];
+            let target = f(source);
+            self.as_mut_pixels(q)[target_idx] = target;
+        }
+    }
 }
 
 fn prefix_slice<B, T>(slice: B) -> (B, B)
@@ -272,5 +494,33 @@ mod tests {
             .enumerate()
             .for_each(|(idx, p)| *p = idx as u8);
         assert_eq!(u32::from_be(buffer.as_pixels(U32)[0]), 0x00010203);
+    }
+
+    #[test]
+    fn mapping_great_to_small() {
+        const LEN: usize = 10;
+        let mut buffer = Buffer::new(LEN*mem::size_of::<u32>());
+        buffer
+            .as_mut_pixels(U32)
+            .iter_mut()
+            .enumerate()
+            .for_each(|(idx, p)| *p = idx as u32);
+
+        // Map those numbers in-place.
+        buffer.map_within(..LEN, 0, |n: u32| n as u8, U32, U8);
+        buffer.map_within(..LEN, 0, |n: u8| n as u32, U8, U32);
+
+        // Back to where we started.
+        assert_eq!(
+            buffer.as_pixels(U32)[..LEN].to_vec(),
+            (0..LEN as u32).collect::<Vec<_>>());
+
+        // This should work even if we don't map to index 0.
+        buffer.map_within(0..LEN, 3*LEN, |n: u32| n as u8, U32, U8);
+        buffer.map_within(3*LEN..4*LEN, 0, |n: u8| n as u32, U8, U32);
+
+        assert_eq!(
+            buffer.as_pixels(U32)[..LEN].to_vec(),
+            (0..LEN as u32).collect::<Vec<_>>());
     }
 }
