@@ -105,6 +105,43 @@ pub struct CanvasReuseError<P: AsBytes + FromBytes> {
     layout: Layout<P>,
 }
 
+/// The canvas could not be mapped to another pixel type without reuse.
+///
+/// This may be caused since the layout would be invalid or due to the layout being too large for
+/// the current buffer allocation.
+///
+/// # Examples
+///
+/// Use the error type to conveniently enforce a custom policy for allowed and prohibited
+/// allocations.
+///
+/// ```
+/// # use canvas::Canvas;
+/// # let canvas = Canvas::<u8>::with_width_and_height(2, 2);
+/// # struct RequiredAllocationTooLarge;
+///
+/// match canvas.map_reuse(f32::from) {
+///     // Everything worked fine.
+///     Ok(canvas) => Ok(canvas),
+///     Err(error) => {
+///         // Manually validate if this reallocation should be allowed?
+///         match error.layout() {
+///             // Accept an allocation only if its smaller than a page
+///             Some(layout) if layout.byte_len() <= (1 << 12)
+///                 => Ok(error.into_canvas().map(f32::from)),
+///             _ => Err(RequiredAllocationTooLarge),
+///         }
+///     },
+/// }
+///
+/// # ;
+/// ```
+#[derive(PartialEq, Eq)]
+pub struct MapReuseError<P: AsBytes + FromBytes, Q: AsBytes + FromBytes> {
+    buffer: Canvas<P>,
+    layout: Option<Layout<Q>>,
+}
+
 impl<P: AsBytes + FromBytes> Canvas<P> {
     /// Allocate a canvas with specified layout.
     ///
@@ -125,8 +162,8 @@ impl<P: AsBytes + FromBytes> Canvas<P> {
     where
         P: AsPixel,
     {
-        let layout =
-            Layout::width_and_height(width, height).expect("Pixel layout can not fit into memory");
+        let layout = Layout::width_and_height(width, height)
+            .expect("Pixel layout can not fit into memory");
         Self::with_layout(layout)
     }
 
@@ -232,6 +269,83 @@ impl<P: AsBytes + FromBytes> Canvas<P> {
     }
 }
 
+impl<P: AsBytes + FromBytes + Copy> Canvas<P> {
+    /// Apply a function to all pixel values.
+    ///
+    /// See [`map_to`] for the details.
+    ///
+    /// # Panics
+    ///
+    /// This function will panic if the new layout would be invalid (because the new pixel type
+    /// requires a larger buffer than can be allocate) or if the reallocation fails.
+    pub fn map<F, Q>(self, map: F) -> Canvas<Q>
+        where F: Fn(P) -> Q, Q: AsPixel + AsBytes + FromBytes + Copy
+    {
+        self.map_to(map, Q::pixel())
+    }
+
+    /// Apply a function to all pixel values.
+    ///
+    /// Unlike [`transmute_to`] there are no restrictions on the pixel types. This will reuse the
+    /// underlying buffer or resize it if that is not possible.
+    ///
+    /// # Panics
+    ///
+    /// This function will panic if the new layout would be invalid (because the new pixel type
+    /// requires a larger buffer than can be allocate) or if the reallocation fails.
+    pub fn map_to<F, Q>(self, map: F, pixel: Pixel<Q>) -> Canvas<Q>
+        where F: Fn(P) -> Q, Q: AsBytes + FromBytes + Copy
+    {
+        // First compute the new layout ..
+        let layout = self.layout.map_to(pixel)
+            .expect("Pixel layout can not fit into memory");
+        // .. then do the actual pixel mapping.
+        let inner = self.inner.map_to(map, pixel);
+        Canvas {
+            layout,
+            inner,
+        }
+    }
+
+    pub fn map_reuse<F, Q>(self, map: F)
+        -> Result<Canvas<Q>, MapReuseError<P, Q>>
+    where
+        F: Fn(P) -> Q,
+        Q: AsPixel + AsBytes + FromBytes + Copy,
+    {
+        self.map_reuse_to(map, Q::pixel())
+    }
+
+    pub fn map_reuse_to<F, Q>(self, map: F, pixel: Pixel<Q>)
+        -> Result<Canvas<Q>, MapReuseError<P, Q>>
+    where
+        F: Fn(P) -> Q,
+        Q: AsBytes + FromBytes + Copy,
+    {
+        let layout = match self.layout.map_to(pixel) {
+            Some(layout) => layout,
+            None => return Err(MapReuseError {
+                buffer: self,
+                layout: None,
+            }),
+        };
+
+        if self.inner.byte_capacity() < layout.byte_len() {
+            return Err(MapReuseError {
+                buffer: self,
+                layout: Some(layout),
+            });
+        }
+
+        let inner = self.inner.map_to(map, pixel);
+
+        Ok(Canvas {
+            inner,
+            layout,
+        })
+    }
+}
+
 impl<P> Layout<P> {
     pub fn width_and_height_for_pixel(
         pixel: Pixel<P>,
@@ -299,6 +413,16 @@ impl<P> Layout<P> {
         }
     }
 
+    /// Utility method to change the pixel type without changing the dimensions.
+    pub fn map<Q: AsPixel>(self) -> Option<Layout<Q>> {
+        self.map_to(Q::pixel())
+    }
+
+    /// Utility method to change the pixel type without changing the dimensions.
+    pub fn map_to<Q>(self, pixel: Pixel<Q>) -> Option<Layout<Q>> {
+        Layout::width_and_height_for_pixel(pixel, self.width, self.height)
+    }
+
     fn in_bounds(self, x: usize, y: usize) -> bool {
         x < self.width && y < self.height
     }
@@ -312,6 +436,25 @@ impl<P: AsBytes + FromBytes> CanvasReuseError<P> {
     /// Unwrap the original buffer.
     pub fn into_rec(self) -> Rec<P> {
         self.buffer
+    }
+}
+
+impl<P, Q> MapReuseError<P, Q>
+where
+    P: AsBytes + FromBytes,
+    Q: AsBytes + FromBytes,
+{
+    /// Unwrap the original buffer.
+    pub fn into_canvas(self) -> Canvas<P> {
+        self.buffer
+    }
+
+    /// The layout that would be required to perform the map operation.
+    ///
+    /// Returns `Some(_)` if such a layout can be constructed in theory and return `None` if it
+    /// would exceed the platform address space.
+    pub fn layout(&self) -> Option<Layout<Q>> {
+        self.layout
     }
 }
 
@@ -408,6 +551,31 @@ impl<P: AsBytes + FromBytes> fmt::Debug for CanvasReuseError<P> {
             self.layout.len(),
             self.buffer.capacity()
         )
+    }
+}
+
+impl<P, Q> fmt::Debug for MapReuseError<P, Q> 
+where
+    P: AsBytes + FromBytes,
+    Q: AsBytes + FromBytes,
+{
+    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+        match self.layout {
+            Some(layout) => {
+                write!(
+                    f,
+                    "Mapping canvas requires {} bytes but current buffer has a capacity of {}",
+                    layout.byte_len(),
+                    self.buffer.inner.byte_capacity()
+                )
+            },
+            None => {
+                write!(
+                    f,
+                    "Mapped canvas can not be allocated"
+                )
+            }
+        }
     }
 }
 

@@ -261,6 +261,39 @@ impl<P: AsBytes + FromBytes> Rec<P> {
         }
     }
 
+    /// Map all elements to another value.
+    ///
+    /// See [`map_to`] for details.
+    pub fn map<Q>(self, f: impl Fn(P) -> Q) -> Rec<Q>
+        where P: Copy, Q: AsPixel + AsBytes + FromBytes + Copy,
+    {
+        self.map_to(f, Q::pixel())
+    }
+
+    /// Map elements to another value.
+    ///
+    /// This will keep the logical length of the `Rec` so that the number of pixels stays constant.
+    /// If necessary, it will grow the internal buffer to achieve this.
+    ///
+    /// # Panics
+    ///
+    /// This function will panic if the allocation fails or the necessary allocation exceeds the
+    /// value range of `usize`.
+    pub fn map_to<Q>(mut self, f: impl Fn(P) -> Q, pixel: Pixel<Q>) -> Rec<Q>
+        where P: Copy, Q: AsBytes + FromBytes + Copy,
+    {
+        // Ensure we have enough memory for both representations.
+        let length = self.as_slice().len();
+        let new_bytes = mem_size(pixel, length);
+        self.inner.grow_to(new_bytes);
+        self.inner.map_within(..length, 0, f, self.pixel, pixel);
+        Rec {
+            inner: self.inner,
+            length: new_bytes,
+            pixel,
+        }
+    }
+
     fn buf(&self) -> &buf {
         &self.inner[..self.length]
     }
@@ -368,5 +401,20 @@ mod tests {
         buffer.shrink_to_fit();
         assert_eq!(buffer.capacity(), 0);
         assert_eq!(buffer.len(), 0);
+    }
+
+    #[test]
+    fn map() {
+        let mut buffer: Rec<u8> = Rec::new(8);
+        assert_eq!(buffer.len(), 8);
+        buffer.copy_from_slice(&[0, 1, 2, 3, 4, 5, 6, 7]);
+
+        let buffer = buffer.map(u32::from);
+        assert_eq!(buffer.len(), 8);
+        assert_eq!(buffer.as_slice(), &[0, 1, 2, 3, 4, 5, 6, 7]);
+
+        let buffer = buffer.map(|p| p as u8);
+        assert_eq!(buffer.len(), 8);
+        assert_eq!(buffer.as_slice(), &[0, 1, 2, 3, 4, 5, 6, 7]);
     }
 }
