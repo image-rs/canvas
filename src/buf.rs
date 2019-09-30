@@ -252,15 +252,13 @@ impl buf {
                 } else {
                     None
                 }
+            } else if start_byte_diff < 0 {
+                Some(0)
             } else {
-                if start_byte_diff < 0 {
-                    Some(0)
-                } else {
-                    let floor = start_byte_diff/size_diff;
-                    let ceil = (floor as usize) 
-                        + usize::from(start_byte_diff % size_diff != 0);
-                    Some(ceil)
-                }
+                let floor = start_byte_diff/size_diff;
+                let ceil = (floor as usize) 
+                    + usize::from(start_byte_diff % size_diff != 0);
+                Some(ceil)
             }
         }
 
