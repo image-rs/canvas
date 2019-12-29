@@ -7,6 +7,7 @@ edition = "2018"
 license = "MIT"
 readme = "README.md"
 documentation = "https://docs.rs/image-canvas"
+repository = "https://github.com/image-rs/canvas"
 categories = ["multimedia::images"]
 
 [lib]
