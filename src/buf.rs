@@ -4,6 +4,8 @@
 use core::mem;
 use core::ops;
 
+use alloc::vec::Vec;
+
 use crate::pixel::{MaxAligned, Pixel, MAX_ALIGN};
 use bytemuck::{cast_slice, cast_slice_mut, Pod};
 
@@ -47,7 +49,7 @@ impl Buffer {
     /// Panics if the length is too long to find a properly aligned subregion.
     pub fn new(length: usize) -> Self {
         let alloc_len = Self::alloc_len(length);
-        let inner = vec![Self::ELEMENT; alloc_len];
+        let inner = alloc::vec![Self::ELEMENT; alloc_len];
 
         Buffer { inner }
     }
