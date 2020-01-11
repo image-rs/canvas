@@ -28,6 +28,10 @@
 //! // Send the raw bytes
 //! send_over_network(encoded.as_bytes());
 //! ```
+// Be std for doctests, avoids a weird warning about missing allocator.
+#![cfg_attr(not(doctest), no_std)]
+extern crate alloc;
+
 mod buf;
 mod canvas;
 mod pixel;
