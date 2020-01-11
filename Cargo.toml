@@ -14,4 +14,4 @@ categories = ["multimedia::images"]
 name = "canvas"
 
 [dependencies]
-zerocopy = "0.2.8"
+bytemuck = "1.1"

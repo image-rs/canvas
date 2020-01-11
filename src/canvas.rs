@@ -5,7 +5,7 @@ use core::ops::{Index, IndexMut};
 use core::{cmp, fmt};
 
 use crate::{AsPixel, Pixel, Rec, ReuseError};
-use zerocopy::{AsBytes, FromBytes};
+use bytemuck::Pod;
 
 /// A 2d matrix of pixels.
 ///
@@ -57,7 +57,7 @@ use zerocopy::{AsBytes, FromBytes};
 ///
 /// [`Layout`]: ./struct.Layout.html
 #[derive(Debug, PartialEq, Eq)]
-pub struct Canvas<P: AsBytes + FromBytes> {
+pub struct Canvas<P: Pod> {
     inner: Rec<P>,
     layout: Layout<P>,
 }
@@ -100,7 +100,7 @@ pub struct Layout<P> {
 ///
 /// [`Canvas::from_rec`]: ./struct.Canvas.html#method.from_rec
 #[derive(PartialEq, Eq)]
-pub struct CanvasReuseError<P: AsBytes + FromBytes> {
+pub struct CanvasReuseError<P: Pod> {
     buffer: Rec<P>,
     layout: Layout<P>,
 }
@@ -137,12 +137,12 @@ pub struct CanvasReuseError<P: AsBytes + FromBytes> {
 /// # ;
 /// ```
 #[derive(PartialEq, Eq)]
-pub struct MapReuseError<P: AsBytes + FromBytes, Q: AsBytes + FromBytes> {
+pub struct MapReuseError<P: Pod, Q: Pod> {
     buffer: Canvas<P>,
     layout: Option<Layout<Q>>,
 }
 
-impl<P: AsBytes + FromBytes> Canvas<P> {
+impl<P: Pod> Canvas<P> {
     /// Allocate a canvas with specified layout.
     ///
     /// # Panics
@@ -240,7 +240,7 @@ impl<P: AsBytes + FromBytes> Canvas<P> {
     /// Reinterpret to another, same size pixel type.
     ///
     /// See `transmute_to` for details.
-    pub fn transmute<Q: AsPixel + AsBytes + FromBytes>(self) -> Canvas<Q> {
+    pub fn transmute<Q: AsPixel + Pod>(self) -> Canvas<Q> {
         self.transmute_to(Q::pixel())
     }
 
@@ -250,7 +250,7 @@ impl<P: AsBytes + FromBytes> Canvas<P> {
     ///
     /// Like `std::mem::transmute`, the size of the two types need to be equal. This ensures that
     /// all indices are valid in both directions.
-    pub fn transmute_to<Q: AsBytes + FromBytes>(self, pixel: Pixel<Q>) -> Canvas<Q> {
+    pub fn transmute_to<Q: AsPixel + Pod>(self, pixel: Pixel<Q>) -> Canvas<Q> {
         let layout = self.layout.transmute_to(pixel);
         let inner = self.inner.reinterpret_to(pixel);
 
@@ -267,9 +267,7 @@ impl<P: AsBytes + FromBytes> Canvas<P> {
         // Can't overflow, surely smaller than `layout.max_index()`.
         y * self.layout.width() + x
     }
-}
 
-impl<P: AsBytes + FromBytes + Copy> Canvas<P> {
     /// Apply a function to all pixel values.
     ///
     /// See [`map_to`] for the details.
@@ -279,7 +277,7 @@ impl<P: AsBytes + FromBytes + Copy> Canvas<P> {
     /// This function will panic if the new layout would be invalid (because the new pixel type
     /// requires a larger buffer than can be allocate) or if the reallocation fails.
     pub fn map<F, Q>(self, map: F) -> Canvas<Q>
-        where F: Fn(P) -> Q, Q: AsPixel + AsBytes + FromBytes + Copy
+        where F: Fn(P) -> Q, Q: AsPixel + Pod,
     {
         self.map_to(map, Q::pixel())
     }
@@ -294,7 +292,7 @@ impl<P: AsBytes + FromBytes + Copy> Canvas<P> {
     /// This function will panic if the new layout would be invalid (because the new pixel type
     /// requires a larger buffer than can be allocate) or if the reallocation fails.
     pub fn map_to<F, Q>(self, map: F, pixel: Pixel<Q>) -> Canvas<Q>
-        where F: Fn(P) -> Q, Q: AsBytes + FromBytes + Copy
+        where F: Fn(P) -> Q, Q: Pod,
     {
         // First compute the new layout ..
         let layout = self.layout.map_to(pixel)
@@ -311,7 +309,7 @@ impl<P: AsBytes + FromBytes + Copy> Canvas<P> {
         -> Result<Canvas<Q>, MapReuseError<P, Q>>
     where
         F: Fn(P) -> Q,
-        Q: AsPixel + AsBytes + FromBytes + Copy,
+        Q: AsPixel + Pod,
     {
         self.map_reuse_to(map, Q::pixel())
     }
@@ -320,7 +318,7 @@ impl<P: AsBytes + FromBytes + Copy> Canvas<P> {
         -> Result<Canvas<Q>, MapReuseError<P, Q>>
     where
         F: Fn(P) -> Q,
-        Q: AsBytes + FromBytes + Copy,
+        Q: Pod,
     {
         let layout = match self.layout.map_to(pixel) {
             Some(layout) => layout,
@@ -432,7 +430,7 @@ impl<P> Layout<P> {
     }
 }
 
-impl<P: AsBytes + FromBytes> CanvasReuseError<P> {
+impl<P: Pod> CanvasReuseError<P> {
     /// Unwrap the original buffer.
     pub fn into_rec(self) -> Rec<P> {
         self.buffer
@@ -441,8 +439,8 @@ impl<P: AsBytes + FromBytes> CanvasReuseError<P> {
 
 impl<P, Q> MapReuseError<P, Q>
 where
-    P: AsBytes + FromBytes,
-    Q: AsBytes + FromBytes,
+    P: Pod,
+    Q: Pod,
 {
     /// Unwrap the original buffer.
     pub fn into_canvas(self) -> Canvas<P> {
@@ -510,7 +508,7 @@ impl<P> cmp::PartialOrd for Layout<P> {
     }
 }
 
-impl<P: AsBytes + FromBytes> Clone for Canvas<P> {
+impl<P: Pod> Clone for Canvas<P> {
     fn clone(&self) -> Self {
         Canvas {
             inner: self.inner.clone(),
@@ -519,7 +517,7 @@ impl<P: AsBytes + FromBytes> Clone for Canvas<P> {
     }
 }
 
-impl<P: AsBytes + FromBytes + AsPixel> Default for Canvas<P> {
+impl<P: Pod + AsPixel> Default for Canvas<P> {
     fn default() -> Self {
         Canvas {
             inner: Rec::default(),
@@ -528,7 +526,7 @@ impl<P: AsBytes + FromBytes + AsPixel> Default for Canvas<P> {
     }
 }
 
-impl<P: AsBytes + FromBytes> Index<(usize, usize)> for Canvas<P> {
+impl<P: Pod> Index<(usize, usize)> for Canvas<P> {
     type Output = P;
 
     fn index(&self, (x, y): (usize, usize)) -> &P {
@@ -536,14 +534,14 @@ impl<P: AsBytes + FromBytes> Index<(usize, usize)> for Canvas<P> {
     }
 }
 
-impl<P: AsBytes + FromBytes> IndexMut<(usize, usize)> for Canvas<P> {
+impl<P: Pod> IndexMut<(usize, usize)> for Canvas<P> {
     fn index_mut(&mut self, (x, y): (usize, usize)) -> &mut P {
         let index = self.index_of(x, y);
         &mut self.as_mut_slice()[index]
     }
 }
 
-impl<P: AsBytes + FromBytes> fmt::Debug for CanvasReuseError<P> {
+impl<P: Pod> fmt::Debug for CanvasReuseError<P> {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
         write!(
             f,
@@ -556,8 +554,8 @@ impl<P: AsBytes + FromBytes> fmt::Debug for CanvasReuseError<P> {
 
 impl<P, Q> fmt::Debug for MapReuseError<P, Q> 
 where
-    P: AsBytes + FromBytes,
-    Q: AsBytes + FromBytes,
+    P: Pod,
+    Q: Pod,
 {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
         match self.layout {
