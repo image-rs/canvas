@@ -5,15 +5,16 @@ use core::cmp;
 use core::fmt;
 use core::ops::{Deref, DerefMut};
 
+use bytemuck::Pod;
+
 use crate::buf::{buf, Buffer};
 use crate::{AsPixel, Pixel};
-use zerocopy::{AsBytes, FromBytes};
 
 /// A **r**einterpretable v**ec**tor for an array of pixels.
 ///
 /// It allows efficient conversion to other pixel representations, that is effective
 /// reinterpretation casts.
-pub struct Rec<P: AsBytes + FromBytes> {
+pub struct Rec<P: Pod> {
     inner: Buffer,
     length: usize,
     pixel: Pixel<P>,
@@ -45,7 +46,7 @@ pub struct ReuseError {
     capacity: usize,
 }
 
-impl<P: AsBytes + FromBytes> Rec<P> {
+impl<P: Pod> Rec<P> {
     /// Allocate a pixel buffer by the pixel count.
     ///
     /// # Panics
@@ -239,7 +240,7 @@ impl<P: AsBytes + FromBytes> Rec<P> {
     /// See `reinterpret_to` for details.
     pub fn reinterpret<Q>(self) -> Rec<Q>
     where
-        Q: AsPixel + AsBytes + FromBytes,
+        Q: AsPixel + Pod,
     {
         self.reinterpret_to(Q::pixel())
     }
@@ -252,7 +253,7 @@ impl<P: AsBytes + FromBytes> Rec<P> {
     /// previous pixel type's length.
     pub fn reinterpret_to<Q>(self, pixel: Pixel<Q>) -> Rec<Q>
     where
-        Q: AsBytes + FromBytes,
+        Q: Pod,
     {
         Rec {
             inner: self.inner,
@@ -265,7 +266,7 @@ impl<P: AsBytes + FromBytes> Rec<P> {
     ///
     /// See [`map_to`] for details.
     pub fn map<Q>(self, f: impl Fn(P) -> Q) -> Rec<Q>
-        where P: Copy, Q: AsPixel + AsBytes + FromBytes + Copy,
+        where P: Copy, Q: AsPixel + Pod,
     {
         self.map_to(f, Q::pixel())
     }
@@ -280,7 +281,7 @@ impl<P: AsBytes + FromBytes> Rec<P> {
     /// This function will panic if the allocation fails or the necessary allocation exceeds the
     /// value range of `usize`.
     pub fn map_to<Q>(mut self, f: impl Fn(P) -> Q, pixel: Pixel<Q>) -> Rec<Q>
-        where P: Copy, Q: AsBytes + FromBytes + Copy,
+        where P: Copy, Q: Pod,
     {
         // Ensure we have enough memory for both representations.
         let length = self.as_slice().len();
@@ -310,7 +311,7 @@ fn mem_size<P>(pixel: Pixel<P>, count: usize) -> usize {
         .unwrap_or_else(|| panic!("Requested count overflows memory size"))
 }
 
-impl<P: AsBytes + FromBytes> Deref for Rec<P> {
+impl<P: Pod> Deref for Rec<P> {
     type Target = [P];
 
     fn deref(&self) -> &[P] {
@@ -318,13 +319,13 @@ impl<P: AsBytes + FromBytes> Deref for Rec<P> {
     }
 }
 
-impl<P: AsBytes + FromBytes> DerefMut for Rec<P> {
+impl<P: Pod> DerefMut for Rec<P> {
     fn deref_mut(&mut self) -> &mut [P] {
         self.as_mut_slice()
     }
 }
 
-impl<P: AsBytes + FromBytes> Clone for Rec<P> {
+impl<P: Pod> Clone for Rec<P> {
     fn clone(&self) -> Self {
         Rec {
             inner: self.inner.clone(),
@@ -333,7 +334,7 @@ impl<P: AsBytes + FromBytes> Clone for Rec<P> {
     }
 }
 
-impl<P: AsBytes + FromBytes + AsPixel> Default for Rec<P> {
+impl<P: AsPixel + Pod> Default for Rec<P> {
     fn default() -> Self {
         Rec {
             inner: Buffer::default(),
@@ -343,27 +344,27 @@ impl<P: AsBytes + FromBytes + AsPixel> Default for Rec<P> {
     }
 }
 
-impl<P: AsBytes + FromBytes + cmp::PartialEq> cmp::PartialEq for Rec<P> {
+impl<P: Pod + cmp::PartialEq> cmp::PartialEq for Rec<P> {
     fn eq(&self, other: &Self) -> bool {
         self.as_slice().eq(other.as_slice())
     }
 }
 
-impl<P: AsBytes + FromBytes + cmp::Eq> cmp::Eq for Rec<P> {}
+impl<P: Pod + cmp::Eq> cmp::Eq for Rec<P> {}
 
-impl<P: AsBytes + FromBytes + cmp::PartialOrd> cmp::PartialOrd for Rec<P> {
+impl<P: Pod + cmp::PartialOrd> cmp::PartialOrd for Rec<P> {
     fn partial_cmp(&self, other: &Self) -> Option<cmp::Ordering> {
         self.as_slice().partial_cmp(other.as_slice())
     }
 }
 
-impl<P: AsBytes + FromBytes + cmp::Ord> cmp::Ord for Rec<P> {
+impl<P: Pod + cmp::Ord> cmp::Ord for Rec<P> {
     fn cmp(&self, other: &Self) -> cmp::Ordering {
         self.as_slice().cmp(other.as_slice())
     }
 }
 
-impl<P: AsBytes + FromBytes + fmt::Debug> fmt::Debug for Rec<P> {
+impl<P: Pod + fmt::Debug> fmt::Debug for Rec<P> {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
         f.debug_list().entries(self.as_slice().iter()).finish()
     }

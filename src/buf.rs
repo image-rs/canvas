@@ -5,7 +5,7 @@ use core::mem;
 use core::ops;
 
 use crate::pixel::{MaxAligned, Pixel, MAX_ALIGN};
-use zerocopy::{AsBytes, ByteSlice, FromBytes, LayoutVerified};
+use bytemuck::{cast_slice, cast_slice_mut, Pod};
 
 /// Allocates and manages raw bytes.
 ///
@@ -98,7 +98,7 @@ impl buf {
     where
         T: AsRef<[MaxAligned]> + ?Sized,
     {
-        Self::from_bytes(data.as_ref().as_bytes()).unwrap()
+        Self::from_bytes(cast_slice(data.as_ref())).unwrap()
     }
 
     /// Wraps an aligned mutable buffer into `buf`.
@@ -108,7 +108,7 @@ impl buf {
     where
         T: AsMut<[MaxAligned]> + ?Sized,
     {
-        Self::from_bytes_mut(data.as_mut().as_bytes_mut()).unwrap()
+        Self::from_bytes_mut(cast_slice_mut(data.as_mut())).unwrap()
     }
 
     /// Wrap bytes in a `buf`.
@@ -148,12 +148,10 @@ impl buf {
     /// unused bytes in the end.
     pub fn as_pixels<P>(&self, _: Pixel<P>) -> &[P]
     where
-        P: FromBytes,
+        P: Pod,
     {
         let (bytes, _) = prefix_slice::<_, P>(self.as_bytes());
-        LayoutVerified::<_, [P]>::new_slice(bytes)
-            .unwrap_or_else(|| unreachable!("Verified alignment in Pixel and len dynamically"))
-            .into_slice()
+        cast_slice(bytes)
     }
 
     /// Reinterpret the buffer mutable for the specific pixel type.
@@ -162,12 +160,10 @@ impl buf {
     /// constructor of `Pixel`.
     pub fn as_mut_pixels<P>(&mut self, _: Pixel<P>) -> &mut [P]
     where
-        P: AsBytes + FromBytes,
+        P: Pod,
     {
         let (bytes, _) = prefix_slice::<_, P>(self.as_bytes_mut());
-        LayoutVerified::<_, [P]>::new_slice(bytes)
-            .unwrap_or_else(|| unreachable!("Verified alignment in Pixel and len dynamically"))
-            .into_mut_slice()
+        cast_slice_mut(bytes)
     }
 
     /// Apply a mapping function to some elements.
@@ -192,8 +188,8 @@ impl buf {
         p: Pixel<P>,
         q: Pixel<Q>,
     ) where
-        P: FromBytes + Copy,
-        Q: AsBytes + FromBytes + Copy,
+        P: Pod,
+        Q: Pod,
     {
         // By symmetry, a write sequence that map `src` to `dest` without clobbering any values
         // that need to be read later can be applied in reverse to map `dest` to `src` instead.
@@ -356,8 +352,8 @@ impl buf {
         p: Pixel<P>,
         q: Pixel<Q>,
     ) where
-        P: FromBytes + Copy,
-        Q: AsBytes + FromBytes + Copy,
+        P: Pod,
+        Q: Pod,
     {
         for idx in 0..len {
             let source_idx = idx + src;
@@ -378,8 +374,8 @@ impl buf {
         p: Pixel<P>,
         q: Pixel<Q>,
     ) where
-        P: FromBytes + Copy,
-        Q: AsBytes + FromBytes + Copy,
+        P: Pod,
+        Q: Pod,
     {
         for idx in (0..len).rev() {
             let source_idx = idx + src;
@@ -391,6 +387,11 @@ impl buf {
     }
 }
 
+trait ByteSlice : Sized {
+    fn len(&self) -> usize;
+    fn split_at(self, at: usize) -> (Self, Self);
+}
+
 fn prefix_slice<B, T>(slice: B) -> (B, B)
 where
     B: ByteSlice,
@@ -398,6 +399,26 @@ where
     let size = mem::size_of::<T>();
     let len = (slice.len() / size) * size;
     slice.split_at(len)
+}
+
+impl<'a> ByteSlice for &'a [u8] {
+    fn len(&self) -> usize {
+        (**self).len()
+    }
+
+    fn split_at(self, at: usize) -> (Self, Self) {
+        self.split_at(at)
+    }
+}
+
+impl<'a> ByteSlice for &'a mut [u8] {
+    fn len(&self) -> usize {
+        (**self).len()
+    }
+
+    fn split_at(self, at: usize) -> (Self, Self) {
+        self.split_at_mut(at)
+    }
 }
 
 impl ops::Deref for Buffer {

@@ -5,8 +5,6 @@ use core::cmp::{Eq, Ord, Ordering, PartialEq, PartialOrd};
 use core::marker::PhantomData;
 use core::{fmt, mem};
 
-use zerocopy::{AsBytes, FromBytes};
-
 /// Marker struct to denote a pixel type.
 ///
 /// Can be constructed only for types that have expected alignment and no byte invariants. It
@@ -28,10 +26,13 @@ pub(crate) const MAX_ALIGN: usize = 16;
 /// A byte-like-type that is aligned to the required max alignment.
 ///
 /// This type does not contain padding and implements `FromBytes`.
-#[derive(Clone, Copy, AsBytes, FromBytes)]
+#[derive(Clone, Copy)]
 #[repr(align(16))]
 #[repr(C)]
 pub struct MaxAligned(pub(crate) [u8; 16]);
+
+unsafe impl bytemuck::Zeroable for MaxAligned { }
+unsafe impl bytemuck::Pod for MaxAligned { }
 
 pub(crate) mod constants {
     use super::{AsPixel, MaxAligned, Pixel};
@@ -65,7 +66,7 @@ pub(crate) mod constants {
     );
 }
 
-impl<P: AsBytes + FromBytes> Pixel<P> {
+impl<P: bytemuck::Pod> Pixel<P> {
     /// Try to construct an instance of the marker.
     ///
     /// If successful, you can freely use it to access the image buffers.
