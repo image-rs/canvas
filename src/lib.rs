@@ -33,6 +33,7 @@
 extern crate alloc;
 
 mod buf;
+mod layout;
 mod matrix;
 mod pixel;
 mod rec;
