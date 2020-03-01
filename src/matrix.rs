@@ -13,7 +13,7 @@ use bytemuck::Pod;
 /// provides strided access to such pixel data is not intended to be baked into this struct.
 /// Instead, it will always store the data in a row-major layout without holes.
 ///
-/// There are two levels of control over the allocation behaviour of a `Canvas`. The direct
+/// There are two levels of control over the allocation behaviour of a `Matrix`. The direct
 /// methods, currently `with_width_and_height` only, lead to a canvas without intermediate steps
 /// but may panic due to an invalid layout. Manually using the intermediate [`Layout`] gives custom
 /// error handling options and additional offers inspection of the details of the to-be-allocated
@@ -39,7 +39,7 @@ use bytemuck::Pod;
 /// potential panic from allocation failure.
 ///
 /// Secondly, an instance of [`Layout`] can be constructed in a panic free manner without any
-/// allocation and independently from the `Canvas` instance. By providing it to the `with_layout`
+/// allocation and independently from the `Matrix` instance. By providing it to the `with_layout`
 /// constructor ensures that all potential intermediate failures–except as mentioned before–can be
 /// explicitely handled by the caller. Furthermore, some utility methods allow inspection of the
 /// eventual allocation size before the reservation of memory.
@@ -57,7 +57,7 @@ use bytemuck::Pod;
 ///
 /// [`Layout`]: ./struct.Layout.html
 #[derive(Debug, PartialEq, Eq)]
-pub struct Canvas<P: Pod> {
+pub struct Matrix<P: Pod> {
     inner: Rec<P>,
     layout: Layout<P>,
 }
@@ -75,7 +75,7 @@ pub struct Layout<P> {
 
 /// Error representation for a failed buffer reuse for a canvas.
 ///
-/// Emitted as a result of [`Canvas::from_rec`] when the buffer capacity is not large enough to
+/// Emitted as a result of [`Matrix::from_rec`] when the buffer capacity is not large enough to
 /// serve as an image of requested layout with causing a reallocation.
 ///
 /// It is possible to retrieve the buffer that cause the failure with `into_rec`. This allows one
@@ -83,12 +83,12 @@ pub struct Layout<P> {
 /// which does not require the interpretation as a full image.
 ///
 /// ```
-/// # use canvas::{Canvas, Rec, Layout};
+/// # use canvas::{Matrix, Rec, Layout};
 /// let rec = Rec::<u8>::new(16);
 /// let allocation = rec.as_bytes().as_ptr();
 ///
 /// let bad_layout = Layout::width_and_height(rec.capacity() + 1, 1).unwrap();
-/// let error = match Canvas::from_reused_rec(rec, bad_layout) {
+/// let error = match Matrix::from_reused_rec(rec, bad_layout) {
 ///     Ok(_) => unreachable!("The layout requires one too many pixels"),
 ///     Err(error) => error,
 /// };
@@ -98,9 +98,9 @@ pub struct Layout<P> {
 /// assert_eq!(rec.as_bytes().as_ptr(), allocation);
 /// ```
 ///
-/// [`Canvas::from_rec`]: ./struct.Canvas.html#method.from_rec
+/// [`Matrix::from_rec`]: ./struct.Matrix.html#method.from_rec
 #[derive(PartialEq, Eq)]
-pub struct CanvasReuseError<P: Pod> {
+pub struct MatrixReuseError<P: Pod> {
     buffer: Rec<P>,
     layout: Layout<P>,
 }
@@ -116,8 +116,8 @@ pub struct CanvasReuseError<P: Pod> {
 /// allocations.
 ///
 /// ```
-/// # use canvas::Canvas;
-/// # let canvas = Canvas::<u8>::with_width_and_height(2, 2);
+/// # use canvas::Matrix;
+/// # let canvas = Matrix::<u8>::with_width_and_height(2, 2);
 /// # struct RequiredAllocationTooLarge;
 ///
 /// match canvas.map_reuse(f32::from) {
@@ -138,11 +138,11 @@ pub struct CanvasReuseError<P: Pod> {
 /// ```
 #[derive(PartialEq, Eq)]
 pub struct MapReuseError<P: Pod, Q: Pod> {
-    buffer: Canvas<P>,
+    buffer: Matrix<P>,
     layout: Option<Layout<Q>>,
 }
 
-impl<P: Pod> Canvas<P> {
+impl<P: Pod> Matrix<P> {
     /// Allocate a canvas with specified layout.
     ///
     /// # Panics
@@ -157,7 +157,7 @@ impl<P: Pod> Canvas<P> {
     /// # Panics
     /// This panics when the layout described by `width` and `height` can not be allocated, for
     /// example due to it being an invalid layout. If you want to handle the layout being invalid,
-    /// consider using `Layout::from_width_and_height` and `Canvas::with_layout`.
+    /// consider using `Layout::from_width_and_height` and `Matrix::with_layout`.
     pub fn with_width_and_height(width: usize, height: usize) -> Self
     where
         P: AsPixel,
@@ -185,24 +185,24 @@ impl<P: Pod> Canvas<P> {
     /// Reuse an existing buffer for a pixel canvas.
     ///
     /// Similar to `from_rec` but this function will never reallocate the inner buffer. Instead, it
-    /// will return the `Rec` unmodified if the creation fails. See [`CanvasReuseError`] for
+    /// will return the `Rec` unmodified if the creation fails. See [`MatrixReuseError`] for
     /// further information on the error and retrieving the buffer.
     ///
-    /// [`CanvasReuseError`]: ./struct.CanvasReuseError.html
+    /// [`MatrixReuseError`]: ./struct.CanvasReuseError.html
     pub fn from_reused_rec(
         mut buffer: Rec<P>,
         layout: Layout<P>,
-    ) -> Result<Self, CanvasReuseError<P>> {
+    ) -> Result<Self, MatrixReuseError<P>> {
         match buffer.reuse_bytes(layout.byte_len()) {
             Ok(_) => (),
-            Err(_) => return Err(CanvasReuseError { buffer, layout }),
+            Err(_) => return Err(MatrixReuseError { buffer, layout }),
         }
         Ok(Self::new_raw(buffer, layout))
     }
 
     fn new_raw(inner: Rec<P>, layout: Layout<P>) -> Self {
         assert_eq!(inner.len(), layout.len(), "Pixel count agrees with buffer");
-        Canvas { inner, layout }
+        Matrix { inner, layout }
     }
 
     pub fn as_slice(&self) -> &[P] {
@@ -240,7 +240,7 @@ impl<P: Pod> Canvas<P> {
     /// Reinterpret to another, same size pixel type.
     ///
     /// See `transmute_to` for details.
-    pub fn transmute<Q: AsPixel + Pod>(self) -> Canvas<Q> {
+    pub fn transmute<Q: AsPixel + Pod>(self) -> Matrix<Q> {
         self.transmute_to(Q::pixel())
     }
 
@@ -250,11 +250,11 @@ impl<P: Pod> Canvas<P> {
     ///
     /// Like `std::mem::transmute`, the size of the two types need to be equal. This ensures that
     /// all indices are valid in both directions.
-    pub fn transmute_to<Q: AsPixel + Pod>(self, pixel: Pixel<Q>) -> Canvas<Q> {
+    pub fn transmute_to<Q: AsPixel + Pod>(self, pixel: Pixel<Q>) -> Matrix<Q> {
         let layout = self.layout.transmute_to(pixel);
         let inner = self.inner.reinterpret_to(pixel);
 
-        Canvas { layout, inner }
+        Matrix { layout, inner }
     }
 
     pub fn into_rec(self) -> Rec<P> {
@@ -276,7 +276,7 @@ impl<P: Pod> Canvas<P> {
     ///
     /// This function will panic if the new layout would be invalid (because the new pixel type
     /// requires a larger buffer than can be allocate) or if the reallocation fails.
-    pub fn map<F, Q>(self, map: F) -> Canvas<Q>
+    pub fn map<F, Q>(self, map: F) -> Matrix<Q>
     where
         F: Fn(P) -> Q,
         Q: AsPixel + Pod,
@@ -293,7 +293,7 @@ impl<P: Pod> Canvas<P> {
     ///
     /// This function will panic if the new layout would be invalid (because the new pixel type
     /// requires a larger buffer than can be allocate) or if the reallocation fails.
-    pub fn map_to<F, Q>(self, map: F, pixel: Pixel<Q>) -> Canvas<Q>
+    pub fn map_to<F, Q>(self, map: F, pixel: Pixel<Q>) -> Matrix<Q>
     where
         F: Fn(P) -> Q,
         Q: Pod,
@@ -305,10 +305,10 @@ impl<P: Pod> Canvas<P> {
             .expect("Pixel layout can not fit into memory");
         // .. then do the actual pixel mapping.
         let inner = self.inner.map_to(map, pixel);
-        Canvas { layout, inner }
+        Matrix { layout, inner }
     }
 
-    pub fn map_reuse<F, Q>(self, map: F) -> Result<Canvas<Q>, MapReuseError<P, Q>>
+    pub fn map_reuse<F, Q>(self, map: F) -> Result<Matrix<Q>, MapReuseError<P, Q>>
     where
         F: Fn(P) -> Q,
         Q: AsPixel + Pod,
@@ -320,7 +320,7 @@ impl<P: Pod> Canvas<P> {
         self,
         map: F,
         pixel: Pixel<Q>,
-    ) -> Result<Canvas<Q>, MapReuseError<P, Q>>
+    ) -> Result<Matrix<Q>, MapReuseError<P, Q>>
     where
         F: Fn(P) -> Q,
         Q: Pod,
@@ -344,7 +344,7 @@ impl<P: Pod> Canvas<P> {
 
         let inner = self.inner.map_to(map, pixel);
 
-        Ok(Canvas { inner, layout })
+        Ok(Matrix { inner, layout })
     }
 }
 
@@ -434,7 +434,7 @@ impl<P> Layout<P> {
     }
 }
 
-impl<P: Pod> CanvasReuseError<P> {
+impl<P: Pod> MatrixReuseError<P> {
     /// Unwrap the original buffer.
     pub fn into_rec(self) -> Rec<P> {
         self.buffer
@@ -447,7 +447,7 @@ where
     Q: Pod,
 {
     /// Unwrap the original buffer.
-    pub fn into_canvas(self) -> Canvas<P> {
+    pub fn into_canvas(self) -> Matrix<P> {
         self.buffer
     }
 
@@ -512,25 +512,25 @@ impl<P> cmp::PartialOrd for Layout<P> {
     }
 }
 
-impl<P: Pod> Clone for Canvas<P> {
+impl<P: Pod> Clone for Matrix<P> {
     fn clone(&self) -> Self {
-        Canvas {
+        Matrix {
             inner: self.inner.clone(),
             layout: self.layout,
         }
     }
 }
 
-impl<P: Pod + AsPixel> Default for Canvas<P> {
+impl<P: Pod + AsPixel> Default for Matrix<P> {
     fn default() -> Self {
-        Canvas {
+        Matrix {
             inner: Rec::default(),
             layout: Layout::default(),
         }
     }
 }
 
-impl<P: Pod> Index<(usize, usize)> for Canvas<P> {
+impl<P: Pod> Index<(usize, usize)> for Matrix<P> {
     type Output = P;
 
     fn index(&self, (x, y): (usize, usize)) -> &P {
@@ -538,18 +538,18 @@ impl<P: Pod> Index<(usize, usize)> for Canvas<P> {
     }
 }
 
-impl<P: Pod> IndexMut<(usize, usize)> for Canvas<P> {
+impl<P: Pod> IndexMut<(usize, usize)> for Matrix<P> {
     fn index_mut(&mut self, (x, y): (usize, usize)) -> &mut P {
         let index = self.index_of(x, y);
         &mut self.as_mut_slice()[index]
     }
 }
 
-impl<P: Pod> fmt::Debug for CanvasReuseError<P> {
+impl<P: Pod> fmt::Debug for MatrixReuseError<P> {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
         write!(
             f,
-            "Canvas requires {} elements but buffer has capacity for only {}",
+            "Matrix requires {} elements but buffer has capacity for only {}",
             self.layout.len(),
             self.buffer.capacity()
         )
@@ -583,7 +583,7 @@ mod tests {
         let rec = Rec::<u8>::new(4);
         assert!(rec.capacity() >= 4);
         let layout = Layout::width_and_height(2, 2).unwrap();
-        let mut canvas = Canvas::from_reused_rec(rec, layout).expect("Rec is surely large enough");
+        let mut canvas = Matrix::from_reused_rec(rec, layout).expect("Rec is surely large enough");
         canvas
             .reuse(Layout::width_and_height(1, 1).unwrap())
             .expect("Can scale down the image");
