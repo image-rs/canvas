@@ -1,6 +1,6 @@
 // Distributed under The MIT License (MIT)
 //
-// Copyright (c) 2019 The `image-rs` developers
+// Copyright (c) 2019, 2020 The `image-rs` developers
 use core::cmp::{Eq, Ord, Ordering, PartialEq, PartialOrd};
 use core::marker::PhantomData;
 use core::{fmt, mem};
@@ -50,6 +50,7 @@ pub(crate) mod constants {
     }
 
     constant_pixels!(
+        (EMPTY, ()),
         (I8, i8),
         (U8, u8),
         (I16, i16),

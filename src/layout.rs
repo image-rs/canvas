@@ -26,8 +26,13 @@ pub struct Element {
 ///
 /// This property holds for any packed, strided or planar RGB/YCbCr/HSV format as well as chroma
 /// subsampled YUV images and even raw Bayer filtered images.
+pub trait Layout {
+    fn byte_len(&self) -> usize;
+}
+
+/// A dynamic descriptor of an image's layout.
 #[derive(Clone, Debug, PartialEq, Eq, Hash)]
-pub struct Layout {
+pub struct DynLayout {
     pub(crate) repr: LayoutRepr,
 }
 
@@ -71,7 +76,7 @@ impl Element {
     }
 }
 
-impl Layout {
+impl DynLayout {
     pub fn byte_len(self) -> usize {
         match self.repr {
             LayoutRepr::Matrix(matrix) => matrix.byte_len(),
@@ -168,17 +173,17 @@ impl Yuv420p {
     }
 }
 
-impl From<Matrix> for Layout {
+impl From<Matrix> for DynLayout {
     fn from(matrix: Matrix) -> Self {
-        Layout {
+        DynLayout {
             repr: LayoutRepr::Matrix(matrix),
         }
     }
 }
 
-impl From<Yuv420p> for Layout {
+impl From<Yuv420p> for DynLayout {
     fn from(matrix: Yuv420p) -> Self {
-        Layout {
+        DynLayout {
             repr: LayoutRepr::Yuv420p(matrix),
         }
     }

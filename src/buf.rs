@@ -3,6 +3,7 @@
 // Copyright (c) 2019 The `image-rs` developers
 use core::{borrow, mem, ops};
 
+use alloc::borrow::ToOwned;
 use alloc::vec::Vec;
 
 use crate::pixel::{MaxAligned, Pixel, MAX_ALIGN};
@@ -31,6 +32,12 @@ pub(crate) struct Buffer {
 #[repr(transparent)]
 #[allow(non_camel_case_types)]
 pub(crate) struct buf([u8]);
+
+/// A copy-on-grow version of a buffer.
+pub(crate) enum Cog<'buf> {
+    Owned(Buffer),
+    Borrowed(&'buf mut buf),
+}
 
 impl Buffer {
     const ELEMENT: MaxAligned = MaxAligned([0; 16]);
@@ -86,6 +93,34 @@ impl Buffer {
 
         // We allocated enough chunks for at least the length. This can never overflow.
         length / CHUNK_SIZE + usize::from(length % CHUNK_SIZE != 0)
+    }
+}
+
+impl Cog<'_> {
+    pub(crate) fn to_owned(this: &mut Self) -> &'_ mut Buffer {
+        match this {
+            Cog::Owned(buffer) => buffer,
+            Cog::Borrowed(buffer) => {
+                let buffer = buffer.to_owned();
+                *this = Cog::Owned(buffer);
+                Cog::to_owned(this)
+            }
+        }
+    }
+
+    pub(crate) fn into_owned(this: Self) -> Buffer {
+        match this {
+            Cog::Owned(buffer) => buffer,
+            Cog::Borrowed(buffer) => buffer.to_owned(),
+        }
+    }
+
+    fn grow_to(this: &mut Self, bytes: usize) -> &mut buf {
+        if this.len() < bytes {
+            Cog::to_owned(this).grow_to(bytes);
+        }
+
+        &mut **this
     }
 }
 
@@ -452,6 +487,26 @@ impl ops::Deref for buf {
 impl ops::DerefMut for buf {
     fn deref_mut(&mut self) -> &mut [u8] {
         self.as_bytes_mut()
+    }
+}
+
+impl ops::Deref for Cog<'_> {
+    type Target = buf;
+
+    fn deref(&self) -> &buf {
+        match self {
+            Cog::Owned(buffer) => buffer,
+            Cog::Borrowed(buffer) => buffer,
+        }
+    }
+}
+
+impl ops::DerefMut for Cog<'_> {
+    fn deref_mut(&mut self) -> &mut buf {
+        match self {
+            Cog::Owned(buffer) => buffer,
+            Cog::Borrowed(buffer) => buffer,
+        }
     }
 }
 

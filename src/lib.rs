@@ -33,11 +33,13 @@
 extern crate alloc;
 
 mod buf;
+mod canvas;
 mod layout;
 mod matrix;
 mod pixel;
 mod rec;
 
+pub use self::canvas::Canvas;
 pub use self::matrix::{Layout, Matrix, MatrixReuseError};
 pub use self::pixel::{AsPixel, Pixel};
 pub use self::rec::{Rec, ReuseError};
