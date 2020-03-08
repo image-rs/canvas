@@ -1,8 +1,7 @@
 // Distributed under The MIT License (MIT)
 //
 // Copyright (c) 2019 The `image-rs` developers
-use core::mem;
-use core::ops;
+use core::{borrow, mem, ops};
 
 use alloc::vec::Vec;
 
@@ -404,6 +403,27 @@ impl<'a> ByteSlice for &'a mut [u8] {
 
     fn split_at(self, at: usize) -> (Self, Self) {
         self.split_at_mut(at)
+    }
+}
+
+impl borrow::Borrow<buf> for Buffer {
+    fn borrow(&self) -> &buf {
+        &**self
+    }
+}
+
+impl borrow::BorrowMut<buf> for Buffer {
+    fn borrow_mut(&mut self) -> &mut buf {
+        &mut **self
+    }
+}
+
+impl alloc::borrow::ToOwned for buf {
+    type Owned = Buffer;
+    fn to_owned(&self) -> Buffer {
+        let mut buffer = Buffer::new(self.len());
+        buffer.as_bytes_mut().copy_from_slice(self);
+        buffer
     }
 }
 
