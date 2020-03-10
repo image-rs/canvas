@@ -29,10 +29,6 @@ other needs.
 
 ## Todo
 
-* `Matrix` mutation to differently sized types blocked by ..
-* .. `Rec` logical mutations, keeping `len` but not `byte_len`
-* Relaxing internal `Buf` requirements to allow reuse of memory for `f32` (only
-  `AsBytes` but not `FromBytes`)
 * Use alignment for SIMD iteration/transmutation/map-operation
 * Ensure `core::mem::needs_drop` is `false` to provide better semantics for values.
 
