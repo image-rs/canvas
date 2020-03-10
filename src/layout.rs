@@ -1,5 +1,5 @@
 //! A module for different pixel layouts.
-use crate::AsPixel;
+use crate::{AsPixel, Pixel};
 
 /// Describes the byte layout of an element, untyped.
 ///
@@ -30,6 +30,12 @@ pub trait Layout {
     fn byte_len(&self) -> usize;
 }
 
+/// A layout that uses a slice of samples.
+pub trait SampleSlice: Layout {
+    type Sample;
+    fn sample() -> Pixel<Self::Sample>;
+}
+
 /// A dynamic descriptor of an image's layout.
 #[derive(Clone, Debug, PartialEq, Eq, Hash)]
 pub struct DynLayout {
@@ -58,6 +64,14 @@ pub struct Yuv420p {
     height: u32,
 }
 
+/// A typed matrix of packed pixels (channel groups).
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+pub struct TMatrix<P> {
+    pixel: Pixel<P>,
+    first_dim: usize,
+    second_dim: usize,
+}
+
 impl Element {
     pub fn from_pixel<P: AsPixel>() -> Self {
         let pix = P::pixel();
@@ -77,7 +91,7 @@ impl Element {
 }
 
 impl DynLayout {
-    pub fn byte_len(self) -> usize {
+    pub fn byte_len(&self) -> usize {
         match self.repr {
             LayoutRepr::Matrix(matrix) => matrix.byte_len(),
             LayoutRepr::Yuv420p(matrix) => matrix.byte_len(),
@@ -145,6 +159,20 @@ impl Matrix {
     }
 }
 
+impl<P> TMatrix<P> {
+    pub fn with_matrix(pixel: Pixel<P>, matrix: Matrix) -> Option<Self> {
+        if pixel.size() == matrix.element.size {
+            Some(TMatrix {
+                pixel,
+                first_dim: matrix.first_dim,
+                second_dim: matrix.second_dim,
+            })
+        } else {
+            None
+        }
+    }
+}
+
 impl Yuv420p {
     pub fn from_width_height(channel: Element, width: u32, height: u32) -> Option<Self> {
         use core::convert::TryFrom;
@@ -159,7 +187,8 @@ impl Yuv420p {
         let uv_count = y_count / 2;
 
         let count = y_count.checked_add(uv_count)?;
-        let total = count.checked_mul(channel.size)?;
+        let _ = count.checked_mul(channel.size)?;
+
         Some(Yuv420p {
             channel,
             width,
@@ -170,6 +199,15 @@ impl Yuv420p {
     pub const fn byte_len(self) -> usize {
         let ylen = (self.width as usize) * (self.height as usize) * self.channel.size;
         ylen + ylen / 2
+    }
+}
+
+impl<P> From<Pixel<P>> for Element {
+    fn from(pix: Pixel<P>) -> Self {
+        Element {
+            size: pix.size(),
+            align: pix.align(),
+        }
     }
 }
 
@@ -185,6 +223,22 @@ impl From<Yuv420p> for DynLayout {
     fn from(matrix: Yuv420p) -> Self {
         DynLayout {
             repr: LayoutRepr::Yuv420p(matrix),
+        }
+    }
+}
+
+impl Layout for DynLayout {
+    fn byte_len(&self) -> usize {
+        DynLayout::byte_len(self)
+    }
+}
+
+impl<P> From<TMatrix<P>> for Matrix {
+    fn from(mat: TMatrix<P>) -> Self {
+        Matrix {
+            element: mat.pixel.into(),
+            first_dim: mat.first_dim,
+            second_dim: mat.second_dim,
         }
     }
 }

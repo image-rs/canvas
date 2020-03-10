@@ -115,7 +115,7 @@ impl Cog<'_> {
         }
     }
 
-    fn grow_to(this: &mut Self, bytes: usize) -> &mut buf {
+    pub(crate) fn grow_to(this: &mut Self, bytes: usize) -> &mut buf {
         if this.len() < bytes {
             Cog::to_owned(this).grow_to(bytes);
         }
@@ -438,6 +438,20 @@ impl<'a> ByteSlice for &'a mut [u8] {
 
     fn split_at(self, at: usize) -> (Self, Self) {
         self.split_at_mut(at)
+    }
+}
+
+impl From<&'_ [u8]> for Buffer {
+    fn from(content: &'_ [u8]) -> Self {
+        let mut buffer = Buffer::new(content.len());
+        buffer[..content.len()].copy_from_slice(content);
+        buffer
+    }
+}
+
+impl From<&'_ buf> for Buffer {
+    fn from(content: &'_ buf) -> Self {
+        content.to_owned()
     }
 }
 
