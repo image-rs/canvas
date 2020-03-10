@@ -4,10 +4,11 @@
 use core::ops::{Index, IndexMut};
 use core::{cmp, fmt};
 
-use crate::{AsPixel, Pixel, Rec, ReuseError};
 use bytemuck::Pod;
 
-/// A 2d matrix of pixels.
+use crate::{layout, AsPixel, Canvas, Pixel, Rec, ReuseError};
+
+/// A 2d, width-major matrix of pixels.
 ///
 /// The layout describes placement of samples within the memory buffer. An abstraction layer that
 /// provides strided access to such pixel data is not intended to be baked into this struct.
@@ -56,10 +57,9 @@ use bytemuck::Pod;
 /// freedom. Other structs may, in the future, provide other pixel layouts.
 ///
 /// [`Layout`]: ./struct.Layout.html
-#[derive(Debug, PartialEq, Eq)]
+#[derive(Clone, Debug, PartialEq, Eq)]
 pub struct Matrix<P: Pod> {
-    inner: Rec<P>,
-    layout: Layout<P>,
+    inner: Canvas<'static, Layout<P>>,
 }
 
 /// Describes the memory region used for the image.
@@ -202,23 +202,25 @@ impl<P: Pod> Matrix<P> {
 
     fn new_raw(inner: Rec<P>, layout: Layout<P>) -> Self {
         assert_eq!(inner.len(), layout.len(), "Pixel count agrees with buffer");
-        Matrix { inner, layout }
+        Matrix {
+            inner: Canvas::from_rec(inner, layout),
+        }
     }
 
     pub fn as_slice(&self) -> &[P] {
-        &self.inner.as_slice()[..self.layout.len()]
+        self.inner.as_slice()
     }
 
     pub fn as_mut_slice(&mut self) -> &mut [P] {
-        &mut self.inner.as_mut_slice()[..self.layout.len()]
+        self.inner.as_mut_slice()
     }
 
     pub fn as_bytes(&self) -> &[u8] {
-        &self.inner.as_bytes()[..self.layout.byte_len()]
+        self.inner.as_bytes()
     }
 
     pub fn as_bytes_mut(&mut self) -> &mut [u8] {
-        &mut self.inner.as_bytes_mut()[..self.layout.byte_len()]
+        self.inner.as_bytes_mut()
     }
 
     /// Resize the buffer for a new image.
@@ -227,14 +229,13 @@ impl<P: Pod> Matrix<P> {
     ///
     /// This function will panic if an allocation is necessary but fails.
     pub fn resize(&mut self, layout: Layout<P>) {
-        self.inner.resize_bytes(layout.byte_len());
-        self.layout = layout;
+        self.inner.grow(&layout);
+        *self.inner.layout_mut_unguarded() = layout;
     }
 
     /// Reuse the buffer for a new image layout.
     pub fn reuse(&mut self, layout: Layout<P>) -> Result<(), ReuseError> {
-        self.inner.reuse_bytes(layout.byte_len())?;
-        Ok(self.layout = layout)
+        self.inner.try_reuse(layout)
     }
 
     /// Reinterpret to another, same size pixel type.
@@ -251,21 +252,25 @@ impl<P: Pod> Matrix<P> {
     /// Like `std::mem::transmute`, the size of the two types need to be equal. This ensures that
     /// all indices are valid in both directions.
     pub fn transmute_to<Q: AsPixel + Pod>(self, pixel: Pixel<Q>) -> Matrix<Q> {
-        let layout = self.layout.transmute_to(pixel);
-        let inner = self.inner.reinterpret_to(pixel);
+        let layout = self.layout().transmute_to(pixel);
+        let inner = self.inner.reinterpret_unguarded(layout);
+        Matrix { inner }
+    }
 
-        Matrix { layout, inner }
+    /// Get the layout of the matrix.
+    fn layout(&self) -> Layout<P> {
+        *self.inner.layout()
     }
 
     pub fn into_rec(self) -> Rec<P> {
-        self.inner
+        self.inner.into_rec()
     }
 
     fn index_of(&self, x: usize, y: usize) -> usize {
-        assert!(self.layout.in_bounds(x, y));
+        assert!(self.layout().in_bounds(x, y));
 
         // Can't overflow, surely smaller than `layout.max_index()`.
-        y * self.layout.width() + x
+        y * self.layout().width() + x
     }
 
     /// Apply a function to all pixel values.
@@ -300,12 +305,12 @@ impl<P: Pod> Matrix<P> {
     {
         // First compute the new layout ..
         let layout = self
-            .layout
+            .layout()
             .map_to(pixel)
             .expect("Pixel layout can not fit into memory");
         // .. then do the actual pixel mapping.
-        let inner = self.inner.map_to(map, pixel);
-        Matrix { layout, inner }
+        let inner = self.into_rec().map_to(map, pixel);
+        Matrix::from_rec(inner, layout)
     }
 
     pub fn map_reuse<F, Q>(self, map: F) -> Result<Matrix<Q>, MapReuseError<P, Q>>
@@ -325,7 +330,7 @@ impl<P: Pod> Matrix<P> {
         F: Fn(P) -> Q,
         Q: Pod,
     {
-        let layout = match self.layout.map_to(pixel) {
+        let layout = match self.layout().map_to(pixel) {
             Some(layout) => layout,
             None => {
                 return Err(MapReuseError {
@@ -335,16 +340,16 @@ impl<P: Pod> Matrix<P> {
             }
         };
 
-        if self.inner.byte_capacity() < layout.byte_len() {
+        if self.inner.as_bytes().len() < layout.byte_len() {
             return Err(MapReuseError {
                 buffer: self,
                 layout: Some(layout),
             });
         }
 
-        let inner = self.inner.map_to(map, pixel);
+        let inner = self.into_rec().map_to(map, pixel);
 
-        Ok(Matrix { inner, layout })
+        Ok(Matrix::from_rec(inner, layout))
     }
 }
 
@@ -460,6 +465,20 @@ where
     }
 }
 
+impl<P: Pod> layout::Layout for Layout<P> {
+    fn byte_len(&self) -> usize {
+        Layout::byte_len(*self)
+    }
+}
+
+impl<P: Pod> layout::SampleSlice for Layout<P> {
+    type Sample = P;
+
+    fn sample(&self) -> Pixel<P> {
+        self.pixel
+    }
+}
+
 impl<P> Clone for Layout<P> {
     fn clone(&self) -> Self {
         Layout {
@@ -512,21 +531,9 @@ impl<P> cmp::PartialOrd for Layout<P> {
     }
 }
 
-impl<P: Pod> Clone for Matrix<P> {
-    fn clone(&self) -> Self {
-        Matrix {
-            inner: self.inner.clone(),
-            layout: self.layout,
-        }
-    }
-}
-
 impl<P: Pod + AsPixel> Default for Matrix<P> {
     fn default() -> Self {
-        Matrix {
-            inner: Rec::default(),
-            layout: Layout::default(),
-        }
+        Matrix::from_rec(Rec::default(), Layout::default())
     }
 }
 
@@ -567,7 +574,7 @@ where
                 f,
                 "Mapping canvas requires {} bytes but current buffer has a capacity of {}",
                 layout.byte_len(),
-                self.buffer.inner.byte_capacity()
+                self.buffer.inner.as_capacity_bytes().len(),
             ),
             None => write!(f, "Mapped canvas can not be allocated"),
         }

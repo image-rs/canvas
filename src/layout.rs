@@ -283,4 +283,4 @@ impl<P> Clone for TMatrix<P> {
     }
 }
 
-impl<P> Copy for TMatrix<P> { }
+impl<P> Copy for TMatrix<P> {}

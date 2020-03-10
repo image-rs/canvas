@@ -1,7 +1,7 @@
 // Distributed under The MIT License (MIT)
 //
 // Copyright (c) 2019 The `image-rs` developers
-use core::{borrow, mem, ops};
+use core::{borrow, cmp, mem, ops};
 
 use alloc::borrow::ToOwned;
 use alloc::vec::Vec;
@@ -523,6 +523,22 @@ impl ops::DerefMut for Cog<'_> {
         }
     }
 }
+
+impl cmp::PartialEq<Cog<'_>> for Cog<'_> {
+    fn eq(&self, other: &Cog<'_>) -> bool {
+        **self == **other
+    }
+}
+
+impl cmp::Eq for Cog<'_> {}
+
+impl cmp::PartialEq for buf {
+    fn eq(&self, other: &buf) -> bool {
+        self.as_bytes() == other.as_bytes()
+    }
+}
+
+impl cmp::Eq for buf {}
 
 impl ops::Index<ops::RangeTo<usize>> for buf {
     type Output = buf;
