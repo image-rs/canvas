@@ -306,6 +306,10 @@ impl<P: Pod> Rec<P> {
     fn buf_mut(&mut self) -> &mut buf {
         &mut self.inner[..self.length]
     }
+
+    pub(crate) fn into_inner(self) -> Buffer {
+        self.inner
+    }
 }
 
 fn mem_size<P>(pixel: Pixel<P>, count: usize) -> usize {

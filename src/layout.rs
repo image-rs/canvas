@@ -33,7 +33,14 @@ pub trait Layout {
 /// A layout that uses a slice of samples.
 pub trait SampleSlice: Layout {
     type Sample;
-    fn sample() -> Pixel<Self::Sample>;
+    fn sample(&self) -> Pixel<Self::Sample>;
+
+    /// The number of samples.
+    ///
+    /// A slice with the returned length should have the byte length returned in `byte_len`.
+    fn len(&self) -> usize {
+        self.byte_len() / self.sample().size()
+    }
 }
 
 /// A dynamic descriptor of an image's layout.
@@ -65,7 +72,7 @@ pub struct Yuv420p {
 }
 
 /// A typed matrix of packed pixels (channel groups).
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+#[derive(Debug, PartialEq, Eq, Hash)]
 pub struct TMatrix<P> {
     pixel: Pixel<P>,
     first_dim: usize,
@@ -171,6 +178,14 @@ impl<P> TMatrix<P> {
             None
         }
     }
+
+    pub fn into_matrix(self) -> Matrix {
+        Matrix {
+            element: self.pixel.into(),
+            first_dim: self.first_dim,
+            second_dim: self.second_dim,
+        }
+    }
 }
 
 impl Yuv420p {
@@ -202,6 +217,31 @@ impl Yuv420p {
     }
 }
 
+impl Layout for DynLayout {
+    fn byte_len(&self) -> usize {
+        DynLayout::byte_len(self)
+    }
+}
+
+impl Layout for Matrix {
+    fn byte_len(&self) -> usize {
+        Matrix::byte_len(*self)
+    }
+}
+
+impl<P> Layout for TMatrix<P> {
+    fn byte_len(&self) -> usize {
+        self.into_matrix().byte_len()
+    }
+}
+
+impl<P> SampleSlice for TMatrix<P> {
+    type Sample = P;
+    fn sample(&self) -> Pixel<P> {
+        self.pixel
+    }
+}
+
 impl<P> From<Pixel<P>> for Element {
     fn from(pix: Pixel<P>) -> Self {
         Element {
@@ -227,12 +267,6 @@ impl From<Yuv420p> for DynLayout {
     }
 }
 
-impl Layout for DynLayout {
-    fn byte_len(&self) -> usize {
-        DynLayout::byte_len(self)
-    }
-}
-
 impl<P> From<TMatrix<P>> for Matrix {
     fn from(mat: TMatrix<P>) -> Self {
         Matrix {
@@ -242,3 +276,11 @@ impl<P> From<TMatrix<P>> for Matrix {
         }
     }
 }
+
+impl<P> Clone for TMatrix<P> {
+    fn clone(&self) -> Self {
+        TMatrix { ..*self }
+    }
+}
+
+impl<P> Copy for TMatrix<P> { }
