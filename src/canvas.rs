@@ -162,8 +162,8 @@ impl<P: Pod> Canvas<P> {
     where
         P: AsPixel,
     {
-        let layout = Layout::width_and_height(width, height)
-            .expect("Pixel layout can not fit into memory");
+        let layout =
+            Layout::width_and_height(width, height).expect("Pixel layout can not fit into memory");
         Self::with_layout(layout)
     }
 
@@ -277,7 +277,9 @@ impl<P: Pod> Canvas<P> {
     /// This function will panic if the new layout would be invalid (because the new pixel type
     /// requires a larger buffer than can be allocate) or if the reallocation fails.
     pub fn map<F, Q>(self, map: F) -> Canvas<Q>
-        where F: Fn(P) -> Q, Q: AsPixel + Pod,
+    where
+        F: Fn(P) -> Q,
+        Q: AsPixel + Pod,
     {
         self.map_to(map, Q::pixel())
     }
@@ -292,21 +294,21 @@ impl<P: Pod> Canvas<P> {
     /// This function will panic if the new layout would be invalid (because the new pixel type
     /// requires a larger buffer than can be allocate) or if the reallocation fails.
     pub fn map_to<F, Q>(self, map: F, pixel: Pixel<Q>) -> Canvas<Q>
-        where F: Fn(P) -> Q, Q: Pod,
+    where
+        F: Fn(P) -> Q,
+        Q: Pod,
     {
         // First compute the new layout ..
-        let layout = self.layout.map_to(pixel)
+        let layout = self
+            .layout
+            .map_to(pixel)
             .expect("Pixel layout can not fit into memory");
         // .. then do the actual pixel mapping.
         let inner = self.inner.map_to(map, pixel);
-        Canvas {
-            layout,
-            inner,
-        }
+        Canvas { layout, inner }
     }
 
-    pub fn map_reuse<F, Q>(self, map: F)
-        -> Result<Canvas<Q>, MapReuseError<P, Q>>
+    pub fn map_reuse<F, Q>(self, map: F) -> Result<Canvas<Q>, MapReuseError<P, Q>>
     where
         F: Fn(P) -> Q,
         Q: AsPixel + Pod,
@@ -314,18 +316,23 @@ impl<P: Pod> Canvas<P> {
         self.map_reuse_to(map, Q::pixel())
     }
 
-    pub fn map_reuse_to<F, Q>(self, map: F, pixel: Pixel<Q>)
-        -> Result<Canvas<Q>, MapReuseError<P, Q>>
+    pub fn map_reuse_to<F, Q>(
+        self,
+        map: F,
+        pixel: Pixel<Q>,
+    ) -> Result<Canvas<Q>, MapReuseError<P, Q>>
     where
         F: Fn(P) -> Q,
         Q: Pod,
     {
         let layout = match self.layout.map_to(pixel) {
             Some(layout) => layout,
-            None => return Err(MapReuseError {
-                buffer: self,
-                layout: None,
-            }),
+            None => {
+                return Err(MapReuseError {
+                    buffer: self,
+                    layout: None,
+                })
+            }
         };
 
         if self.inner.byte_capacity() < layout.byte_len() {
@@ -337,10 +344,7 @@ impl<P: Pod> Canvas<P> {
 
         let inner = self.inner.map_to(map, pixel);
 
-        Ok(Canvas {
-            inner,
-            layout,
-        })
+        Ok(Canvas { inner, layout })
     }
 }
 
@@ -552,27 +556,20 @@ impl<P: Pod> fmt::Debug for CanvasReuseError<P> {
     }
 }
 
-impl<P, Q> fmt::Debug for MapReuseError<P, Q> 
+impl<P, Q> fmt::Debug for MapReuseError<P, Q>
 where
     P: Pod,
     Q: Pod,
 {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
         match self.layout {
-            Some(layout) => {
-                write!(
-                    f,
-                    "Mapping canvas requires {} bytes but current buffer has a capacity of {}",
-                    layout.byte_len(),
-                    self.buffer.inner.byte_capacity()
-                )
-            },
-            None => {
-                write!(
-                    f,
-                    "Mapped canvas can not be allocated"
-                )
-            }
+            Some(layout) => write!(
+                f,
+                "Mapping canvas requires {} bytes but current buffer has a capacity of {}",
+                layout.byte_len(),
+                self.buffer.inner.byte_capacity()
+            ),
+            None => write!(f, "Mapped canvas can not be allocated"),
         }
     }
 }

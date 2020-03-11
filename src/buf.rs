@@ -216,7 +216,7 @@ impl buf {
         //     |2 |1 |3 |
         // ```
         //
-        // If 0 < j < i then j is in I as well, as implied by |P| >= |Q|. It is simply 
+        // If 0 < j < i then j is in I as well, as implied by |P| >= |Q|. It is simply
         //  inf p_j = inf p_i - |P|(i-j) <= inf p_i - |Q|(i-j) < inf q_i - |Q|(i-j) = inf q_j
         // By definition, inf q_i > inf p_i >= sup p_j and thus the ranges of the write does not
         // overlap those later reads.
@@ -238,11 +238,8 @@ impl buf {
         //  n < (|Q|q_start - |P|p_start)/(|P| - |Q|)<=>
         //  n < ceil((|Q|q_start - |P|p_start)/(|P| - |Q|))
 
-        // Returns the 
-        fn backwards_past_the_end(
-            start_byte_diff: isize,
-            size_diff: isize,
-        ) -> Option<usize> {
+        // Returns the
+        fn backwards_past_the_end(start_byte_diff: isize, size_diff: isize) -> Option<usize> {
             assert!(size_diff >= 0);
             if size_diff == 0 {
                 if start_byte_diff > 0 {
@@ -253,9 +250,8 @@ impl buf {
             } else if start_byte_diff < 0 {
                 Some(0)
             } else {
-                let floor = start_byte_diff/size_diff;
-                let ceil = (floor as usize) 
-                    + usize::from(start_byte_diff % size_diff != 0);
+                let floor = start_byte_diff / size_diff;
+                let ceil = (floor as usize) + usize::from(start_byte_diff % size_diff != 0);
                 Some(ceil)
             }
         }
@@ -276,9 +272,7 @@ impl buf {
             ops::Bound::Unbounded => self.as_pixels(p).len(),
         };
 
-        let len = p_end
-            .checked_sub(p_start)
-            .expect("Bound violates order");
+        let len = p_end.checked_sub(p_start).expect("Bound violates order");
 
         let q_start = dest;
 
@@ -298,29 +292,24 @@ impl buf {
         assert!(q.size() as isize > 0);
 
         if p.size() >= q.size() {
-            let start_diff = (q.size()*q_start).wrapping_sub(p.size()*p_start) as isize;
+            let start_diff = (q.size() * q_start).wrapping_sub(p.size() * p_start) as isize;
             let size_diff = p.size() as isize - q.size() as isize;
 
             let backwards_end = backwards_past_the_end(start_diff, size_diff)
                 .unwrap_or(len)
                 .min(len);
 
-            self.map_backward(
-                p_start,
-                q_start,
-                backwards_end,
-                &f,
-                p,
-                q);
+            self.map_backward(p_start, q_start, backwards_end, &f, p, q);
             self.map_forward(
                 p_start + backwards_end,
                 q_start + backwards_end,
                 len - backwards_end,
                 &f,
                 p,
-                q);
+                q,
+            );
         } else {
-            let start_diff = (p.size()*p_start).wrapping_sub(q.size()*q_start) as isize;
+            let start_diff = (p.size() * p_start).wrapping_sub(q.size() * q_start) as isize;
             let size_diff = q.size() as isize - p.size() as isize;
 
             let backwards_end = backwards_past_the_end(start_diff, size_diff)
@@ -333,14 +322,9 @@ impl buf {
                 len - backwards_end,
                 &f,
                 p,
-                q);
-            self.map_forward(
-                p_start,
-                q_start,
-                backwards_end,
-                &f,
-                p,
-                q);
+                q,
+            );
+            self.map_forward(p_start, q_start, backwards_end, &f, p, q);
         }
     }
 
@@ -389,7 +373,7 @@ impl buf {
     }
 }
 
-trait ByteSlice : Sized {
+trait ByteSlice: Sized {
     fn len(&self) -> usize;
     fn split_at(self, at: usize) -> (Self, Self);
 }
@@ -520,7 +504,7 @@ mod tests {
     #[test]
     fn mapping_great_to_small() {
         const LEN: usize = 10;
-        let mut buffer = Buffer::new(LEN*mem::size_of::<u32>());
+        let mut buffer = Buffer::new(LEN * mem::size_of::<u32>());
         buffer
             .as_mut_pixels(U32)
             .iter_mut()
@@ -534,14 +518,16 @@ mod tests {
         // Back to where we started.
         assert_eq!(
             buffer.as_pixels(U32)[..LEN].to_vec(),
-            (0..LEN as u32).collect::<Vec<_>>());
+            (0..LEN as u32).collect::<Vec<_>>()
+        );
 
         // This should work even if we don't map to index 0.
-        buffer.map_within(0..LEN, 3*LEN, |n: u32| n as u8, U32, U8);
-        buffer.map_within(3*LEN..4*LEN, 0, |n: u8| n as u32, U8, U32);
+        buffer.map_within(0..LEN, 3 * LEN, |n: u32| n as u8, U32, U8);
+        buffer.map_within(3 * LEN..4 * LEN, 0, |n: u8| n as u32, U8, U32);
 
         assert_eq!(
             buffer.as_pixels(U32)[..LEN].to_vec(),
-            (0..LEN as u32).collect::<Vec<_>>());
+            (0..LEN as u32).collect::<Vec<_>>()
+        );
     }
 }
