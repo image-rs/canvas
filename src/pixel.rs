@@ -31,8 +31,8 @@ pub(crate) const MAX_ALIGN: usize = 16;
 #[repr(C)]
 pub struct MaxAligned(pub(crate) [u8; 16]);
 
-unsafe impl bytemuck::Zeroable for MaxAligned { }
-unsafe impl bytemuck::Pod for MaxAligned { }
+unsafe impl bytemuck::Zeroable for MaxAligned {}
+unsafe impl bytemuck::Pod for MaxAligned {}
 
 pub(crate) mod constants {
     use super::{AsPixel, MaxAligned, Pixel};

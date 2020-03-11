@@ -266,7 +266,9 @@ impl<P: Pod> Rec<P> {
     ///
     /// See [`map_to`] for details.
     pub fn map<Q>(self, f: impl Fn(P) -> Q) -> Rec<Q>
-        where P: Copy, Q: AsPixel + Pod,
+    where
+        P: Copy,
+        Q: AsPixel + Pod,
     {
         self.map_to(f, Q::pixel())
     }
@@ -281,7 +283,9 @@ impl<P: Pod> Rec<P> {
     /// This function will panic if the allocation fails or the necessary allocation exceeds the
     /// value range of `usize`.
     pub fn map_to<Q>(mut self, f: impl Fn(P) -> Q, pixel: Pixel<Q>) -> Rec<Q>
-        where P: Copy, Q: Pod,
+    where
+        P: Copy,
+        Q: Pod,
     {
         // Ensure we have enough memory for both representations.
         let length = self.as_slice().len();
