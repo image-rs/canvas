@@ -6,7 +6,9 @@ use core::{cmp, fmt};
 
 use bytemuck::Pod;
 
-use crate::{layout, AsPixel, Canvas, Pixel, Rec, ReuseError};
+use crate::{layout, AsPixel, Pixel, Rec, ReuseError};
+use crate::canvas::RawCanvas;
+use crate::buf::Buffer;
 
 /// A 2d, width-major matrix of pixels.
 ///
@@ -57,9 +59,9 @@ use crate::{layout, AsPixel, Canvas, Pixel, Rec, ReuseError};
 /// freedom. Other structs may, in the future, provide other pixel layouts.
 ///
 /// [`Layout`]: ./struct.Layout.html
-#[derive(Clone, Debug, PartialEq, Eq)]
+#[derive(Clone, PartialEq, Eq)]
 pub struct Matrix<P: Pod> {
-    inner: Canvas<'static, Layout<P>>,
+    inner: RawCanvas<Buffer, Layout<P>>,
 }
 
 /// Describes the memory region used for the image.
@@ -203,7 +205,7 @@ impl<P: Pod> Matrix<P> {
     fn new_raw(inner: Rec<P>, layout: Layout<P>) -> Self {
         assert_eq!(inner.len(), layout.len(), "Pixel count agrees with buffer");
         Matrix {
-            inner: Canvas::from_rec(inner, layout),
+            inner: RawCanvas::from_rec(inner, layout),
         }
     }
 
@@ -549,6 +551,15 @@ impl<P: Pod> IndexMut<(usize, usize)> for Matrix<P> {
     fn index_mut(&mut self, (x, y): (usize, usize)) -> &mut P {
         let index = self.index_of(x, y);
         &mut self.as_mut_slice()[index]
+    }
+}
+
+impl<P: Pod + fmt::Debug> fmt::Debug for Matrix<P> {
+    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+        f.debug_struct("Matrix")
+            .field("layout", self.inner.layout())
+            .field("content", &self.inner.as_slice())
+            .finish()
     }
 }
 

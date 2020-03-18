@@ -524,6 +524,18 @@ impl ops::DerefMut for Cog<'_> {
     }
 }
 
+impl borrow::Borrow<buf> for Cog<'_> {
+    fn borrow(&self) -> &buf {
+        &**self
+    }
+}
+
+impl borrow::BorrowMut<buf> for Cog<'_> {
+    fn borrow_mut(&mut self) -> &mut buf {
+        &mut **self
+    }
+}
+
 impl cmp::PartialEq<Cog<'_>> for Cog<'_> {
     fn eq(&self, other: &Cog<'_>) -> bool {
         **self == **other
@@ -539,6 +551,14 @@ impl cmp::PartialEq for buf {
 }
 
 impl cmp::Eq for buf {}
+
+impl cmp::PartialEq for Buffer {
+    fn eq(&self, other: &Buffer) -> bool {
+        self.as_bytes() == other.as_bytes()
+    }
+}
+
+impl cmp::Eq for Buffer {}
 
 impl ops::Index<ops::RangeTo<usize>> for buf {
     type Output = buf;
