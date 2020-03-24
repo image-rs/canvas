@@ -6,9 +6,9 @@ use core::{cmp, fmt};
 
 use bytemuck::Pod;
 
-use crate::{layout, AsPixel, Pixel, Rec, ReuseError};
-use crate::canvas::RawCanvas;
 use crate::buf::Buffer;
+use crate::canvas::RawCanvas;
+use crate::{layout, AsPixel, Pixel, Rec, ReuseError};
 
 /// A 2d, width-major matrix of pixels.
 ///
