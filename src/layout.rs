@@ -1,6 +1,13 @@
 //! A module for different pixel layouts.
 use crate::{AsPixel, Pixel};
 
+/// A byte layout that only describes the user bytes.
+///
+/// This is a minimal implementation of the basic `Layout` trait. It does not provide any
+/// additional semantics for the buffer bytes described by it. All other layouts may be converted
+/// into this layout.
+pub struct Bytes(pub usize);
+
 /// Describes the byte layout of an element, untyped.
 ///
 /// This is not so different from `Pixel` and `Layout` but is a combination of both. It has the
@@ -77,6 +84,13 @@ pub struct TMatrix<P> {
     pixel: Pixel<P>,
     first_dim: usize,
     second_dim: usize,
+}
+
+impl Bytes {
+    /// Forget all layout semantics except the number of bytes used.
+    pub fn from_layout(layout: impl Layout) -> Self {
+        Bytes(layout.byte_len())
+    }
 }
 
 impl Element {
@@ -217,6 +231,12 @@ impl Yuv420p {
     }
 }
 
+impl Layout for Bytes {
+    fn byte_len(&self) -> usize {
+        self.0
+    }
+}
+
 impl Layout for DynLayout {
     fn byte_len(&self) -> usize {
         DynLayout::byte_len(self)
@@ -250,6 +270,27 @@ impl<P> From<Pixel<P>> for Element {
         }
     }
 }
+
+macro_rules! bytes_from_layout {
+    ($layout:path) => {
+        impl From<$layout> for Bytes {
+            fn from(layout: $layout) -> Self {
+                Bytes::from_layout(layout)
+            }
+        }
+    };
+    (<$($bound:ident),*> $layout:ident) => {
+        impl<$($bound),*> From<$layout <$($bound),*>> for Bytes {
+            fn from(layout: $layout <$($bound),*>) -> Self {
+                Bytes::from_layout(layout)
+            }
+        }
+    };
+}
+
+bytes_from_layout!(DynLayout);
+bytes_from_layout!(Matrix);
+bytes_from_layout!(<P> TMatrix);
 
 impl From<Matrix> for DynLayout {
     fn from(matrix: Matrix) -> Self {

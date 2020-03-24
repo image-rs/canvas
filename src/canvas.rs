@@ -6,7 +6,7 @@ use core::{fmt, ops};
 use bytemuck::Pod;
 
 use crate::buf::{buf, Buffer, Cog};
-use crate::layout::{DynLayout, Layout, SampleSlice};
+use crate::layout::{Bytes, DynLayout, Layout, SampleSlice};
 use crate::{Rec, ReuseError};
 
 /// A owned canvas, parameterized over the layout.
@@ -36,7 +36,7 @@ use crate::{Rec, ReuseError};
 /// ```
 /// ```
 #[derive(Clone, PartialEq, Eq)]
-pub struct Canvas<Layout> {
+pub struct Canvas<Layout = Bytes> {
     inner: RawCanvas<Buffer, Layout>,
 }
 
@@ -47,7 +47,7 @@ pub struct Canvas<Layout> {
 /// as performing a fallible allocation. Other method calls on the previously borrowing canvas will
 /// afterwards no longer change the bytes of the canvas it was borrowed from.
 #[derive(Clone, PartialEq, Eq)]
-pub struct CopyOnGrow<'buf, Layout> {
+pub struct CopyOnGrow<'buf, Layout = Bytes> {
     inner: RawCanvas<Cog<'buf>, Layout>,
 }
 
