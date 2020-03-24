@@ -6,11 +6,13 @@ os:
 rust:
     - stable
     - nightly
-
-before_install:
-    - rustup component add rustfmt
-    - cargo fmt --version
+jobs:
+    include:
+        - name: rustfmt
+          before_install:
+              - rustup component add rustfmt
+              - cargo fmt --version
+          script: cargo fmt --all -- --check
 
 script:
-    - cargo fmt --all -- --check
     - cargo build -v && cargo test -v && cargo doc -v
