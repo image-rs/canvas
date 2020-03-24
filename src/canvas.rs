@@ -9,12 +9,7 @@ use crate::buf::{buf, Buffer, Cog};
 use crate::layout::{DynLayout, Layout, SampleSlice};
 use crate::{Rec, ReuseError};
 
-/// A canvas, parameterized over the layout.
-///
-/// The buffer is either owned or _mutably_ borrowed from another `Canvas`. Some allocating methods
-/// may lead to an implicit change from a borrowed to an owned buffer. These methods are documented
-/// as performing a fallible allocation. Other method calls on the previously borrowing canvas will
-/// afterwards no longer change the bytes of the canvas it was borrowed from.
+/// A owned canvas, parameterized over the layout.
 ///
 /// This type permits user defined layouts of any kind and does not unsafely depend on the validity
 /// of the layouts. Correctness is achieved in the common case by discouraging methods that would
@@ -25,7 +20,7 @@ use crate::{Rec, ReuseError};
 /// have suboptimal behaviour and perform a few (seemingly) redundant checks. More optimal, but
 /// much more specialized, wrappers are provided in other types such as `Matrix`.
 ///
-/// Note also that the borrowing canvas can arbitrarily change its own layout and thus overwrite
+/// Note also that any borrowing canvas can arbitrarily change its own layout and thus overwrite
 /// the content with completely different types and layouts. This is intended to maximize the
 /// flexibility for users. In complicated cases it could be hard for the type system to reflect the
 /// compatibility of a custom pixel layout and a standard one. It is solely the user's
@@ -40,8 +35,19 @@ use crate::{Rec, ReuseError};
 ///
 /// ```
 /// ```
-#[derive(PartialEq, Eq)]
-pub struct Canvas<'buf, Layout> {
+#[derive(Clone, PartialEq, Eq)]
+pub struct Canvas<Layout> {
+    inner: RawCanvas<Buffer, Layout>,
+}
+
+/// An owned or borrowed canvas, parameterized over the layout.
+///
+/// The buffer is either owned or _mutably_ borrowed from another `Canvas`. Some allocating methods
+/// may lead to an implicit change from a borrowed to an owned buffer. These methods are documented
+/// as performing a fallible allocation. Other method calls on the previously borrowing canvas will
+/// afterwards no longer change the bytes of the canvas it was borrowed from.
+#[derive(Clone, PartialEq, Eq)]
+pub struct CopyOnGrow<'buf, Layout> {
     inner: RawCanvas<Cog<'buf>, Layout>,
 }
 
@@ -55,12 +61,11 @@ pub(crate) struct RawCanvas<Buf, Layout> {
     layout: Layout,
 }
 
-pub(crate) trait BufferLike: ops::Deref<Target=buf> {
+pub(crate) trait BufferLike: ops::Deref<Target = buf> {
     fn into_owned(self) -> Buffer;
 }
 
-pub(crate) trait BufferMut: BufferLike + ops::DerefMut {
-}
+pub(crate) trait BufferMut: BufferLike + ops::DerefMut {}
 
 pub(crate) trait Growable: BufferLike {
     fn grow_to(&mut self, _: usize);
@@ -116,7 +121,10 @@ impl<B: Growable, L> RawCanvas<B, L> {
     ///
     /// # Panics
     /// This method panics if the new layout requires more bytes and allocation fails.
-    pub(crate) fn into_reinterpreted<Other: Layout>(mut self, layout: Other) -> RawCanvas<B, Other> {
+    pub(crate) fn into_reinterpreted<Other: Layout>(
+        mut self,
+        layout: Other,
+    ) -> RawCanvas<B, Other> {
         Growable::grow_to(&mut self.buffer, layout.byte_len());
         RawCanvas {
             buffer: self.buffer,
@@ -133,8 +141,7 @@ impl<B: Growable, L> RawCanvas<B, L> {
     ///
     /// # Panics
     /// This method panics if the new layout requires more bytes and allocation fails.
-    pub(crate) fn as_reinterpreted<Other>(&mut self, other: Other)
-        -> RawCanvas<&'_ mut buf, Other>
+    pub(crate) fn as_reinterpreted<Other>(&mut self, other: Other) -> RawCanvas<&'_ mut buf, Other>
     where
         B: BufferMut,
         Other: Layout,
@@ -255,7 +262,8 @@ impl<B> RawCanvas<B, DynLayout> {
 impl<B: BufferLike, L: Layout> RawCanvas<B, L> {
     /// Allocate a buffer for a particular layout.
     pub(crate) fn new(layout: L) -> Self
-        where B: From<Buffer>,
+    where
+        B: From<Buffer>,
     {
         let bytes = layout.byte_len();
         RawCanvas {
@@ -270,7 +278,7 @@ impl<B: BufferLike, L: Layout> RawCanvas<B, L> {
     }
 
     /// Get a mutable reference to those bytes used by the layout.
-    pub(crate) fn as_bytes_mut(&mut self) -> &mut [u8] 
+    pub(crate) fn as_bytes_mut(&mut self) -> &mut [u8]
     where
         B: BufferMut,
     {
@@ -282,7 +290,8 @@ impl<B: BufferLike, L: Layout> RawCanvas<B, L> {
     ///
     /// If the layout requires more bytes then the remaining bytes are zero initialized.
     pub(crate) fn with_contents(buffer: &[u8], layout: L) -> Self
-        where B: From<Buffer>
+    where
+        B: From<Buffer>,
     {
         let mut buffer = Buffer::from(buffer);
         buffer.grow_to(layout.byte_len());
@@ -322,7 +331,8 @@ where
     ///
     /// This function will panic if resizing causes a reallocation that fails.
     pub(crate) fn from_rec(buffer: Rec<L::Sample>, layout: L) -> Self
-        where B: From<Buffer>,
+    where
+        B: From<Buffer>,
     {
         let mut buffer = buffer.into_inner();
         buffer.grow_to(layout.byte_len());
@@ -337,7 +347,8 @@ where
     }
 
     pub(crate) fn as_mut_slice(&mut self) -> &mut [L::Sample]
-        where B: BufferMut,
+    where
+        B: BufferMut,
     {
         self.buffer.as_mut_pixels(self.layout.sample())
     }
@@ -392,14 +403,6 @@ impl BufferMut for Buffer {}
 
 impl BufferMut for &'_ mut buf {}
 
-impl<Layout: Clone> Clone for Canvas<'_, Layout> {
-    fn clone(&self) -> Self {
-        Canvas {
-            inner: self.inner.clone(),
-        }
-    }
-}
-
 impl<Layout: Clone> Clone for RawCanvas<Cog<'_>, Layout> {
     fn clone(&self) -> Self {
         use alloc::borrow::ToOwned;
@@ -410,9 +413,20 @@ impl<Layout: Clone> Clone for RawCanvas<Cog<'_>, Layout> {
     }
 }
 
-impl<Layout: Default> Default for Canvas<'_, Layout> {
+impl<Layout: Default> Default for Canvas<Layout> {
     fn default() -> Self {
         Canvas {
+            inner: RawCanvas {
+                buffer: Buffer::default(),
+                layout: Layout::default(),
+            },
+        }
+    }
+}
+
+impl<Layout: Default> Default for CopyOnGrow<'_, Layout> {
+    fn default() -> Self {
+        CopyOnGrow {
             inner: RawCanvas {
                 buffer: Cog::Owned(Buffer::default()),
                 layout: Layout::default(),
@@ -421,7 +435,7 @@ impl<Layout: Default> Default for Canvas<'_, Layout> {
     }
 }
 
-impl<L> fmt::Debug for Canvas<'_, L>
+impl<L> fmt::Debug for Canvas<L>
 where
     L: SampleSlice + fmt::Debug,
     L::Sample: Pod + fmt::Debug,
