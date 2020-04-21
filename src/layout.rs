@@ -37,9 +37,15 @@ pub trait Layout {
     fn byte_len(&self) -> usize;
 }
 
-/// A layout that uses a slice of samples.
+/// A layout that is a slice of samples.
+///
+/// These layouts are represented with a slice of a _single_ type of samples. In particular these
+/// can be addressed and mutated independently.
 pub trait SampleSlice: Layout {
+    /// The sample type itself.
     type Sample;
+
+    /// Get the sample description.
     fn sample(&self) -> Pixel<Self::Sample>;
 
     /// The number of samples.

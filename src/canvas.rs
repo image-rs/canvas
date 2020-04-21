@@ -71,6 +71,100 @@ pub(crate) trait Growable: BufferLike {
     fn grow_to(&mut self, _: usize);
 }
 
+/// Canvas methods for all layouts.
+impl<L: Layout> Canvas<L> {
+    /// Create a new canvas for a specific layout.
+    pub fn new(layout: L) -> Self {
+        RawCanvas::<Buffer, L>::new(layout).into()
+    }
+
+    /// Get a reference to those bytes used by the layout.
+    pub fn as_bytes(&self) -> &[u8] {
+        self.inner.as_bytes()
+    }
+
+    /// Get a mutable reference to those bytes used by the layout.
+    pub fn as_bytes_mut(&mut self) -> &mut [u8] {
+        self.inner.as_bytes_mut()
+    }
+}
+
+/// Canvas methods that do not require a layout.
+impl<L> Canvas<L> {
+    /// Check if the buffer could accommodate another layout without reallocating.
+    pub fn fits(&self, other: &impl Layout) -> bool {
+        other.byte_len() <= self.as_capacity_bytes().len()
+    }
+
+    /// Get a reference to the unstructured bytes of the canvas.
+    ///
+    /// Note that this may return more bytes than required for the specific layout for various
+    /// reasons. See also [`as_bytes`].
+    ///
+    /// [`as_bytes`]: #method.as_bytes
+    pub fn as_capacity_bytes(&self) -> &[u8] {
+        self.inner.as_capacity_bytes()
+    }
+
+    /// Get a mutable reference to the unstructured bytes of the canvas.
+    ///
+    /// Note that this may return more bytes than required for the specific layout for various
+    /// reasons. See also [`as_bytes_mut`].
+    ///
+    /// [`as_bytes_mut`]: #method.as_bytes_mut
+    pub fn as_capacity_bytes_mut(&mut self) -> &mut [u8] {
+        self.inner.as_capacity_bytes_mut()
+    }
+
+    /// Get a reference to the layout.
+    pub fn layout(&self) -> &L {
+        self.inner.layout()
+    }
+
+    /// Get a mutable reference to the layout.
+    ///
+    /// Be mindful not to modify the layout to exceed the allocated size. This does not cause any
+    /// unsoundness but might lead to panics when calling other methods.
+    pub fn layout_mut_unguarded(&mut self) -> &mut L {
+        self.inner.layout_mut_unguarded()
+    }
+}
+
+/// Canvas methods for layouts based on pod samples.
+impl<L: SampleSlice> Canvas<L>
+where
+    L::Sample: Pod,
+{
+    /// Interpret an existing buffer as a pixel canvas.
+    ///
+    /// The data already contained within the buffer is not modified so that prior initialization
+    /// can be performed or one array of samples reinterpreted for an image of other sample type.
+    /// This method will never reallocate data.
+    ///
+    /// # Panics
+    ///
+    /// This function will panic if the buffer is shorter than the layout.
+    pub fn from_rec(buffer: Rec<L::Sample>, layout: L) -> Self {
+        assert!(buffer.byte_len() >= layout.byte_len());
+        RawCanvas::from_rec(buffer, layout).into()
+    }
+
+    /// Get a slice of the individual samples in the layout.
+    pub fn as_slice(&self) -> &[L::Sample] {
+        self.inner.as_slice()
+    }
+
+    /// Get a mutable slice of the individual samples in the layout.
+    pub fn as_mut_slice(&mut self) -> &mut [L::Sample] {
+        self.inner.as_mut_slice()
+    }
+
+    /// Convert into an vector-like of sample types.
+    pub fn into_rec(self) -> Rec<L::Sample> {
+        self.inner.into_rec()
+    }
+}
+
 /// Layout oblivious methods that can allocate and change to another buffer.
 impl<B: Growable, L> RawCanvas<B, L> {
     /// Grow the buffer, preparing for another layout.
@@ -152,17 +246,6 @@ impl<B: Growable, L> RawCanvas<B, L> {
             layout: other,
         }
     }
-
-    /// Take ownership of the image's bytes.
-    ///
-    /// # Panics
-    /// This method panics if allocation fails.
-    pub(crate) fn into_owned(self) -> RawCanvas<Buffer, L> {
-        RawCanvas {
-            buffer: BufferLike::into_owned(self.buffer),
-            layout: self.layout,
-        }
-    }
 }
 
 /// Layout oblivious methods, these also never allocate or panic.
@@ -236,6 +319,17 @@ impl<B: BufferLike, L> RawCanvas<B, L> {
         RawCanvas {
             buffer: &mut self.buffer,
             layout: self.layout.clone(),
+        }
+    }
+
+    /// Take ownership of the image's bytes.
+    ///
+    /// # Panics
+    /// This method panics if allocation fails.
+    pub(crate) fn into_owned(self) -> RawCanvas<Buffer, L> {
+        RawCanvas {
+            buffer: BufferLike::into_owned(self.buffer),
+            layout: self.layout,
         }
     }
 }
@@ -334,8 +428,8 @@ where
     where
         B: From<Buffer>,
     {
-        let mut buffer = buffer.into_inner();
-        buffer.grow_to(layout.byte_len());
+        let buffer = buffer.into_inner();
+        assert!(buffer.len() >= layout.byte_len());
         Self {
             buffer: buffer.into(),
             layout,
@@ -364,6 +458,12 @@ where
         // This should never reallocate at this point but we don't really know or care.
         rec.resize(count);
         rec
+    }
+}
+
+impl<L> From<RawCanvas<Buffer, L>> for Canvas<L> {
+    fn from(canvas: RawCanvas<Buffer, L>) -> Self {
+        Canvas { inner: canvas }
     }
 }
 
