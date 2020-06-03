@@ -6,7 +6,7 @@ use core::{fmt, ops};
 use bytemuck::Pod;
 
 use crate::buf::{buf, Buffer, Cog};
-use crate::layout::{Bytes, DynLayout, Layout, SampleSlice};
+use crate::layout::{Bytes, Decay, DynLayout, Layout, SampleSlice};
 use crate::{Rec, ReuseError};
 
 /// A owned canvas, parameterized over the layout.
@@ -86,6 +86,17 @@ impl<L: Layout> Canvas<L> {
     /// Get a mutable reference to those bytes used by the layout.
     pub fn as_bytes_mut(&mut self) -> &mut [u8] {
         self.inner.as_bytes_mut()
+    }
+
+    /// Decay into a canvas with less specific layout.
+    ///
+    /// See the [`Decay`] trait for an explanation of this operation.
+    pub fn decay<M>(self) -> Canvas<M>
+    where
+        L: Decay<M>,
+        M: Layout,
+    {
+        self.inner.decay().into()
     }
 }
 
@@ -184,12 +195,12 @@ impl<B: Growable, L> RawCanvas<B, L> {
     ///
     /// # Panics
     /// This method panics if the new layout requires more bytes and allocation fails.
-    pub(crate) fn into_layout<Other>(mut self) -> RawCanvas<B, Other>
+    pub(crate) fn decay<Other>(mut self) -> RawCanvas<B, Other>
     where
-        L: Into<Other>,
+        L: Decay<Other>,
         Other: Layout,
     {
-        let layout = self.layout.into();
+        let layout = self.layout.decay();
         Growable::grow_to(&mut self.buffer, layout.byte_len());
         RawCanvas {
             buffer: self.buffer,
@@ -206,9 +217,9 @@ impl<B: Growable, L> RawCanvas<B, L> {
     /// This method panics if the new layout requires more bytes and allocation fails.
     pub(crate) fn into_dynamic(self) -> RawCanvas<B, DynLayout>
     where
-        L: Into<DynLayout>,
+        L: Decay<DynLayout>,
     {
-        self.into_layout()
+        self.decay()
     }
 
     /// Change the layout, reusing and growing the buffer.

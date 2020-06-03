@@ -74,6 +74,26 @@ pub trait Layout {
     fn byte_len(&self) -> usize;
 }
 
+/// Convert one layout to a less strict one.
+///
+/// In contrast to `From`/`Into` which is mostly assumed to model a lossless conversion the
+/// conversion here may generalize but need not be lossless. For example, the `Bytes` layout is the
+/// least descriptive layout that exists and any layout can decay into it. However, it should be
+/// clear that this conversion is never lossless.
+///
+/// In general, a layout `L` should implement `Decay<T>` if any image with layouts of type `L` is
+/// also valid for some layout of type `T`. A common example would be if a crate strictly adds more
+/// information to a predefined layout, then it should also decay to that layout.
+pub trait Decay<T: Layout> {
+    fn decay(self) -> T;
+}
+
+impl<T: Layout> Decay<Bytes> for T {
+    fn decay(self) -> Bytes {
+        Bytes(self.byte_len())
+    }
+}
+
 /// A layout that is a slice of samples.
 ///
 /// These layouts are represented with a slice of a _single_ type of samples. In particular these
@@ -282,6 +302,13 @@ impl<P> TMatrix<P> {
             first_dim: self.first_dim,
             second_dim: self.second_dim,
         }
+    }
+}
+
+/// Remove the strong typing for dynamic channel type information.
+impl<P> Decay<Matrix> for TMatrix<P> {
+    fn decay(self) -> Matrix {
+        self.into_matrix()
     }
 }
 
