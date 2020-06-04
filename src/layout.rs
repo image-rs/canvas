@@ -166,6 +166,7 @@ impl<T: Layout> Decay<T> for Bytes {
 ///
 pub trait Mend<T: Layout> {
     type Item;
+    // TODO: evaluate argument, maybe we can/should do `self`.
     fn mend(&self, with: Self::Item) -> Option<T>;
 }
 
@@ -376,6 +377,14 @@ impl Matrix {
 }
 
 impl<P> TMatrix<P> {
+    pub fn empty(pixel: Pixel<P>) -> Self {
+        TMatrix {
+            pixel,
+            first_dim: 0,
+            second_dim: 0,
+        }
+    }
+
     pub fn with_matrix(pixel: Pixel<P>, matrix: Matrix) -> Option<Self> {
         if pixel.size() == matrix.element.size {
             Some(TMatrix {
@@ -394,13 +403,6 @@ impl<P> TMatrix<P> {
             first_dim: self.first_dim,
             second_dim: self.second_dim,
         }
-    }
-}
-
-/// Remove the strong typing for dynamic channel type information.
-impl<P> Decay<TMatrix<P>> for Matrix {
-    fn decay(from: TMatrix<P>) -> Matrix {
-        from.into_matrix()
     }
 }
 
@@ -439,6 +441,12 @@ impl Layout for Bytes {
     }
 }
 
+impl Take for Bytes {
+    fn take(&mut self) -> Self {
+        Bytes(core::mem::take(&mut self.0))
+    }
+}
+
 impl Layout for DynLayout {
     fn byte_len(&self) -> usize {
         DynLayout::byte_len(self)
@@ -448,6 +456,12 @@ impl Layout for DynLayout {
 impl Layout for Matrix {
     fn byte_len(&self) -> usize {
         Matrix::byte_len(*self)
+    }
+}
+
+impl Take for Matrix {
+    fn take(&mut self) -> Self {
+        core::mem::replace(self, Matrix::empty(self.element))
     }
 }
 
@@ -461,6 +475,27 @@ impl<P> SampleSlice for TMatrix<P> {
     type Sample = P;
     fn sample(&self) -> Pixel<P> {
         self.pixel
+    }
+}
+
+impl<P> Take for TMatrix<P> {
+    fn take(&mut self) -> Self {
+        core::mem::replace(self, TMatrix::empty(self.pixel))
+    }
+}
+
+/// Remove the strong typing for dynamic channel type information.
+impl<P> Decay<TMatrix<P>> for Matrix {
+    fn decay(from: TMatrix<P>) -> Matrix {
+        from.into_matrix()
+    }
+}
+
+/// Try to use the matrix with a specific pixel type.
+impl<P> Mend<TMatrix<P>> for Matrix {
+    type Item = Pixel<P>;
+    fn mend(&self, pixel: Pixel<P>) -> Option<TMatrix<P>> {
+        TMatrix::with_matrix(pixel, *self)
     }
 }
 
