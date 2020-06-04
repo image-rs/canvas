@@ -32,16 +32,15 @@ use crate::{Rec, ReuseError};
 /// reverse can not be done unchecked but is possible with fallible conversions.
 ///
 /// Note also that `Canvas` provides fallible operations, some of them are meant to modify the
-/// type. This can obviously not be performed in-place as it would be common if the type did not
-/// change. Instead we approximate at least the result type by taking the buffer on success and
-/// leaving it unchanged in case of failure. A example signature for this is:
+/// type. This can obviously not be performed in-place, in the manner with which it would be common
+/// if the type did not change. Instead we approximate at least the result type by transferring the
+/// buffer on success while leaving it unchanged in case of failure. An example signature for this is:
 ///
 /// > [`fn mend<M>(&mut self, with: L::Item) -> Option<Canvas<M>>`][`mend`]
 ///
 /// [`mend`]: #method.mend
 ///
 /// ## Examples
-/// TODO
 ///
 /// ```
 /// ```

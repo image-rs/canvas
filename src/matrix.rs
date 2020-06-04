@@ -7,7 +7,7 @@ use core::{cmp, fmt};
 use bytemuck::Pod;
 
 use crate::buf::Buffer;
-use crate::canvas::RawCanvas;
+use crate::canvas::{Canvas, RawCanvas};
 use crate::{layout, AsPixel, Pixel, Rec, ReuseError};
 
 /// A 2d, width-major matrix of pixels.
@@ -464,6 +464,22 @@ where
     /// would exceed the platform address space.
     pub fn layout(&self) -> Option<Layout<Q>> {
         self.layout
+    }
+}
+
+impl<P: Pod> From<Canvas<Layout<P>>> for Matrix<P> {
+    fn from(canvas: Canvas<Layout<P>>) -> Self {
+        let layout = *canvas.layout();
+        let rec = canvas.into_rec();
+        Self::new_raw(rec, layout)
+    }
+}
+
+impl<P: Pod> From<Matrix<P>> for Canvas<Layout<P>> {
+    fn from(matrix: Matrix<P>) -> Self {
+        let layout = matrix.layout();
+        let rec = matrix.into_rec();
+        Canvas::from_rec(rec, layout)
     }
 }
 
