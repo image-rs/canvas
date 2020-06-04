@@ -183,6 +183,10 @@ pub trait Mend<T: Layout> {
 /// type `Converted` in case of success. This is very similar to the method `Vec::take` and others.
 ///
 /// It is expected that the `byte_len` is `0` after the operation.
+///
+/// This trait is _not_ simply a clone of `Default`. While we expect that the described image
+/// contains no bytes after the operation other data such as channel count, color space
+/// information, image plane order, alpha interpretation should be retained.
 pub trait Take: Layout {
     fn take(&mut self) -> Self;
 }
