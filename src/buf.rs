@@ -455,6 +455,18 @@ impl From<&'_ buf> for Buffer {
     }
 }
 
+impl Default for &'_ buf {
+    fn default() -> Self {
+        buf::new(&mut [])
+    }
+}
+
+impl Default for &'_ mut buf {
+    fn default() -> Self {
+        buf::new_mut(&mut [])
+    }
+}
+
 impl borrow::Borrow<buf> for Buffer {
     fn borrow(&self) -> &buf {
         &**self

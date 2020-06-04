@@ -6,7 +6,7 @@ use core::{fmt, ops};
 use bytemuck::Pod;
 
 use crate::buf::{buf, Buffer, Cog};
-use crate::layout::{Bytes, Decay, DynLayout, Layout, SampleSlice};
+use crate::layout::{Bytes, Decay, DynLayout, Layout, Mend, SampleSlice, Take};
 use crate::{Rec, ReuseError};
 
 /// A owned canvas, parameterized over the layout.
@@ -30,6 +30,15 @@ use crate::{Rec, ReuseError};
 /// It is possible to convert the layout to a less strictly typed one without reallocating the
 /// buffer. For example, all standard layouts such as `Matrix` can be weakened to `DynLayout`. The
 /// reverse can not be done unchecked but is possible with fallible conversions.
+///
+/// Note also that `Canvas` provides fallible operations, some of them are meant to modify the
+/// type. This can obviously not be performed in-place as it would be common if the type did not
+/// change. Instead we approximate at least the result type by taking the buffer on success and
+/// leaving it unchanged in case of failure. A example signature for this is:
+///
+/// > [`fn mend<M>(&mut self, with: L::Item) -> Option<Canvas<M>>`][`mend`]
+///
+/// [`mend`]: #method.mend
 ///
 /// ## Examples
 /// TODO
@@ -64,6 +73,7 @@ pub(crate) struct RawCanvas<Buf, Layout> {
 
 pub(crate) trait BufferLike: ops::Deref<Target = buf> {
     fn into_owned(self) -> Buffer;
+    fn take(&mut self) -> Self;
 }
 
 pub(crate) trait BufferMut: BufferLike + ops::DerefMut {}
@@ -92,12 +102,32 @@ impl<L: Layout> Canvas<L> {
     /// Decay into a canvas with less specific layout.
     ///
     /// See the [`Decay`] trait for an explanation of this operation.
+    ///
+    /// [`Decay`]: ../layout/trait.Decay.html
     pub fn decay<M>(self) -> Canvas<M>
     where
         M: Decay<L>,
         M: Layout,
     {
         self.inner.decay().into()
+    }
+
+    /// Strengthen the layout of the canvas.
+    ///
+    /// See the [`Mend`] trait for an explanation of this operation.
+    ///
+    /// This is a fallible operation. In case of success returns `Some` and the byte buffer of the
+    /// image is moved into the result. When mending fails this method returns `None` and the
+    /// buffer is kept by this canvas.
+    ///
+    /// [`Mend`]: ../layout/trait.Mend.html
+    pub fn mend<M>(&mut self, with: L::Item) -> Option<Canvas<M>>
+    where
+        L: Mend<M> + Take,
+        M: Layout,
+    {
+        let new_layout = self.inner.layout().mend(with)?;
+        Some(self.inner.take().reinterpret_unguarded(new_layout).into())
     }
 }
 
@@ -257,6 +287,16 @@ impl<B: Growable, L> RawCanvas<B, L> {
             layout: other,
         }
     }
+
+    /// Change the layout and then resize the buffer so that it still fits.
+    pub(crate) fn mutate_layout<T>(&mut self, f: impl FnOnce(&mut L) -> T) -> T
+    where
+        L: Layout,
+    {
+        let t = f(&mut self.layout);
+        self.buffer.grow_to(self.layout.byte_len());
+        t
+    }
 }
 
 /// Layout oblivious methods, these also never allocate or panic.
@@ -377,6 +417,11 @@ impl<B: BufferLike, L: Layout> RawCanvas<B, L> {
         }
     }
 
+    pub(crate) fn with_buffer(layout: L, buffer: B) -> Self {
+        assert!(buffer.as_ref().len() <= layout.byte_len());
+        RawCanvas { buffer, layout }
+    }
+
     /// Get a reference to those bytes used by the layout.
     pub(crate) fn as_bytes(&self) -> &[u8] {
         &self.as_capacity_bytes()[..self.layout.byte_len()]
@@ -417,6 +462,31 @@ impl<B: BufferLike, L: Layout> RawCanvas<B, L> {
                 requested: Some(layout.byte_len()),
             })
         }
+    }
+
+    /// Change the layout but require that the new layout fits the buffer, never reallocate.
+    pub(crate) fn mutate_inplace<T>(&mut self, f: impl FnOnce(&mut L) -> T) -> T
+    where
+        L: Layout,
+    {
+        let t = f(&mut self.layout);
+        assert!(
+            self.layout.byte_len() <= self.buffer.len(),
+            "Modification required buffer allocation, was not in-place"
+        );
+        t
+    }
+
+    /// Take the buffer and layout from this canvas, moving content into a new instance.
+    ///
+    /// Asserts that the moved-from container can hold the emptied layout.
+    pub(crate) fn take(&mut self) -> Self
+    where
+        L: Take,
+    {
+        let buffer = self.buffer.take();
+        let layout = self.mutate_inplace(Take::take);
+        RawCanvas::with_buffer(layout, buffer)
     }
 }
 
@@ -482,17 +552,29 @@ impl BufferLike for Cog<'_> {
     fn into_owned(self) -> Buffer {
         Cog::into_owned(self)
     }
+
+    fn take(&mut self) -> Self {
+        core::mem::replace(self, Cog::Owned(Default::default()))
+    }
 }
 
 impl BufferLike for Buffer {
     fn into_owned(self) -> Self {
         self
     }
+
+    fn take(&mut self) -> Self {
+        core::mem::take(self)
+    }
 }
 
 impl BufferLike for &'_ mut buf {
     fn into_owned(self) -> Buffer {
         Buffer::from(self.as_bytes())
+    }
+
+    fn take(&mut self) -> Self {
+        core::mem::take(self)
     }
 }
 
