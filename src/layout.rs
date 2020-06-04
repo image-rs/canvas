@@ -81,17 +81,109 @@ pub trait Layout {
 /// least descriptive layout that exists and any layout can decay into it. However, it should be
 /// clear that this conversion is never lossless.
 ///
-/// In general, a layout `L` should implement `Decay<T>` if any image with layouts of type `L` is
-/// also valid for some layout of type `T`. A common example would be if a crate strictly adds more
+/// In general, a layout `L` should implement `Decay<T>` if any image with layouts of type `T` is
+/// also valid for some layout of type `L`. A common example would be if a crate strictly adds more
 /// information to a predefined layout, then it should also decay to that layout.
-pub trait Decay<T: Layout> {
-    fn decay(self) -> T;
+///
+/// Also note that this trait is not reflexive, in contrast to `From` and `Into` which are. This
+/// avoids collisions in impls. In particular, it allows adding blanket impls of the form
+///
+/// ```ignore
+/// struct Local;
+///
+/// impl Trait for Local { … }
+///
+/// impl<T: Trait> Decay<T> for Local { … }
+/// ```
+///
+/// Otherwise, the instantiation `T = U` would collide with the reflexive impl.
+///
+/// ## Design
+///
+/// We consider re-rebalanced coherence rules ([RFC2451]) in this design especially to define the
+/// receiver type and the type parameter. Note that adding a blanket impl is a breaking change
+/// except under a special rule allowed in that RFC. To quote it here:
+///
+/// > RFC #1023 is amended to state that adding a new impl to an existing trait is considered a
+/// > breaking change unless, given impl<P1..=Pn> Trait<T1..=Tn> for T0:
+/// > * At least one of the types T0..=Tn must be a local type, added in this revision. Let Ti be
+/// >   the first such type.
+/// > * No uncovered type parameters P1..=Pn appear in T0..Ti (excluding Ti)
+/// >
+/// > [...]
+/// >
+/// > However, the following impls would not be considered a breaking change: [...]
+/// > * `impl<T> OldTrait<T> for NewType`
+///
+/// Let's say we want to introduce a new desciptor trait for matrix-like layouts. Then we can ship
+/// a new type representing the canonical form of this matrix trait and in the same revision define
+/// a blanket impl that allows other layouts to decay to it. This wouldn't be possible if the
+/// parameters were swapped. We can then let this specific type (it may contain covered type
+/// parameters) decay to any other previously defined layout to provide interoperability with older
+/// code.
+///
+/// [RFC2451]: https://rust-lang.github.io/rfcs/2451-re-rebalancing-coherence.html
+///
+pub trait Decay<T>: Layout {
+    fn decay(from: T) -> Self;
 }
 
-impl<T: Layout> Decay<Bytes> for T {
-    fn decay(self) -> Bytes {
-        Bytes(self.byte_len())
+impl<T: Layout> Decay<T> for Bytes {
+    fn decay(from: T) -> Bytes {
+        Bytes(from.byte_len())
     }
+}
+
+/// Try to convert a layout to a stricter one.
+///
+/// ## Design
+///
+/// A comment on the design space available for this trait. (TODO: wrong) We require that the trait is
+/// implemented for the type that is _returned_. If we required that the trait be implemented for
+/// the receiver then this would restrict third-parties from using it to its full potential. In
+/// particular, since `Mend` is a foreign trait the coherence rules make it impossible to specify:
+///
+/// TODO Terminology: https://rust-lang.github.io/rfcs/2451-re-rebalancing-coherence.html
+///
+/// ```ignore
+/// impl<T> Mend<LocalType> for T {}
+/// ```
+///
+/// TODO: rewrite this...
+///
+/// ```ignore
+/// impl<T> Mend<T> for LocalType {}
+/// ```
+///
+/// The exact form thus simply depends on expected use and the allow evolution for this crate.
+/// Consider in particular this coherence/SemVer rule:
+///
+/// > Adding any impl with an uncovered type parameter is considered a major breaking change.
+///
+/// TODO
+///
+/// TODO: comment and consider `&self`.
+///
+pub trait Mend<T: Layout> {
+    type Item;
+    fn mend(&self, with: Self::Item) -> Option<T>;
+}
+
+/// A layout that can be emptied.
+///
+/// This trait contains all layout types from which we can steal their memory buffer. This is
+/// incredibly useful for fallible operations that change the _type_ of a buffers layout. Instead
+/// of being required to take the buffer by value and return the original in case of an error they
+/// can use the much natural signature:
+///
+/// * `fn mutate(&mut self) -> Result<Converted, Err>`
+///
+/// where semantics are that the buffer is unchanged in case of error but has been moved to the
+/// type `Converted` in case of success. This is very similar to the method `Vec::take` and others.
+///
+/// It is expected that the `byte_len` is `0` after the operation.
+pub trait Take: Layout {
+    fn take(&mut self) -> Self;
 }
 
 /// A layout that is a slice of samples.
@@ -306,9 +398,9 @@ impl<P> TMatrix<P> {
 }
 
 /// Remove the strong typing for dynamic channel type information.
-impl<P> Decay<Matrix> for TMatrix<P> {
-    fn decay(self) -> Matrix {
-        self.into_matrix()
+impl<P> Decay<TMatrix<P>> for Matrix {
+    fn decay(from: TMatrix<P>) -> Matrix {
+        from.into_matrix()
     }
 }
 

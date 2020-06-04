@@ -32,6 +32,7 @@ use crate::{Rec, ReuseError};
 /// reverse can not be done unchecked but is possible with fallible conversions.
 ///
 /// ## Examples
+/// TODO
 ///
 /// ```
 /// ```
@@ -93,7 +94,7 @@ impl<L: Layout> Canvas<L> {
     /// See the [`Decay`] trait for an explanation of this operation.
     pub fn decay<M>(self) -> Canvas<M>
     where
-        L: Decay<M>,
+        M: Decay<L>,
         M: Layout,
     {
         self.inner.decay().into()
@@ -197,10 +198,9 @@ impl<B: Growable, L> RawCanvas<B, L> {
     /// This method panics if the new layout requires more bytes and allocation fails.
     pub(crate) fn decay<Other>(mut self) -> RawCanvas<B, Other>
     where
-        L: Decay<Other>,
-        Other: Layout,
+        Other: Decay<L>,
     {
-        let layout = self.layout.decay();
+        let layout = Other::decay(self.layout);
         Growable::grow_to(&mut self.buffer, layout.byte_len());
         RawCanvas {
             buffer: self.buffer,
@@ -217,7 +217,7 @@ impl<B: Growable, L> RawCanvas<B, L> {
     /// This method panics if the new layout requires more bytes and allocation fails.
     pub(crate) fn into_dynamic(self) -> RawCanvas<B, DynLayout>
     where
-        L: Decay<DynLayout>,
+        DynLayout: Decay<L>,
     {
         self.decay()
     }
