@@ -91,9 +91,9 @@ pub trait Layout {
 /// ```ignore
 /// struct Local;
 ///
-/// impl Trait for Local { … }
+/// impl Trait for Local { /* … */ }
 ///
-/// impl<T: Trait> Decay<T> for Local { … }
+/// impl<T: Trait> Decay<T> for Local { /* … */ }
 /// ```
 ///
 /// Otherwise, the instantiation `T = U` would collide with the reflexive impl.
