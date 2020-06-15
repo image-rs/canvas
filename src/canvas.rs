@@ -6,7 +6,7 @@ use core::{fmt, ops};
 use bytemuck::Pod;
 
 use crate::buf::{buf, Buffer, Cog};
-use crate::layout::{Bytes, Decay, DynLayout, Layout, Mend, SampleSlice, Take};
+use crate::layout::{Bytes, Coord, Decay, DynLayout, Layout, Mend, SampleSlice, Take};
 use crate::{Rec, ReuseError};
 
 /// A owned canvas, parameterized over the layout.
@@ -58,6 +58,29 @@ pub struct Canvas<Layout = Bytes> {
 #[derive(Clone, PartialEq, Eq)]
 pub struct CopyOnGrow<'buf, Layout = Bytes> {
     inner: RawCanvas<Cog<'buf>, Layout>,
+}
+
+/// A read-only view of a canvas.
+#[derive(Clone, PartialEq, Eq)]
+pub struct View<'buf, Layout = Bytes> {
+    inner: RawCanvas<&'buf buf, Layout>,
+}
+
+/// A writeable reference to a canvas.
+#[derive(PartialEq, Eq)]
+pub struct ViewMut<'buf, Layout = Bytes> {
+    inner: RawCanvas<&'buf mut buf, Layout>,
+}
+
+/// A raster layout.
+pub trait Raster<Pixel>: Sized {
+    fn dimensions(&self) -> Coord;
+    fn get(from: View<Self>, at: Coord) -> Pixel;
+}
+
+/// A raster layout where one can change pixel values independently.
+pub trait RasterMut<Pixel>: Raster<Pixel> {
+    fn put(into: ViewMut<Self>, at: Coord, val: Pixel);
 }
 
 /// Inner buffer implementation.

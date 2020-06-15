@@ -191,6 +191,28 @@ pub trait Take: Layout {
     fn take(&mut self) -> Self;
 }
 
+/// Describes an image coordinate.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct Coord(pub u32, pub u32);
+
+impl Coord {
+    pub fn x(self) -> u32 {
+        self.0
+    }
+
+    pub fn y(self) -> u32 {
+        self.1
+    }
+
+    pub fn yx(self) -> (u32, u32) {
+        (self.1, self.0)
+    }
+
+    pub fn xy(self) -> (u32, u32) {
+        (self.0, self.1)
+    }
+}
+
 /// A layout that is a slice of samples.
 ///
 /// These layouts are represented with a slice of a _single_ type of samples. In particular these
