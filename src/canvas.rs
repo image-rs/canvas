@@ -143,12 +143,12 @@ impl<L: Layout> Canvas<L> {
     /// buffer is kept by this canvas.
     ///
     /// [`Mend`]: ../layout/trait.Mend.html
-    pub fn mend<M>(&mut self, with: L::Item) -> Option<Canvas<M>>
+    pub fn mend<Item>(&mut self, mend: Item) -> Option<Canvas<Item::Into>>
     where
-        L: Mend<M> + Take,
-        M: Layout,
+        Item: Mend<L>,
+        L: Take,
     {
-        let new_layout = self.inner.layout().mend(with)?;
+        let new_layout = mend.mend(self.inner.layout())?;
         Some(self.inner.take().reinterpret_unguarded(new_layout).into())
     }
 }

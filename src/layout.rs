@@ -138,7 +138,9 @@ impl<T: Layout> Decay<T> for Bytes {
 ///
 /// ## Design
 ///
-/// A comment on the design space available for this trait. (TODO: wrong) We require that the trait is
+/// A comment on the design space available for this trait.
+///
+/// (TODO: wrong) We require that the trait is
 /// implemented for the type that is _returned_. If we required that the trait be implemented for
 /// the receiver then this would restrict third-parties from using it to its full potential. In
 /// particular, since `Mend` is a foreign trait the coherence rules make it impossible to specify:
@@ -155,6 +157,14 @@ impl<T: Layout> Decay<T> for Bytes {
 /// impl<T> Mend<T> for LocalType {}
 /// ```
 ///
+/// The forms of evolution that we want to keep open:
+/// * Introduce a new form of mending between existing layouts. For example, a new color space
+///   transformation should be able to translate between existing types. Note that we will assume
+///   that in such a case the type parameters do not appear uncovered in the target or the source
+///   so that having either as the trait receiver (T0) allows this.
+/// * An *upgrader* type should be able to mend a <T: LocalOrForeignTrait> into a chosen layout.
+/// * TODO: When add a new layout type which mender types and targets do we want?
+///
 /// The exact form thus simply depends on expected use and the allow evolution for this crate.
 /// Consider in particular this coherence/SemVer rule:
 ///
@@ -164,10 +174,9 @@ impl<T: Layout> Decay<T> for Bytes {
 ///
 /// TODO: comment and consider `&self`.
 ///
-pub trait Mend<T: Layout> {
-    type Item;
-    // TODO: evaluate argument, maybe we can/should do `self`.
-    fn mend(&self, with: Self::Item) -> Option<T>;
+pub trait Mend<From> {
+    type Into: Layout;
+    fn mend(self, from: &From) -> Option<Self::Into>;
 }
 
 /// A layout that can be emptied.
@@ -518,10 +527,10 @@ impl<P> Decay<TMatrix<P>> for Matrix {
 }
 
 /// Try to use the matrix with a specific pixel type.
-impl<P> Mend<TMatrix<P>> for Matrix {
-    type Item = Pixel<P>;
-    fn mend(&self, pixel: Pixel<P>) -> Option<TMatrix<P>> {
-        TMatrix::with_matrix(pixel, *self)
+impl<P> Mend<Matrix> for Pixel<P> {
+    type Into = TMatrix<P>;
+    fn mend(self, matrix: &Matrix) -> Option<TMatrix<P>> {
+        TMatrix::with_matrix(self, *matrix)
     }
 }
 
