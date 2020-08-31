@@ -99,7 +99,7 @@ impl<T: Layout> Decay<T> for Bytes {
     }
 }
 
-/// Try to convert a layout to a stricter one.
+/// Convert a layout to a stricter one.
 ///
 /// ## Design
 ///
@@ -141,7 +141,14 @@ impl<T: Layout> Decay<T> for Bytes {
 ///
 pub trait Mend<From> {
     type Into: Layout;
-    fn mend(self, from: &From) -> Option<Self::Into>;
+    fn mend(self, from: &From) -> Self::Into;
+}
+
+/// Try to convert a layout to a stricter one.
+pub trait TryMend<From> {
+    type Into: Layout;
+    type Err;
+    fn try_mend(self, from: &From) -> Result<Self::Into, Self::Err>;
 }
 
 /// A layout that can be emptied.
@@ -240,6 +247,16 @@ pub struct TMatrix<P> {
     pixel: Pixel<P>,
     first_dim: usize,
     second_dim: usize,
+}
+
+/// An error indicating that mending failed due to mismatching pixel attributes.
+///
+/// This struct is used when a layout with dynamic pixel information should be mended into another
+/// layout with static information or a more restrictive combination of layouts. One example is the
+/// conversion of a dynamic matrix into a statically typed layout.
+#[derive(Debug, Default, PartialEq, Eq, Hash)]
+pub struct MismatchedPixelError {
+    _private: (),
 }
 
 impl Bytes {
@@ -452,10 +469,12 @@ impl<P> Decay<TMatrix<P>> for Matrix {
 }
 
 /// Try to use the matrix with a specific pixel type.
-impl<P> Mend<Matrix> for Pixel<P> {
+impl<P> TryMend<Matrix> for Pixel<P> {
     type Into = TMatrix<P>;
-    fn mend(self, matrix: &Matrix) -> Option<TMatrix<P>> {
-        TMatrix::with_matrix(self, *matrix)
+    type Err = MismatchedPixelError;
+
+    fn try_mend(self, matrix: &Matrix) -> Result<TMatrix<P>, Self::Err> {
+        TMatrix::with_matrix(self, *matrix).ok_or_else(MismatchedPixelError::default)
     }
 }
 

@@ -6,7 +6,7 @@ use core::{fmt, ops};
 use bytemuck::Pod;
 
 use crate::buf::{buf, Buffer, Cog};
-use crate::layout::{Bytes, Coord, Decay, DynLayout, Layout, Mend, SampleSlice, Take};
+use crate::layout::{Bytes, Coord, Decay, DynLayout, Layout, Mend, SampleSlice, Take, TryMend};
 use crate::{Rec, ReuseError};
 
 /// A owned canvas, parameterized over the layout.
@@ -134,22 +134,44 @@ impl<L: Layout> Canvas<L> {
         self.inner.decay().into()
     }
 
+    /// Move the buffer into a new canvas.
+    pub fn take(&mut self) -> Canvas<L>
+    where
+        L: Take,
+    {
+        self.inner.take().into()
+    }
+
     /// Strengthen the layout of the canvas.
     ///
     /// See the [`Mend`] trait for an explanation of this operation.
     ///
-    /// This is a fallible operation. In case of success returns `Some` and the byte buffer of the
-    /// image is moved into the result. When mending fails this method returns `None` and the
-    /// buffer is kept by this canvas.
-    ///
     /// [`Mend`]: ../layout/trait.Mend.html
-    pub fn mend<Item>(&mut self, mend: Item) -> Option<Canvas<Item::Into>>
+    pub fn mended<Item>(self, mend: Item) -> Canvas<Item::Into>
     where
         Item: Mend<L>,
         L: Take,
     {
-        let new_layout = mend.mend(self.inner.layout())?;
-        Some(self.inner.take().reinterpret_unguarded(new_layout).into())
+        let new_layout = mend.mend(self.inner.layout());
+        self.inner.reinterpret_unguarded(new_layout).into()
+    }
+
+    /// Strengthen the layout of the canvas.
+    ///
+    /// See the [`Mend`] trait for an explanation of this operation.
+    ///
+    /// This is a fallible operation. In case of success returns `Ok` and the byte buffer of the
+    /// image is moved into the result. When mending fails this method returns `Err` and the buffer
+    /// is kept by this canvas.
+    ///
+    /// [`Mend`]: ../layout/trait.Mend.html
+    pub fn try_mend<Item>(&mut self, mend: Item) -> Result<Canvas<Item::Into>, Item::Err>
+    where
+        Item: TryMend<L>,
+        L: Take,
+    {
+        let new_layout = mend.try_mend(self.inner.layout())?;
+        Ok(self.inner.take().reinterpret_unguarded(new_layout).into())
     }
 }
 
