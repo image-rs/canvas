@@ -1,172 +1,544 @@
 // Distributed under The MIT License (MIT)
 //
-// Copyright (c) 2019 The `image-rs` developers
-use core::ops::{Index, IndexMut};
-use core::{cmp, fmt};
+// Copyright (c) 2019, 2020 The `image-rs` developers
+use core::{fmt, ops};
 
-use crate::{AsPixel, Pixel, Rec, ReuseError};
 use bytemuck::Pod;
 
-/// A 2d matrix of pixels.
-///
-/// The layout describes placement of samples within the memory buffer. An abstraction layer that
-/// provides strided access to such pixel data is not intended to be baked into this struct.
-/// Instead, it will always store the data in a row-major layout without holes.
-///
-/// There are two levels of control over the allocation behaviour of a `Canvas`. The direct
-/// methods, currently `with_width_and_height` only, lead to a canvas without intermediate steps
-/// but may panic due to an invalid layout. Manually using the intermediate [`Layout`] gives custom
-/// error handling options and additional offers inspection of the details of the to-be-allocated
-/// buffer. A third option is currently not available and depends on support from the Rust standard
-/// library, which could also handle allocation failures.
-///
-/// ## Usage for trusted inputs
-///
-/// Directly allocate your desired layout with `with_width_and_height`. This may panic when the
-/// allocation itself fails or when the allocation for the layout could not described, as the
-/// layout would not fit inside the available memory space (i.e. the indices would overflow a
-/// `usize`).
-///
-/// ## Usage for untrusted inputs
-///
-/// In some cases, for untrusted input such as in image parsing libraries, more control is desired.
-/// There is no way to currently catch an allocation failure in stable Rust. Thus, even reasonable
-/// bounds can lead to a `panic`, and this is unpreventable (note: when the `try_*` methods of
-/// `Vec` become stable this will change).  But one still may want to check the required size
-/// before allocation.
-///
-/// Firstly, no method will implicitely try to allocate memory and methods that will note the
-/// potential panic from allocation failure.
-///
-/// Secondly, an instance of [`Layout`] can be constructed in a panic free manner without any
-/// allocation and independently from the `Canvas` instance. By providing it to the `with_layout`
-/// constructor ensures that all potential intermediate failures–except as mentioned before–can be
-/// explicitely handled by the caller. Furthermore, some utility methods allow inspection of the
-/// eventual allocation size before the reservation of memory.
-///
-/// ## Restrictions
-///
-/// As previously mentioned, the samples in the internal buffer layout always appear without any
-/// holes. Therefore a fast `crop` operation requires wrapping the abstraction layer provided here
-/// into another layer describing the *accessible image*, independent from the layout of the actual
-/// *pixel data*. This separation of concern–layout vs. acess logic–simplifies the implementation
-/// and keeps it agnostic of the desired low-cost operations. Consider that other use cases may
-/// require operatios other than `crop` with constant time. Instead of choosing some consistent by
-/// limited set here, the mechanism to achieve it is deferred to an upper layer for further
-/// freedom. Other structs may, in the future, provide other pixel layouts.
-///
-/// [`Layout`]: ./struct.Layout.html
-#[derive(Debug, PartialEq, Eq)]
-pub struct Canvas<P: Pod> {
-    inner: Rec<P>,
-    layout: Layout<P>,
-}
+use crate::buf::{buf, Buffer, Cog};
+use crate::layout::{Bytes, Coord, Decay, DynLayout, Layout, Mend, SampleSlice, Take, TryMend};
+use crate::{Rec, ReuseError};
 
-/// Describes the memory region used for the image.
+/// A owned canvas, parameterized over the layout.
 ///
-/// The underlying buffer may have more data allocated than this region and cause the overhead to
-/// be reused when resizing the image. All ways to construct this already check that all pixels
-/// within the resulting image can be addressed via an index.
-pub struct Layout<P> {
-    width: usize,
-    height: usize,
-    pixel: Pixel<P>,
-}
-
-/// Error representation for a failed buffer reuse for a canvas.
+/// This type permits user defined layouts of any kind and does not unsafely depend on the validity
+/// of the layouts. Correctness is achieved in the common case by discouraging methods that would
+/// lead to a diverging size of the memory buffer and the layout. Hence, access to the image pixels
+/// should not lead to panic unless an incorrectly implemented layout is used.
 ///
-/// Emitted as a result of [`Canvas::from_rec`] when the buffer capacity is not large enough to
-/// serve as an image of requested layout with causing a reallocation.
+/// Since a `Canvas` can not unsafely rely on the layout behaving correctly, direct accessors may
+/// have suboptimal behaviour and perform a few (seemingly) redundant checks. More optimal, but
+/// much more specialized, wrappers are provided in other types such as `Matrix`.
 ///
-/// It is possible to retrieve the buffer that cause the failure with `into_rec`. This allows one
-/// to manually try to correct the error with additional checks, or implement a fallback strategy
-/// which does not require the interpretation as a full image.
+/// Note also that any borrowing canvas can arbitrarily change its own layout and thus overwrite
+/// the content with completely different types and layouts. This is intended to maximize the
+/// flexibility for users. In complicated cases it could be hard for the type system to reflect the
+/// compatibility of a custom pixel layout and a standard one. It is solely the user's
+/// responsibility to use the interface sensibly. The _soundness_ of standard channel types (e.g.
+/// `u8` or `u32`) is not impacted by this as any byte content is valid for them.
+///
+/// It is possible to convert the layout to a less strictly typed one without reallocating the
+/// buffer. For example, all standard layouts such as `Matrix` can be weakened to `DynLayout`. The
+/// reverse can not be done unchecked but is possible with fallible conversions.
+///
+/// Note also that `Canvas` provides fallible operations, some of them are meant to modify the
+/// type. This can obviously not be performed in-place, in the manner with which it would be common
+/// if the type did not change. Instead we approximate at least the result type by transferring the
+/// buffer on success while leaving it unchanged in case of failure. An example signature for this is:
+///
+/// > [`fn mend<M>(&mut self, with: L::Item) -> Option<Canvas<M>>`][`mend`]
+///
+/// [`mend`]: #method.mend
+///
+/// ## Examples
 ///
 /// ```
-/// # use canvas::{Canvas, Rec, Layout};
-/// let rec = Rec::<u8>::new(16);
-/// let allocation = rec.as_bytes().as_ptr();
-///
-/// let bad_layout = Layout::width_and_height(rec.capacity() + 1, 1).unwrap();
-/// let error = match Canvas::from_reused_rec(rec, bad_layout) {
-///     Ok(_) => unreachable!("The layout requires one too many pixels"),
-///     Err(error) => error,
-/// };
-///
-/// // Get back the original buffer.
-/// let rec = error.into_rec();
-/// assert_eq!(rec.as_bytes().as_ptr(), allocation);
 /// ```
+#[derive(Clone, PartialEq, Eq)]
+pub struct Canvas<Layout = Bytes> {
+    inner: RawCanvas<Buffer, Layout>,
+}
+
+/// An owned or borrowed canvas, parameterized over the layout.
 ///
-/// [`Canvas::from_rec`]: ./struct.Canvas.html#method.from_rec
+/// The buffer is either owned or _mutably_ borrowed from another `Canvas`. Some allocating methods
+/// may lead to an implicit change from a borrowed to an owned buffer. These methods are documented
+/// as performing a fallible allocation. Other method calls on the previously borrowing canvas will
+/// afterwards no longer change the bytes of the canvas it was borrowed from.
+#[derive(Clone, PartialEq, Eq)]
+pub struct CopyOnGrow<'buf, Layout = Bytes> {
+    inner: RawCanvas<Cog<'buf>, Layout>,
+}
+
+/// A read-only view of a canvas.
+#[derive(Clone, PartialEq, Eq)]
+pub struct View<'buf, Layout = Bytes> {
+    inner: RawCanvas<&'buf buf, Layout>,
+}
+
+/// A writeable reference to a canvas.
 #[derive(PartialEq, Eq)]
-pub struct CanvasReuseError<P: Pod> {
-    buffer: Rec<P>,
-    layout: Layout<P>,
+pub struct ViewMut<'buf, Layout = Bytes> {
+    inner: RawCanvas<&'buf mut buf, Layout>,
 }
 
-/// The canvas could not be mapped to another pixel type without reuse.
-///
-/// This may be caused since the layout would be invalid or due to the layout being too large for
-/// the current buffer allocation.
-///
-/// # Examples
-///
-/// Use the error type to conveniently enforce a custom policy for allowed and prohibited
-/// allocations.
-///
-/// ```
-/// # use canvas::Canvas;
-/// # let canvas = Canvas::<u8>::with_width_and_height(2, 2);
-/// # struct RequiredAllocationTooLarge;
-///
-/// match canvas.map_reuse(f32::from) {
-///     // Everything worked fine.
-///     Ok(canvas) => Ok(canvas),
-///     Err(error) => {
-///         // Manually validate if this reallocation should be allowed?
-///         match error.layout() {
-///             // Accept an allocation only if its smaller than a page
-///             Some(layout) if layout.byte_len() <= (1 << 12)
-///                 => Ok(error.into_canvas().map(f32::from)),
-///             _ => Err(RequiredAllocationTooLarge),
-///         }
-///     },
-/// }
-///
-/// # ;
-/// ```
-#[derive(PartialEq, Eq)]
-pub struct MapReuseError<P: Pod, Q: Pod> {
-    buffer: Canvas<P>,
-    layout: Option<Layout<Q>>,
+/// A raster layout.
+pub trait Raster<Pixel>: Sized {
+    fn dimensions(&self) -> Coord;
+    fn get(from: View<Self>, at: Coord) -> Pixel;
 }
 
-impl<P: Pod> Canvas<P> {
-    /// Allocate a canvas with specified layout.
-    ///
-    /// # Panics
-    /// When allocation of memory fails.
-    pub fn with_layout(layout: Layout<P>) -> Self {
-        let rec = Rec::bytes_for_pixel(layout.pixel, layout.byte_len());
-        Self::new_raw(rec, layout)
+/// A raster layout where one can change pixel values independently.
+pub trait RasterMut<Pixel>: Raster<Pixel> {
+    fn put(into: ViewMut<Self>, at: Coord, val: Pixel);
+}
+
+/// Inner buffer implementation.
+///
+/// Not exposed to avoid leaking the implementation detail of the `Buf` type parameter. This allows
+/// a single implementation for borrowed and owned buffers while keeping `buf`, `Cog` etc. private.
+#[derive(Default, Clone, PartialEq, Eq)]
+pub(crate) struct RawCanvas<Buf, Layout> {
+    buffer: Buf,
+    layout: Layout,
+}
+
+pub(crate) trait BufferLike: ops::Deref<Target = buf> {
+    fn into_owned(self) -> Buffer;
+    fn take(&mut self) -> Self;
+}
+
+pub(crate) trait BufferMut: BufferLike + ops::DerefMut {}
+
+pub(crate) trait Growable: BufferLike {
+    fn grow_to(&mut self, _: usize);
+}
+
+/// Canvas methods for all layouts.
+impl<L: Layout> Canvas<L> {
+    /// Create a new canvas for a specific layout.
+    pub fn new(layout: L) -> Self {
+        RawCanvas::<Buffer, L>::new(layout).into()
     }
 
-    /// Directly try to allocate a canvas from width and height.
+    /// Get a reference to those bytes used by the layout.
+    pub fn as_bytes(&self) -> &[u8] {
+        self.inner.as_bytes()
+    }
+
+    /// Get a mutable reference to those bytes used by the layout.
+    pub fn as_bytes_mut(&mut self) -> &mut [u8] {
+        self.inner.as_bytes_mut()
+    }
+
+    /// Decay into a canvas with less specific layout.
     ///
-    /// # Panics
-    /// This panics when the layout described by `width` and `height` can not be allocated, for
-    /// example due to it being an invalid layout. If you want to handle the layout being invalid,
-    /// consider using `Layout::from_width_and_height` and `Canvas::with_layout`.
-    pub fn with_width_and_height(width: usize, height: usize) -> Self
+    /// See the [`Decay`] trait for an explanation of this operation.
+    ///
+    /// [`Decay`]: ../layout/trait.Decay.html
+    pub fn decay<M>(self) -> Canvas<M>
     where
-        P: AsPixel,
+        M: Decay<L>,
+        M: Layout,
     {
-        let layout =
-            Layout::width_and_height(width, height).expect("Pixel layout can not fit into memory");
-        Self::with_layout(layout)
+        self.inner.decay().into()
     }
 
+    /// Move the buffer into a new canvas.
+    pub fn take(&mut self) -> Canvas<L>
+    where
+        L: Take,
+    {
+        self.inner.take().into()
+    }
+
+    /// Strengthen the layout of the canvas.
+    ///
+    /// See the [`Mend`] trait for an explanation of this operation.
+    ///
+    /// [`Mend`]: ../layout/trait.Mend.html
+    pub fn mended<Item>(self, mend: Item) -> Canvas<Item::Into>
+    where
+        Item: Mend<L>,
+        L: Take,
+    {
+        let new_layout = mend.mend(self.inner.layout());
+        self.inner.reinterpret_unguarded(new_layout).into()
+    }
+
+    /// Strengthen the layout of the canvas.
+    ///
+    /// See the [`Mend`] trait for an explanation of this operation.
+    ///
+    /// This is a fallible operation. In case of success returns `Ok` and the byte buffer of the
+    /// image is moved into the result. When mending fails this method returns `Err` and the buffer
+    /// is kept by this canvas.
+    ///
+    /// [`Mend`]: ../layout/trait.Mend.html
+    pub fn try_mend<Item>(&mut self, mend: Item) -> Result<Canvas<Item::Into>, Item::Err>
+    where
+        Item: TryMend<L>,
+        L: Take,
+    {
+        let new_layout = mend.try_mend(self.inner.layout())?;
+        Ok(self.inner.take().reinterpret_unguarded(new_layout).into())
+    }
+}
+
+/// Canvas methods that do not require a layout.
+impl<L> Canvas<L> {
+    /// Check if the buffer could accommodate another layout without reallocating.
+    pub fn fits(&self, other: &impl Layout) -> bool {
+        other.byte_len() <= self.as_capacity_bytes().len()
+    }
+
+    /// Get a reference to the unstructured bytes of the canvas.
+    ///
+    /// Note that this may return more bytes than required for the specific layout for various
+    /// reasons. See also [`as_bytes`].
+    ///
+    /// [`as_bytes`]: #method.as_bytes
+    pub fn as_capacity_bytes(&self) -> &[u8] {
+        self.inner.as_capacity_bytes()
+    }
+
+    /// Get a mutable reference to the unstructured bytes of the canvas.
+    ///
+    /// Note that this may return more bytes than required for the specific layout for various
+    /// reasons. See also [`as_bytes_mut`].
+    ///
+    /// [`as_bytes_mut`]: #method.as_bytes_mut
+    pub fn as_capacity_bytes_mut(&mut self) -> &mut [u8] {
+        self.inner.as_capacity_bytes_mut()
+    }
+
+    /// Get a reference to the layout.
+    pub fn layout(&self) -> &L {
+        self.inner.layout()
+    }
+
+    /// Get a mutable reference to the layout.
+    ///
+    /// Be mindful not to modify the layout to exceed the allocated size. This does not cause any
+    /// unsoundness but might lead to panics when calling other methods.
+    pub fn layout_mut_unguarded(&mut self) -> &mut L {
+        self.inner.layout_mut_unguarded()
+    }
+}
+
+/// Canvas methods for layouts based on pod samples.
+impl<L: SampleSlice> Canvas<L>
+where
+    L::Sample: Pod,
+{
+    /// Interpret an existing buffer as a pixel canvas.
+    ///
+    /// The data already contained within the buffer is not modified so that prior initialization
+    /// can be performed or one array of samples reinterpreted for an image of other sample type.
+    /// This method will never reallocate data.
+    ///
+    /// # Panics
+    ///
+    /// This function will panic if the buffer is shorter than the layout.
+    pub fn from_rec(buffer: Rec<L::Sample>, layout: L) -> Self {
+        assert!(buffer.byte_len() >= layout.byte_len());
+        RawCanvas::from_rec(buffer, layout).into()
+    }
+
+    /// Get a slice of the individual samples in the layout.
+    pub fn as_slice(&self) -> &[L::Sample] {
+        self.inner.as_slice()
+    }
+
+    /// Get a mutable slice of the individual samples in the layout.
+    pub fn as_mut_slice(&mut self) -> &mut [L::Sample] {
+        self.inner.as_mut_slice()
+    }
+
+    /// Convert into an vector-like of sample types.
+    pub fn into_rec(self) -> Rec<L::Sample> {
+        self.inner.into_rec()
+    }
+}
+
+/// Layout oblivious methods that can allocate and change to another buffer.
+impl<B: Growable, L> RawCanvas<B, L> {
+    /// Grow the buffer, preparing for another layout.
+    ///
+    /// This may allocate a new buffer and thus disassociate the image from the currently borrowed
+    /// underlying buffer.
+    ///
+    /// # Panics
+    /// This function will panic if an allocation is necessary but fails.
+    pub(crate) fn grow(&mut self, layout: &impl Layout) {
+        Growable::grow_to(&mut self.buffer, layout.byte_len());
+    }
+
+    /// Convert the inner layout.
+    ///
+    /// This method expects that the converted layout is compatible with the current layout.
+    ///
+    /// # Panics
+    /// This method panics if the new layout requires more bytes and allocation fails.
+    pub(crate) fn decay<Other>(mut self) -> RawCanvas<B, Other>
+    where
+        Other: Decay<L>,
+    {
+        let layout = Other::decay(self.layout);
+        Growable::grow_to(&mut self.buffer, layout.byte_len());
+        RawCanvas {
+            buffer: self.buffer,
+            layout,
+        }
+    }
+
+    /// Convert the inner layout to a dynamic one.
+    ///
+    /// This is mostly convenience. Also not that `DynLayout` is of course not _completely_ generic
+    /// but tries to emulate a large number of known layouts.
+    ///
+    /// # Panics
+    /// This method panics if the new layout requires more bytes and allocation fails.
+    pub(crate) fn into_dynamic(self) -> RawCanvas<B, DynLayout>
+    where
+        DynLayout: Decay<L>,
+    {
+        self.decay()
+    }
+
+    /// Change the layout, reusing and growing the buffer.
+    ///
+    /// # Panics
+    /// This method panics if the new layout requires more bytes and allocation fails.
+    pub(crate) fn into_reinterpreted<Other: Layout>(
+        mut self,
+        layout: Other,
+    ) -> RawCanvas<B, Other> {
+        Growable::grow_to(&mut self.buffer, layout.byte_len());
+        RawCanvas {
+            buffer: self.buffer,
+            layout,
+        }
+    }
+
+    /// Mutably borrow this canvas with another arbitrary layout.
+    ///
+    /// The other layout could be completely incompatible and perform arbitrary mutations. This
+    /// seems counter intuitive at first, but recall that these mutations are not unsound as they
+    /// can not invalidate the bytes themselves and only write unexpected values. This provides
+    /// more flexibility for 'transmutes' than easily expressible in the type system.
+    ///
+    /// # Panics
+    /// This method panics if the new layout requires more bytes and allocation fails.
+    pub(crate) fn as_reinterpreted<Other>(&mut self, other: Other) -> RawCanvas<&'_ mut buf, Other>
+    where
+        B: BufferMut,
+        Other: Layout,
+    {
+        self.grow(&other);
+        RawCanvas {
+            buffer: &mut self.buffer,
+            layout: other,
+        }
+    }
+
+    /// Change the layout and then resize the buffer so that it still fits.
+    pub(crate) fn mutate_layout<T>(&mut self, f: impl FnOnce(&mut L) -> T) -> T
+    where
+        L: Layout,
+    {
+        let t = f(&mut self.layout);
+        self.buffer.grow_to(self.layout.byte_len());
+        t
+    }
+}
+
+/// Layout oblivious methods, these also never allocate or panic.
+impl<B: BufferLike, L> RawCanvas<B, L> {
+    /// Get a reference to the unstructured bytes of the canvas.
+    ///
+    /// Note that this may return more bytes than required for the specific layout for various
+    /// reasons. See also [`as_layout_bytes`].
+    ///
+    /// [`as_layout_bytes`]: #method.as_layout_bytes
+    pub(crate) fn as_capacity_bytes(&self) -> &[u8] {
+        self.buffer.as_bytes()
+    }
+
+    /// Get a mutable reference to the unstructured bytes of the canvas.
+    ///
+    /// Note that this may return more bytes than required for the specific layout for various
+    /// reasons. See also [`as_layout_bytes_mut`].
+    ///
+    /// [`as_layout_bytes_mut`]: #method.as_layout_bytes_mut
+    pub(crate) fn as_capacity_bytes_mut(&mut self) -> &mut [u8]
+    where
+        B: BufferMut,
+    {
+        self.buffer.as_bytes_mut()
+    }
+
+    /// Get a reference to the layout.
+    pub(crate) fn layout(&self) -> &L {
+        &self.layout
+    }
+
+    /// Get a mutable reference to the layout.
+    ///
+    /// Be mindful not to modify the layout to exceed the allocated size.
+    pub(crate) fn layout_mut_unguarded(&mut self) -> &mut L {
+        &mut self.layout
+    }
+
+    /// Reinterpret the bits in another layout.
+    ///
+    /// This method fails if the layout requires more bytes than are currently allocated.
+    pub(crate) fn try_reinterpret<Other>(self, layout: Other) -> Result<RawCanvas<B, Other>, Self>
+    where
+        Other: Layout,
+    {
+        if self.buffer.len() > layout.byte_len() {
+            Err(self)
+        } else {
+            Ok(RawCanvas {
+                buffer: self.buffer,
+                layout,
+            })
+        }
+    }
+
+    /// Change the layout without checking the buffer.
+    pub(crate) fn reinterpret_unguarded<Other: Layout>(self, layout: Other) -> RawCanvas<B, Other> {
+        RawCanvas {
+            buffer: self.buffer,
+            layout,
+        }
+    }
+
+    /// Borrow the buffer with the same layout.
+    pub(crate) fn borrow_mut(&mut self) -> RawCanvas<&'_ mut buf, L>
+    where
+        B: BufferMut,
+        L: Clone,
+    {
+        RawCanvas {
+            buffer: &mut self.buffer,
+            layout: self.layout.clone(),
+        }
+    }
+
+    /// Take ownership of the image's bytes.
+    ///
+    /// # Panics
+    /// This method panics if allocation fails.
+    pub(crate) fn into_owned(self) -> RawCanvas<Buffer, L> {
+        RawCanvas {
+            buffer: BufferLike::into_owned(self.buffer),
+            layout: self.layout,
+        }
+    }
+}
+
+/// Methods specifically with a dynamic layout.
+impl<B> RawCanvas<B, DynLayout> {
+    pub(crate) fn try_from_dynamic<Other>(self, layout: Other) -> Result<RawCanvas<B, Other>, Self>
+    where
+        Other: Into<DynLayout> + Clone,
+    {
+        let reference = layout.clone().into();
+        if self.layout == reference {
+            Ok(RawCanvas {
+                buffer: self.buffer,
+                layout,
+            })
+        } else {
+            Err(self)
+        }
+    }
+}
+
+/// Methods for all `Layouts` (the trait).
+impl<B: BufferLike, L: Layout> RawCanvas<B, L> {
+    /// Allocate a buffer for a particular layout.
+    pub(crate) fn new(layout: L) -> Self
+    where
+        B: From<Buffer>,
+    {
+        let bytes = layout.byte_len();
+        RawCanvas {
+            buffer: Buffer::new(bytes).into(),
+            layout,
+        }
+    }
+
+    pub(crate) fn with_buffer(layout: L, buffer: B) -> Self {
+        assert!(buffer.as_ref().len() <= layout.byte_len());
+        RawCanvas { buffer, layout }
+    }
+
+    /// Get a reference to those bytes used by the layout.
+    pub(crate) fn as_bytes(&self) -> &[u8] {
+        &self.as_capacity_bytes()[..self.layout.byte_len()]
+    }
+
+    /// Get a mutable reference to those bytes used by the layout.
+    pub(crate) fn as_bytes_mut(&mut self) -> &mut [u8]
+    where
+        B: BufferMut,
+    {
+        let len = self.layout.byte_len();
+        &mut self.as_capacity_bytes_mut()[..len]
+    }
+
+    /// Create a canvas from a byte slice specifying the contents.
+    ///
+    /// If the layout requires more bytes then the remaining bytes are zero initialized.
+    pub(crate) fn with_contents(buffer: &[u8], layout: L) -> Self
+    where
+        B: From<Buffer>,
+    {
+        let mut buffer = Buffer::from(buffer);
+        buffer.grow_to(layout.byte_len());
+        RawCanvas {
+            buffer: buffer.into(),
+            layout,
+        }
+    }
+
+    /// Reuse the buffer for a new image layout of the same type.
+    pub(crate) fn try_reuse(&mut self, layout: L) -> Result<(), ReuseError> {
+        if self.as_capacity_bytes().len() >= layout.byte_len() {
+            self.layout = layout;
+            Ok(())
+        } else {
+            Err(ReuseError {
+                capacity: self.as_capacity_bytes().len(),
+                requested: Some(layout.byte_len()),
+            })
+        }
+    }
+
+    /// Change the layout but require that the new layout fits the buffer, never reallocate.
+    pub(crate) fn mutate_inplace<T>(&mut self, f: impl FnOnce(&mut L) -> T) -> T
+    where
+        L: Layout,
+    {
+        let t = f(&mut self.layout);
+        assert!(
+            self.layout.byte_len() <= self.buffer.len(),
+            "Modification required buffer allocation, was not in-place"
+        );
+        t
+    }
+
+    /// Take the buffer and layout from this canvas, moving content into a new instance.
+    ///
+    /// Asserts that the moved-from container can hold the emptied layout.
+    pub(crate) fn take(&mut self) -> Self
+    where
+        L: Take,
+    {
+        let buffer = self.buffer.take();
+        let layout = self.mutate_inplace(Take::take);
+        RawCanvas::with_buffer(layout, buffer)
+    }
+}
+
+/// Methods for layouts that are slices of individual samples.
+impl<B: BufferLike, L: SampleSlice> RawCanvas<B, L>
+where
+    L::Sample: Pod,
+{
     /// Interpret an existing buffer as a pixel canvas.
     ///
     /// The data already contained within the buffer is not modified so that prior initialization
@@ -177,419 +549,138 @@ impl<P: Pod> Canvas<P> {
     /// # Panics
     ///
     /// This function will panic if resizing causes a reallocation that fails.
-    pub fn from_rec(mut buffer: Rec<P>, layout: Layout<P>) -> Self {
-        buffer.resize_bytes(layout.byte_len());
-        Self::new_raw(buffer, layout)
-    }
-
-    /// Reuse an existing buffer for a pixel canvas.
-    ///
-    /// Similar to `from_rec` but this function will never reallocate the inner buffer. Instead, it
-    /// will return the `Rec` unmodified if the creation fails. See [`CanvasReuseError`] for
-    /// further information on the error and retrieving the buffer.
-    ///
-    /// [`CanvasReuseError`]: ./struct.CanvasReuseError.html
-    pub fn from_reused_rec(
-        mut buffer: Rec<P>,
-        layout: Layout<P>,
-    ) -> Result<Self, CanvasReuseError<P>> {
-        match buffer.reuse_bytes(layout.byte_len()) {
-            Ok(_) => (),
-            Err(_) => return Err(CanvasReuseError { buffer, layout }),
-        }
-        Ok(Self::new_raw(buffer, layout))
-    }
-
-    fn new_raw(inner: Rec<P>, layout: Layout<P>) -> Self {
-        assert_eq!(inner.len(), layout.len(), "Pixel count agrees with buffer");
-        Canvas { inner, layout }
-    }
-
-    pub fn as_slice(&self) -> &[P] {
-        &self.inner.as_slice()[..self.layout.len()]
-    }
-
-    pub fn as_mut_slice(&mut self) -> &mut [P] {
-        &mut self.inner.as_mut_slice()[..self.layout.len()]
-    }
-
-    pub fn as_bytes(&self) -> &[u8] {
-        &self.inner.as_bytes()[..self.layout.byte_len()]
-    }
-
-    pub fn as_bytes_mut(&mut self) -> &mut [u8] {
-        &mut self.inner.as_bytes_mut()[..self.layout.byte_len()]
-    }
-
-    /// Resize the buffer for a new image.
-    ///
-    /// # Panics
-    ///
-    /// This function will panic if an allocation is necessary but fails.
-    pub fn resize(&mut self, layout: Layout<P>) {
-        self.inner.resize_bytes(layout.byte_len());
-        self.layout = layout;
-    }
-
-    /// Reuse the buffer for a new image layout.
-    pub fn reuse(&mut self, layout: Layout<P>) -> Result<(), ReuseError> {
-        self.inner.reuse_bytes(layout.byte_len())?;
-        Ok(self.layout = layout)
-    }
-
-    /// Reinterpret to another, same size pixel type.
-    ///
-    /// See `transmute_to` for details.
-    pub fn transmute<Q: AsPixel + Pod>(self) -> Canvas<Q> {
-        self.transmute_to(Q::pixel())
-    }
-
-    /// Reinterpret to another, same size pixel type.
-    ///
-    /// # Panics
-    ///
-    /// Like `std::mem::transmute`, the size of the two types need to be equal. This ensures that
-    /// all indices are valid in both directions.
-    pub fn transmute_to<Q: AsPixel + Pod>(self, pixel: Pixel<Q>) -> Canvas<Q> {
-        let layout = self.layout.transmute_to(pixel);
-        let inner = self.inner.reinterpret_to(pixel);
-
-        Canvas { layout, inner }
-    }
-
-    pub fn into_rec(self) -> Rec<P> {
-        self.inner
-    }
-
-    fn index_of(&self, x: usize, y: usize) -> usize {
-        assert!(self.layout.in_bounds(x, y));
-
-        // Can't overflow, surely smaller than `layout.max_index()`.
-        y * self.layout.width() + x
-    }
-
-    /// Apply a function to all pixel values.
-    ///
-    /// See [`map_to`] for the details.
-    ///
-    /// # Panics
-    ///
-    /// This function will panic if the new layout would be invalid (because the new pixel type
-    /// requires a larger buffer than can be allocate) or if the reallocation fails.
-    pub fn map<F, Q>(self, map: F) -> Canvas<Q>
+    pub(crate) fn from_rec(buffer: Rec<L::Sample>, layout: L) -> Self
     where
-        F: Fn(P) -> Q,
-        Q: AsPixel + Pod,
+        B: From<Buffer>,
     {
-        self.map_to(map, Q::pixel())
-    }
-
-    /// Apply a function to all pixel values.
-    ///
-    /// Unlike [`transmute_to`] there are no restrictions on the pixel types. This will reuse the
-    /// underlying buffer or resize it if that is not possible.
-    ///
-    /// # Panics
-    ///
-    /// This function will panic if the new layout would be invalid (because the new pixel type
-    /// requires a larger buffer than can be allocate) or if the reallocation fails.
-    pub fn map_to<F, Q>(self, map: F, pixel: Pixel<Q>) -> Canvas<Q>
-    where
-        F: Fn(P) -> Q,
-        Q: Pod,
-    {
-        // First compute the new layout ..
-        let layout = self
-            .layout
-            .map_to(pixel)
-            .expect("Pixel layout can not fit into memory");
-        // .. then do the actual pixel mapping.
-        let inner = self.inner.map_to(map, pixel);
-        Canvas { layout, inner }
-    }
-
-    pub fn map_reuse<F, Q>(self, map: F) -> Result<Canvas<Q>, MapReuseError<P, Q>>
-    where
-        F: Fn(P) -> Q,
-        Q: AsPixel + Pod,
-    {
-        self.map_reuse_to(map, Q::pixel())
-    }
-
-    pub fn map_reuse_to<F, Q>(
-        self,
-        map: F,
-        pixel: Pixel<Q>,
-    ) -> Result<Canvas<Q>, MapReuseError<P, Q>>
-    where
-        F: Fn(P) -> Q,
-        Q: Pod,
-    {
-        let layout = match self.layout.map_to(pixel) {
-            Some(layout) => layout,
-            None => {
-                return Err(MapReuseError {
-                    buffer: self,
-                    layout: None,
-                })
-            }
-        };
-
-        if self.inner.byte_capacity() < layout.byte_len() {
-            return Err(MapReuseError {
-                buffer: self,
-                layout: Some(layout),
-            });
-        }
-
-        let inner = self.inner.map_to(map, pixel);
-
-        Ok(Canvas { inner, layout })
-    }
-}
-
-impl<P> Layout<P> {
-    pub fn width_and_height_for_pixel(
-        pixel: Pixel<P>,
-        width: usize,
-        height: usize,
-    ) -> Option<Self> {
-        let max_index = Self::max_index(width, height)?;
-        let _ = max_index.checked_mul(pixel.size())?;
-
-        Some(Layout {
-            width,
-            height,
-            pixel,
-        })
-    }
-
-    pub fn width_and_height(width: usize, height: usize) -> Option<Self>
-    where
-        P: AsPixel,
-    {
-        Self::width_and_height_for_pixel(P::pixel(), width, height)
-    }
-
-    /// Get the required bytes for this layout.
-    pub fn byte_len(self) -> usize {
-        // Exactly this does not overflow due to construction.
-        self.pixel.size() * self.width * self.height
-    }
-
-    /// The number of pixels in this layout
-    pub fn len(self) -> usize {
-        self.width * self.height
-    }
-
-    pub fn width(self) -> usize {
-        self.width
-    }
-
-    pub fn height(self) -> usize {
-        self.height
-    }
-
-    pub fn pixel(self) -> Pixel<P> {
-        self.pixel
-    }
-
-    /// Reinterpret to another, same size pixel type.
-    ///
-    /// See `transmute_to` for details.
-    pub fn transmute<Q: AsPixel>(self) -> Layout<Q> {
-        self.transmute_to(Q::pixel())
-    }
-
-    /// Reinterpret to another, same size pixel type.
-    ///
-    /// # Panics
-    /// Like `std::mem::transmute`, the size of the two types need to be equal. This ensures that
-    /// all indices are valid in both directions.
-    pub fn transmute_to<Q>(self, pixel: Pixel<Q>) -> Layout<Q> {
-        assert!(self.pixel.size() == pixel.size());
-        Layout {
-            width: self.width,
-            height: self.height,
-            pixel,
+        let buffer = buffer.into_inner();
+        assert!(buffer.len() >= layout.byte_len());
+        Self {
+            buffer: buffer.into(),
+            layout,
         }
     }
 
-    /// Utility method to change the pixel type without changing the dimensions.
-    pub fn map<Q: AsPixel>(self) -> Option<Layout<Q>> {
-        self.map_to(Q::pixel())
+    pub(crate) fn as_slice(&self) -> &[L::Sample] {
+        self.buffer.as_pixels(self.layout.sample())
     }
 
-    /// Utility method to change the pixel type without changing the dimensions.
-    pub fn map_to<Q>(self, pixel: Pixel<Q>) -> Option<Layout<Q>> {
-        Layout::width_and_height_for_pixel(pixel, self.width, self.height)
+    pub(crate) fn as_mut_slice(&mut self) -> &mut [L::Sample]
+    where
+        B: BufferMut,
+    {
+        self.buffer.as_mut_pixels(self.layout.sample())
     }
 
-    fn in_bounds(self, x: usize, y: usize) -> bool {
-        x < self.width && y < self.height
-    }
-
-    fn max_index(width: usize, height: usize) -> Option<usize> {
-        width.checked_mul(height)
-    }
-}
-
-impl<P: Pod> CanvasReuseError<P> {
-    /// Unwrap the original buffer.
-    pub fn into_rec(self) -> Rec<P> {
-        self.buffer
-    }
-}
-
-impl<P, Q> MapReuseError<P, Q>
-where
-    P: Pod,
-    Q: Pod,
-{
-    /// Unwrap the original buffer.
-    pub fn into_canvas(self) -> Canvas<P> {
-        self.buffer
-    }
-
-    /// The layout that would be required to perform the map operation.
-    ///
-    /// Returns `Some(_)` if such a layout can be constructed in theory and return `None` if it
-    /// would exceed the platform address space.
-    pub fn layout(&self) -> Option<Layout<Q>> {
-        self.layout
+    /// Convert back into an vector-like of sample types.
+    pub(crate) fn into_rec(self) -> Rec<L::Sample> {
+        let sample = self.layout.sample();
+        // Avoid calling any method of `Layout` after this. Not relevant for safety but might be in
+        // the future, if we want to avoid the extra check in `resize`.
+        let count = self.as_slice().len();
+        let buffer = self.buffer.into_owned();
+        let mut rec = Rec::from_buffer(buffer, sample);
+        // This should never reallocate at this point but we don't really know or care.
+        rec.resize(count);
+        rec
     }
 }
 
-impl<P> Clone for Layout<P> {
+impl<L> From<RawCanvas<Buffer, L>> for Canvas<L> {
+    fn from(canvas: RawCanvas<Buffer, L>) -> Self {
+        Canvas { inner: canvas }
+    }
+}
+
+impl BufferLike for Cog<'_> {
+    fn into_owned(self) -> Buffer {
+        Cog::into_owned(self)
+    }
+
+    fn take(&mut self) -> Self {
+        core::mem::replace(self, Cog::Owned(Default::default()))
+    }
+}
+
+impl BufferLike for Buffer {
+    fn into_owned(self) -> Self {
+        self
+    }
+
+    fn take(&mut self) -> Self {
+        core::mem::take(self)
+    }
+}
+
+impl BufferLike for &'_ mut buf {
+    fn into_owned(self) -> Buffer {
+        Buffer::from(self.as_bytes())
+    }
+
+    fn take(&mut self) -> Self {
+        core::mem::take(self)
+    }
+}
+
+impl Growable for Cog<'_> {
+    fn grow_to(&mut self, bytes: usize) {
+        Cog::grow_to(self, bytes);
+    }
+}
+
+impl Growable for Buffer {
+    fn grow_to(&mut self, bytes: usize) {
+        Buffer::grow_to(self, bytes);
+    }
+}
+
+impl BufferMut for Cog<'_> {}
+
+impl BufferMut for Buffer {}
+
+impl BufferMut for &'_ mut buf {}
+
+impl<Layout: Clone> Clone for RawCanvas<Cog<'_>, Layout> {
     fn clone(&self) -> Self {
-        Layout {
-            ..*self // This is, apparently, legal.
+        use alloc::borrow::ToOwned;
+        RawCanvas {
+            buffer: Cog::Owned(self.buffer.to_owned()),
+            layout: self.layout.clone(),
         }
     }
 }
 
-impl<P> Copy for Layout<P> {}
-
-impl<P: AsPixel> Default for Layout<P> {
+impl<Layout: Default> Default for Canvas<Layout> {
     fn default() -> Self {
-        Layout {
-            width: 0,
-            height: 0,
-            pixel: P::pixel(),
+        Canvas {
+            inner: RawCanvas {
+                buffer: Buffer::default(),
+                layout: Layout::default(),
+            },
         }
     }
 }
 
-impl<P> fmt::Debug for Layout<P> {
+impl<Layout: Default> Default for CopyOnGrow<'_, Layout> {
+    fn default() -> Self {
+        CopyOnGrow {
+            inner: RawCanvas {
+                buffer: Cog::Owned(Buffer::default()),
+                layout: Layout::default(),
+            },
+        }
+    }
+}
+
+impl<L> fmt::Debug for Canvas<L>
+where
+    L: SampleSlice + fmt::Debug,
+    L::Sample: Pod + fmt::Debug,
+{
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
-        f.debug_struct("Layout")
-            .field("width", &self.width)
-            .field("height", &self.height)
-            .field("pixel", &self.pixel)
+        f.debug_struct("Canvas")
+            .field("layout", &self.inner.layout)
+            .field("content", &self.inner.as_slice())
             .finish()
-    }
-}
-
-impl<P> cmp::PartialEq for Layout<P> {
-    fn eq(&self, other: &Self) -> bool {
-        (self.width, self.height) == (other.width, other.height)
-    }
-}
-
-impl<P> cmp::Eq for Layout<P> {}
-
-impl<P> cmp::PartialOrd for Layout<P> {
-    fn partial_cmp(&self, other: &Self) -> Option<cmp::Ordering> {
-        if self.width < other.width && self.height < other.height {
-            Some(cmp::Ordering::Less)
-        } else if self.width > other.width && self.height > other.height {
-            Some(cmp::Ordering::Greater)
-        } else if self.width == other.width && self.height == other.height {
-            Some(cmp::Ordering::Equal)
-        } else {
-            None
-        }
-    }
-}
-
-impl<P: Pod> Clone for Canvas<P> {
-    fn clone(&self) -> Self {
-        Canvas {
-            inner: self.inner.clone(),
-            layout: self.layout,
-        }
-    }
-}
-
-impl<P: Pod + AsPixel> Default for Canvas<P> {
-    fn default() -> Self {
-        Canvas {
-            inner: Rec::default(),
-            layout: Layout::default(),
-        }
-    }
-}
-
-impl<P: Pod> Index<(usize, usize)> for Canvas<P> {
-    type Output = P;
-
-    fn index(&self, (x, y): (usize, usize)) -> &P {
-        &self.as_slice()[self.index_of(x, y)]
-    }
-}
-
-impl<P: Pod> IndexMut<(usize, usize)> for Canvas<P> {
-    fn index_mut(&mut self, (x, y): (usize, usize)) -> &mut P {
-        let index = self.index_of(x, y);
-        &mut self.as_mut_slice()[index]
-    }
-}
-
-impl<P: Pod> fmt::Debug for CanvasReuseError<P> {
-    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
-        write!(
-            f,
-            "Canvas requires {} elements but buffer has capacity for only {}",
-            self.layout.len(),
-            self.buffer.capacity()
-        )
-    }
-}
-
-impl<P, Q> fmt::Debug for MapReuseError<P, Q>
-where
-    P: Pod,
-    Q: Pod,
-{
-    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
-        match self.layout {
-            Some(layout) => write!(
-                f,
-                "Mapping canvas requires {} bytes but current buffer has a capacity of {}",
-                layout.byte_len(),
-                self.buffer.inner.byte_capacity()
-            ),
-            None => write!(f, "Mapped canvas can not be allocated"),
-        }
-    }
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn buffer_reuse() {
-        let rec = Rec::<u8>::new(4);
-        assert!(rec.capacity() >= 4);
-        let layout = Layout::width_and_height(2, 2).unwrap();
-        let mut canvas = Canvas::from_reused_rec(rec, layout).expect("Rec is surely large enough");
-        canvas
-            .reuse(Layout::width_and_height(1, 1).unwrap())
-            .expect("Can scale down the image");
-        canvas.resize(Layout::width_and_height(0, 0).unwrap());
-        canvas
-            .reuse(layout)
-            .expect("Can still reuse original allocation");
     }
 }

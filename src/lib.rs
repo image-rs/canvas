@@ -1,7 +1,7 @@
 // Distributed under The MIT License (MIT)
 //
 // Copyright (c) 2019 The `image-rs` developers
-//! # Canvas
+//! # Matrix
 //!
 //! An image canvas compatible with transmuting its byte content.
 //!
@@ -9,8 +9,8 @@
 //!
 //! ```
 //! # fn send_over_network(_: &[u8]) { };
-//! use canvas::Canvas;
-//! let mut canvas = Canvas::with_width_and_height(400, 400);
+//! use canvas::Matrix;
+//! let mut canvas = Matrix::with_width_and_height(400, 400);
 //!
 //! // Draw a bright red line.
 //! for i in 0..400 {
@@ -34,10 +34,14 @@ extern crate alloc;
 
 mod buf;
 mod canvas;
+mod drm;
+pub mod layout;
+mod matrix;
 mod pixel;
 mod rec;
 
-pub use self::canvas::{Canvas, CanvasReuseError, Layout};
+pub use self::canvas::Canvas;
+pub use self::matrix::{Layout, Matrix, MatrixReuseError};
 pub use self::pixel::{AsPixel, Pixel};
 pub use self::rec::{Rec, ReuseError};
 

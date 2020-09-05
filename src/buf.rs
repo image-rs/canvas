@@ -1,9 +1,9 @@
 // Distributed under The MIT License (MIT)
 //
 // Copyright (c) 2019 The `image-rs` developers
-use core::mem;
-use core::ops;
+use core::{borrow, cmp, mem, ops};
 
+use alloc::borrow::ToOwned;
 use alloc::vec::Vec;
 
 use crate::pixel::{MaxAligned, Pixel, MAX_ALIGN};
@@ -32,6 +32,12 @@ pub(crate) struct Buffer {
 #[repr(transparent)]
 #[allow(non_camel_case_types)]
 pub(crate) struct buf([u8]);
+
+/// A copy-on-grow version of a buffer.
+pub(crate) enum Cog<'buf> {
+    Owned(Buffer),
+    Borrowed(&'buf mut buf),
+}
 
 impl Buffer {
     const ELEMENT: MaxAligned = MaxAligned([0; 16]);
@@ -87,6 +93,34 @@ impl Buffer {
 
         // We allocated enough chunks for at least the length. This can never overflow.
         length / CHUNK_SIZE + usize::from(length % CHUNK_SIZE != 0)
+    }
+}
+
+impl Cog<'_> {
+    pub(crate) fn to_owned(this: &mut Self) -> &'_ mut Buffer {
+        match this {
+            Cog::Owned(buffer) => buffer,
+            Cog::Borrowed(buffer) => {
+                let buffer = buffer.to_owned();
+                *this = Cog::Owned(buffer);
+                Cog::to_owned(this)
+            }
+        }
+    }
+
+    pub(crate) fn into_owned(this: Self) -> Buffer {
+        match this {
+            Cog::Owned(buffer) => buffer,
+            Cog::Borrowed(buffer) => buffer.to_owned(),
+        }
+    }
+
+    pub(crate) fn grow_to(this: &mut Self, bytes: usize) -> &mut buf {
+        if this.len() < bytes {
+            Cog::to_owned(this).grow_to(bytes);
+        }
+
+        &mut **this
     }
 }
 
@@ -407,6 +441,53 @@ impl<'a> ByteSlice for &'a mut [u8] {
     }
 }
 
+impl From<&'_ [u8]> for Buffer {
+    fn from(content: &'_ [u8]) -> Self {
+        let mut buffer = Buffer::new(content.len());
+        buffer[..content.len()].copy_from_slice(content);
+        buffer
+    }
+}
+
+impl From<&'_ buf> for Buffer {
+    fn from(content: &'_ buf) -> Self {
+        content.to_owned()
+    }
+}
+
+impl Default for &'_ buf {
+    fn default() -> Self {
+        buf::new(&mut [])
+    }
+}
+
+impl Default for &'_ mut buf {
+    fn default() -> Self {
+        buf::new_mut(&mut [])
+    }
+}
+
+impl borrow::Borrow<buf> for Buffer {
+    fn borrow(&self) -> &buf {
+        &**self
+    }
+}
+
+impl borrow::BorrowMut<buf> for Buffer {
+    fn borrow_mut(&mut self) -> &mut buf {
+        &mut **self
+    }
+}
+
+impl alloc::borrow::ToOwned for buf {
+    type Owned = Buffer;
+    fn to_owned(&self) -> Buffer {
+        let mut buffer = Buffer::new(self.len());
+        buffer.as_bytes_mut().copy_from_slice(self);
+        buffer
+    }
+}
+
 impl ops::Deref for Buffer {
     type Target = buf;
 
@@ -434,6 +515,62 @@ impl ops::DerefMut for buf {
         self.as_bytes_mut()
     }
 }
+
+impl ops::Deref for Cog<'_> {
+    type Target = buf;
+
+    fn deref(&self) -> &buf {
+        match self {
+            Cog::Owned(buffer) => buffer,
+            Cog::Borrowed(buffer) => buffer,
+        }
+    }
+}
+
+impl ops::DerefMut for Cog<'_> {
+    fn deref_mut(&mut self) -> &mut buf {
+        match self {
+            Cog::Owned(buffer) => buffer,
+            Cog::Borrowed(buffer) => buffer,
+        }
+    }
+}
+
+impl borrow::Borrow<buf> for Cog<'_> {
+    fn borrow(&self) -> &buf {
+        &**self
+    }
+}
+
+impl borrow::BorrowMut<buf> for Cog<'_> {
+    fn borrow_mut(&mut self) -> &mut buf {
+        &mut **self
+    }
+}
+
+impl cmp::PartialEq<Cog<'_>> for Cog<'_> {
+    fn eq(&self, other: &Cog<'_>) -> bool {
+        **self == **other
+    }
+}
+
+impl cmp::Eq for Cog<'_> {}
+
+impl cmp::PartialEq for buf {
+    fn eq(&self, other: &buf) -> bool {
+        self.as_bytes() == other.as_bytes()
+    }
+}
+
+impl cmp::Eq for buf {}
+
+impl cmp::PartialEq for Buffer {
+    fn eq(&self, other: &Buffer) -> bool {
+        self.as_bytes() == other.as_bytes()
+    }
+}
+
+impl cmp::Eq for Buffer {}
 
 impl ops::Index<ops::RangeTo<usize>> for buf {
     type Output = buf;

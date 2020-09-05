@@ -1,9 +1,9 @@
 // Distributed under The MIT License (MIT)
 //
-// Copyright (c) 2019 The `image-rs` developers
+// Copyright (c) 2019, 2020 The `image-rs` developers
 use core::cmp::{Eq, Ord, Ordering, PartialEq, PartialOrd};
 use core::marker::PhantomData;
-use core::{fmt, mem};
+use core::{fmt, hash, mem};
 
 /// Marker struct to denote a pixel type.
 ///
@@ -50,6 +50,7 @@ pub(crate) mod constants {
     }
 
     constant_pixels!(
+        (EMPTY, ()),
         (I8, i8),
         (U8, u8),
         (I16, i16),
@@ -128,4 +129,8 @@ impl<P> fmt::Debug for Pixel<P> {
             .field("align", &self.align())
             .finish()
     }
+}
+
+impl<P> hash::Hash for Pixel<P> {
+    fn hash<H: hash::Hasher>(&self, _: &mut H) {}
 }

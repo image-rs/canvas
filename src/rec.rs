@@ -42,8 +42,8 @@ pub struct Rec<P: Pod> {
 /// };
 /// ```
 pub struct ReuseError {
-    requested: Option<usize>,
-    capacity: usize,
+    pub(crate) requested: Option<usize>,
+    pub(crate) capacity: usize,
 }
 
 impl<P: Pod> Rec<P> {
@@ -89,6 +89,14 @@ impl<P: Pod> Rec<P> {
             inner: Buffer::new(mem_size),
             length: mem_size,
             pixel,
+        }
+    }
+
+    pub(crate) fn from_buffer(inner: Buffer, pixel: Pixel<P>) -> Self {
+        Rec {
+            inner,
+            pixel,
+            length: 0,
         }
     }
 
@@ -305,6 +313,10 @@ impl<P: Pod> Rec<P> {
 
     fn buf_mut(&mut self) -> &mut buf {
         &mut self.inner[..self.length]
+    }
+
+    pub(crate) fn into_inner(self) -> Buffer {
+        self.inner
     }
 }
 
