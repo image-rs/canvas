@@ -5,8 +5,6 @@ use core::cmp;
 use core::fmt;
 use core::ops::{Deref, DerefMut};
 
-use bytemuck::Pod;
-
 use crate::buf::{buf, Buffer};
 use crate::{AsPixel, Pixel};
 
@@ -14,7 +12,7 @@ use crate::{AsPixel, Pixel};
 ///
 /// It allows efficient conversion to other pixel representations, that is effective
 /// reinterpretation casts.
-pub struct Rec<P: Pod> {
+pub struct Rec<P> {
     inner: Buffer,
     length: usize,
     pixel: Pixel<P>,
@@ -46,7 +44,7 @@ pub struct ReuseError {
     pub(crate) capacity: usize,
 }
 
-impl<P: Pod> Rec<P> {
+impl<P> Rec<P> {
     /// Allocate a pixel buffer by the pixel count.
     ///
     /// # Panics
@@ -248,7 +246,7 @@ impl<P: Pod> Rec<P> {
     /// See `reinterpret_to` for details.
     pub fn reinterpret<Q>(self) -> Rec<Q>
     where
-        Q: AsPixel + Pod,
+        Q: AsPixel,
     {
         self.reinterpret_to(Q::pixel())
     }
@@ -259,10 +257,7 @@ impl<P: Pod> Rec<P> {
     /// larger than the old one and the allocation was not a multiple of the new size. Conversely,
     /// some new bytes may become accessible if the memory length was not a multiple of the
     /// previous pixel type's length.
-    pub fn reinterpret_to<Q>(self, pixel: Pixel<Q>) -> Rec<Q>
-    where
-        Q: Pod,
-    {
+    pub fn reinterpret_to<Q>(self, pixel: Pixel<Q>) -> Rec<Q> {
         Rec {
             inner: self.inner,
             length: self.length,
@@ -275,8 +270,7 @@ impl<P: Pod> Rec<P> {
     /// See [`map_to`] for details.
     pub fn map<Q>(self, f: impl Fn(P) -> Q) -> Rec<Q>
     where
-        P: Copy,
-        Q: AsPixel + Pod,
+        Q: AsPixel,
     {
         self.map_to(f, Q::pixel())
     }
@@ -290,11 +284,7 @@ impl<P: Pod> Rec<P> {
     ///
     /// This function will panic if the allocation fails or the necessary allocation exceeds the
     /// value range of `usize`.
-    pub fn map_to<Q>(mut self, f: impl Fn(P) -> Q, pixel: Pixel<Q>) -> Rec<Q>
-    where
-        P: Copy,
-        Q: Pod,
-    {
+    pub fn map_to<Q>(mut self, f: impl Fn(P) -> Q, pixel: Pixel<Q>) -> Rec<Q> {
         // Ensure we have enough memory for both representations.
         let length = self.as_slice().len();
         let new_bytes = mem_size(pixel, length);
@@ -327,7 +317,7 @@ fn mem_size<P>(pixel: Pixel<P>, count: usize) -> usize {
         .unwrap_or_else(|| panic!("Requested count overflows memory size"))
 }
 
-impl<P: Pod> Deref for Rec<P> {
+impl<P> Deref for Rec<P> {
     type Target = [P];
 
     fn deref(&self) -> &[P] {
@@ -335,13 +325,13 @@ impl<P: Pod> Deref for Rec<P> {
     }
 }
 
-impl<P: Pod> DerefMut for Rec<P> {
+impl<P> DerefMut for Rec<P> {
     fn deref_mut(&mut self) -> &mut [P] {
         self.as_mut_slice()
     }
 }
 
-impl<P: Pod> Clone for Rec<P> {
+impl<P> Clone for Rec<P> {
     fn clone(&self) -> Self {
         Rec {
             inner: self.inner.clone(),
@@ -350,7 +340,7 @@ impl<P: Pod> Clone for Rec<P> {
     }
 }
 
-impl<P: AsPixel + Pod> Default for Rec<P> {
+impl<P: AsPixel> Default for Rec<P> {
     fn default() -> Self {
         Rec {
             inner: Buffer::default(),
@@ -360,27 +350,27 @@ impl<P: AsPixel + Pod> Default for Rec<P> {
     }
 }
 
-impl<P: Pod + cmp::PartialEq> cmp::PartialEq for Rec<P> {
+impl<P: cmp::PartialEq> cmp::PartialEq for Rec<P> {
     fn eq(&self, other: &Self) -> bool {
         self.as_slice().eq(other.as_slice())
     }
 }
 
-impl<P: Pod + cmp::Eq> cmp::Eq for Rec<P> {}
+impl<P: cmp::Eq> cmp::Eq for Rec<P> {}
 
-impl<P: Pod + cmp::PartialOrd> cmp::PartialOrd for Rec<P> {
+impl<P: cmp::PartialOrd> cmp::PartialOrd for Rec<P> {
     fn partial_cmp(&self, other: &Self) -> Option<cmp::Ordering> {
         self.as_slice().partial_cmp(other.as_slice())
     }
 }
 
-impl<P: Pod + cmp::Ord> cmp::Ord for Rec<P> {
+impl<P: cmp::Ord> cmp::Ord for Rec<P> {
     fn cmp(&self, other: &Self) -> cmp::Ordering {
         self.as_slice().cmp(other.as_slice())
     }
 }
 
-impl<P: Pod + fmt::Debug> fmt::Debug for Rec<P> {
+impl<P: fmt::Debug> fmt::Debug for Rec<P> {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
         f.debug_list().entries(self.as_slice().iter()).finish()
     }

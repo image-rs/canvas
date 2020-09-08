@@ -4,8 +4,6 @@
 use core::ops::{Index, IndexMut};
 use core::{cmp, fmt};
 
-use bytemuck::Pod;
-
 use crate::buf::Buffer;
 use crate::canvas::{Canvas, RawCanvas};
 use crate::{layout, AsPixel, Pixel, Rec, ReuseError};
@@ -60,7 +58,7 @@ use crate::{layout, AsPixel, Pixel, Rec, ReuseError};
 ///
 /// [`Layout`]: ./struct.Layout.html
 #[derive(Clone, PartialEq, Eq)]
-pub struct Matrix<P: Pod> {
+pub struct Matrix<P> {
     inner: RawCanvas<Buffer, Layout<P>>,
 }
 
@@ -102,7 +100,7 @@ pub struct Layout<P> {
 ///
 /// [`Matrix::from_rec`]: ./struct.Matrix.html#method.from_rec
 #[derive(PartialEq, Eq)]
-pub struct MatrixReuseError<P: Pod> {
+pub struct MatrixReuseError<P> {
     buffer: Rec<P>,
     layout: Layout<P>,
 }
@@ -139,12 +137,12 @@ pub struct MatrixReuseError<P: Pod> {
 /// # ;
 /// ```
 #[derive(PartialEq, Eq)]
-pub struct MapReuseError<P: Pod, Q: Pod> {
+pub struct MapReuseError<P, Q> {
     buffer: Matrix<P>,
     layout: Option<Layout<Q>>,
 }
 
-impl<P: Pod> Matrix<P> {
+impl<P> Matrix<P> {
     /// Allocate a canvas with specified layout.
     ///
     /// # Panics
@@ -243,7 +241,7 @@ impl<P: Pod> Matrix<P> {
     /// Reinterpret to another, same size pixel type.
     ///
     /// See `transmute_to` for details.
-    pub fn transmute<Q: AsPixel + Pod>(self) -> Matrix<Q> {
+    pub fn transmute<Q: AsPixel>(self) -> Matrix<Q> {
         self.transmute_to(Q::pixel())
     }
 
@@ -253,7 +251,7 @@ impl<P: Pod> Matrix<P> {
     ///
     /// Like `std::mem::transmute`, the size of the two types need to be equal. This ensures that
     /// all indices are valid in both directions.
-    pub fn transmute_to<Q: AsPixel + Pod>(self, pixel: Pixel<Q>) -> Matrix<Q> {
+    pub fn transmute_to<Q: AsPixel>(self, pixel: Pixel<Q>) -> Matrix<Q> {
         let layout = self.layout().transmute_to(pixel);
         let inner = self.inner.reinterpret_unguarded(layout);
         Matrix { inner }
@@ -286,7 +284,7 @@ impl<P: Pod> Matrix<P> {
     pub fn map<F, Q>(self, map: F) -> Matrix<Q>
     where
         F: Fn(P) -> Q,
-        Q: AsPixel + Pod,
+        Q: AsPixel,
     {
         self.map_to(map, Q::pixel())
     }
@@ -303,7 +301,6 @@ impl<P: Pod> Matrix<P> {
     pub fn map_to<F, Q>(self, map: F, pixel: Pixel<Q>) -> Matrix<Q>
     where
         F: Fn(P) -> Q,
-        Q: Pod,
     {
         // First compute the new layout ..
         let layout = self
@@ -318,7 +315,7 @@ impl<P: Pod> Matrix<P> {
     pub fn map_reuse<F, Q>(self, map: F) -> Result<Matrix<Q>, MapReuseError<P, Q>>
     where
         F: Fn(P) -> Q,
-        Q: AsPixel + Pod,
+        Q: AsPixel,
     {
         self.map_reuse_to(map, Q::pixel())
     }
@@ -330,7 +327,6 @@ impl<P: Pod> Matrix<P> {
     ) -> Result<Matrix<Q>, MapReuseError<P, Q>>
     where
         F: Fn(P) -> Q,
-        Q: Pod,
     {
         let layout = match self.layout().map_to(pixel) {
             Some(layout) => layout,
@@ -441,18 +437,14 @@ impl<P> Layout<P> {
     }
 }
 
-impl<P: Pod> MatrixReuseError<P> {
+impl<P> MatrixReuseError<P> {
     /// Unwrap the original buffer.
     pub fn into_rec(self) -> Rec<P> {
         self.buffer
     }
 }
 
-impl<P, Q> MapReuseError<P, Q>
-where
-    P: Pod,
-    Q: Pod,
-{
+impl<P, Q> MapReuseError<P, Q> {
     /// Unwrap the original buffer.
     pub fn into_canvas(self) -> Matrix<P> {
         self.buffer
@@ -467,7 +459,7 @@ where
     }
 }
 
-impl<P: Pod> From<Canvas<Layout<P>>> for Matrix<P> {
+impl<P> From<Canvas<Layout<P>>> for Matrix<P> {
     fn from(canvas: Canvas<Layout<P>>) -> Self {
         let layout = *canvas.layout();
         let rec = canvas.into_rec();
@@ -475,7 +467,7 @@ impl<P: Pod> From<Canvas<Layout<P>>> for Matrix<P> {
     }
 }
 
-impl<P: Pod> From<Matrix<P>> for Canvas<Layout<P>> {
+impl<P> From<Matrix<P>> for Canvas<Layout<P>> {
     fn from(matrix: Matrix<P>) -> Self {
         let layout = matrix.layout();
         let rec = matrix.into_rec();
@@ -483,13 +475,13 @@ impl<P: Pod> From<Matrix<P>> for Canvas<Layout<P>> {
     }
 }
 
-impl<P: Pod> layout::Layout for Layout<P> {
+impl<P> layout::Layout for Layout<P> {
     fn byte_len(&self) -> usize {
         Layout::byte_len(*self)
     }
 }
 
-impl<P: Pod> layout::SampleSlice for Layout<P> {
+impl<P> layout::SampleSlice for Layout<P> {
     type Sample = P;
 
     fn sample(&self) -> Pixel<P> {
@@ -549,13 +541,13 @@ impl<P> cmp::PartialOrd for Layout<P> {
     }
 }
 
-impl<P: Pod + AsPixel> Default for Matrix<P> {
+impl<P: AsPixel> Default for Matrix<P> {
     fn default() -> Self {
         Matrix::from_rec(Rec::default(), Layout::default())
     }
 }
 
-impl<P: Pod> Index<(usize, usize)> for Matrix<P> {
+impl<P> Index<(usize, usize)> for Matrix<P> {
     type Output = P;
 
     fn index(&self, (x, y): (usize, usize)) -> &P {
@@ -563,14 +555,14 @@ impl<P: Pod> Index<(usize, usize)> for Matrix<P> {
     }
 }
 
-impl<P: Pod> IndexMut<(usize, usize)> for Matrix<P> {
+impl<P> IndexMut<(usize, usize)> for Matrix<P> {
     fn index_mut(&mut self, (x, y): (usize, usize)) -> &mut P {
         let index = self.index_of(x, y);
         &mut self.as_mut_slice()[index]
     }
 }
 
-impl<P: Pod + fmt::Debug> fmt::Debug for Matrix<P> {
+impl<P: fmt::Debug> fmt::Debug for Matrix<P> {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
         f.debug_struct("Matrix")
             .field("layout", self.inner.layout())
@@ -579,7 +571,7 @@ impl<P: Pod + fmt::Debug> fmt::Debug for Matrix<P> {
     }
 }
 
-impl<P: Pod> fmt::Debug for MatrixReuseError<P> {
+impl<P> fmt::Debug for MatrixReuseError<P> {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
         write!(
             f,
@@ -590,11 +582,7 @@ impl<P: Pod> fmt::Debug for MatrixReuseError<P> {
     }
 }
 
-impl<P, Q> fmt::Debug for MapReuseError<P, Q>
-where
-    P: Pod,
-    Q: Pod,
-{
+impl<P, Q> fmt::Debug for MapReuseError<P, Q> {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
         match self.layout {
             Some(layout) => write!(
