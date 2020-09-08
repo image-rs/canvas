@@ -3,8 +3,6 @@
 // Copyright (c) 2019, 2020 The `image-rs` developers
 use core::{fmt, ops};
 
-use bytemuck::Pod;
-
 use crate::buf::{buf, Buffer, Cog};
 use crate::layout::{Bytes, Coord, Decay, DynLayout, Layout, Mend, SampleSlice, Take, TryMend};
 use crate::{Rec, ReuseError};
@@ -217,10 +215,7 @@ impl<L> Canvas<L> {
 }
 
 /// Canvas methods for layouts based on pod samples.
-impl<L: SampleSlice> Canvas<L>
-where
-    L::Sample: Pod,
-{
+impl<L: SampleSlice> Canvas<L> {
     /// Interpret an existing buffer as a pixel canvas.
     ///
     /// The data already contained within the buffer is not modified so that prior initialization
@@ -535,10 +530,7 @@ impl<B: BufferLike, L: Layout> RawCanvas<B, L> {
 }
 
 /// Methods for layouts that are slices of individual samples.
-impl<B: BufferLike, L: SampleSlice> RawCanvas<B, L>
-where
-    L::Sample: Pod,
-{
+impl<B: BufferLike, L: SampleSlice> RawCanvas<B, L> {
     /// Interpret an existing buffer as a pixel canvas.
     ///
     /// The data already contained within the buffer is not modified so that prior initialization
@@ -675,7 +667,7 @@ impl<Layout: Default> Default for CopyOnGrow<'_, Layout> {
 impl<L> fmt::Debug for Canvas<L>
 where
     L: SampleSlice + fmt::Debug,
-    L::Sample: Pod + fmt::Debug,
+    L::Sample: fmt::Debug,
 {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
         f.debug_struct("Canvas")

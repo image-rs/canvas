@@ -6,8 +6,7 @@ use core::{borrow, cmp, mem, ops};
 use alloc::borrow::ToOwned;
 use alloc::vec::Vec;
 
-use crate::pixel::{MaxAligned, Pixel, MAX_ALIGN};
-use bytemuck::{cast_slice, cast_slice_mut, Pod};
+use crate::pixel::{constants::MAX, MaxAligned, Pixel, MAX_ALIGN};
 
 /// Allocates and manages raw bytes.
 ///
@@ -134,7 +133,8 @@ impl buf {
     where
         T: AsRef<[MaxAligned]> + ?Sized,
     {
-        Self::from_bytes(cast_slice(data.as_ref())).unwrap()
+        let bytes = MAX.cast_bytes(data.as_ref());
+        Self::from_bytes(bytes).unwrap()
     }
 
     /// Wraps an aligned mutable buffer into `buf`.
@@ -144,7 +144,8 @@ impl buf {
     where
         T: AsMut<[MaxAligned]> + ?Sized,
     {
-        Self::from_bytes_mut(cast_slice_mut(data.as_mut())).unwrap()
+        let bytes = MAX.cast_mut_bytes(data.as_mut());
+        Self::from_bytes_mut(bytes).unwrap()
     }
 
     /// Wrap bytes in a `buf`.
@@ -182,24 +183,16 @@ impl buf {
     /// The alignment of `P` is already checked to be smaller than `MAX_ALIGN` through the
     /// constructor of `Pixel`. The slice will have the maximum length possible but may leave
     /// unused bytes in the end.
-    pub fn as_pixels<P>(&self, _: Pixel<P>) -> &[P]
-    where
-        P: Pod,
-    {
-        let (bytes, _) = prefix_slice::<_, P>(self.as_bytes());
-        cast_slice(bytes)
+    pub fn as_pixels<P>(&self, pixel: Pixel<P>) -> &[P] {
+        pixel.cast_buf(self)
     }
 
     /// Reinterpret the buffer mutable for the specific pixel type.
     ///
     /// The alignment of `P` is already checked to be smaller than `MAX_ALIGN` through the
     /// constructor of `Pixel`.
-    pub fn as_mut_pixels<P>(&mut self, _: Pixel<P>) -> &mut [P]
-    where
-        P: Pod,
-    {
-        let (bytes, _) = prefix_slice::<_, P>(self.as_bytes_mut());
-        cast_slice_mut(bytes)
+    pub fn as_mut_pixels<P>(&mut self, pixel: Pixel<P>) -> &mut [P] {
+        pixel.cast_mut_buf(self)
     }
 
     /// Apply a mapping function to some elements.
@@ -223,10 +216,7 @@ impl buf {
         f: impl Fn(P) -> Q,
         p: Pixel<P>,
         q: Pixel<Q>,
-    ) where
-        P: Pod,
-        Q: Pod,
-    {
+    ) {
         // By symmetry, a write sequence that map `src` to `dest` without clobbering any values
         // that need to be read later can be applied in reverse to map `dest` to `src` instead.
         // Indeed, one explicit formulation of the clobber condition is: for all writes, the bytes
@@ -371,14 +361,11 @@ impl buf {
         f: impl Fn(P) -> Q,
         p: Pixel<P>,
         q: Pixel<Q>,
-    ) where
-        P: Pod,
-        Q: Pod,
-    {
+    ) {
         for idx in 0..len {
             let source_idx = idx + src;
             let target_idx = idx + dest;
-            let source = self.as_pixels(p)[source_idx];
+            let source = p.copy_val(&self.as_pixels(p)[source_idx]);
             let target = f(source);
             self.as_mut_pixels(q)[target_idx] = target;
         }
@@ -393,14 +380,11 @@ impl buf {
         f: impl Fn(P) -> Q,
         p: Pixel<P>,
         q: Pixel<Q>,
-    ) where
-        P: Pod,
-        Q: Pod,
-    {
+    ) {
         for idx in (0..len).rev() {
             let source_idx = idx + src;
             let target_idx = idx + dest;
-            let source = self.as_pixels(p)[source_idx];
+            let source = p.copy_val(&self.as_pixels(p)[source_idx]);
             let target = f(source);
             self.as_mut_pixels(q)[target_idx] = target;
         }
@@ -410,15 +394,6 @@ impl buf {
 trait ByteSlice: Sized {
     fn len(&self) -> usize;
     fn split_at(self, at: usize) -> (Self, Self);
-}
-
-fn prefix_slice<B, T>(slice: B) -> (B, B)
-where
-    B: ByteSlice,
-{
-    let size = mem::size_of::<T>();
-    let len = (slice.len() / size) * size;
-    slice.split_at(len)
 }
 
 impl<'a> ByteSlice for &'a [u8] {
