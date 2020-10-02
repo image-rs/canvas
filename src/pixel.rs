@@ -1,6 +1,8 @@
 // Distributed under The MIT License (MIT)
 //
 // Copyright (c) 2019, 2020 The `image-rs` developers
+#![allow(unsafe_code)]
+
 use core::cmp::{Eq, Ord, Ordering, PartialEq, PartialOrd};
 use core::marker::PhantomData;
 use core::{fmt, hash, mem, ptr, slice};
@@ -96,6 +98,8 @@ impl<P: bytemuck::Pod> Pixel<P> {
     }
 }
 
+/// The **only** ways to construct a `buf`, protecting the alignment invariant.
+/// Hint: This is an unsized type so there is no safe way of constructing it.
 impl buf {
     pub const ALIGNMENT: usize = MAX_ALIGN;
 
@@ -104,6 +108,8 @@ impl buf {
     /// The bytes need to be aligned to `ALIGNMENT`.
     pub fn from_bytes(bytes: &[u8]) -> Option<&Self> {
         if bytes.as_ptr() as usize % Self::ALIGNMENT == 0 {
+            // SAFETY: this is an almost trivial cast of unsized references. Additionally, we still
+            // guarantee that this is at least aligned to `MAX_ALIGN`.
             Some(unsafe { &*(bytes as *const [u8] as *const Self) })
         } else {
             None
@@ -115,6 +121,8 @@ impl buf {
     /// The bytes need to be aligned to `ALIGNMENT`.
     pub fn from_bytes_mut(bytes: &mut [u8]) -> Option<&mut Self> {
         if bytes.as_ptr() as usize % Self::ALIGNMENT == 0 {
+            // SAFETY: this is an almost trivial cast of unsized references. Additionally, we still
+            // guarantee that this is at least aligned to `MAX_ALIGN`.
             Some(unsafe { &mut *(bytes as *mut [u8] as *mut Self) })
         } else {
             None

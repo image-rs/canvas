@@ -1,6 +1,6 @@
 // Distributed under The MIT License (MIT)
 //
-// Copyright (c) 2019 The `image-rs` developers
+// Copyright (c) 2019, 2020 The `image-rs` developers
 //! # Matrix
 //!
 //! An image canvas compatible with transmuting its byte content.
@@ -30,6 +30,9 @@
 //! ```
 // Be std for doctests, avoids a weird warning about missing allocator.
 #![cfg_attr(not(doctest), no_std)]
+// The only module allowed to be `unsafe` is `pixel`. We need it however, as we have a custom
+// dynamically sized type with an unsafe alignment invariant.
+#![deny(unsafe_code)]
 extern crate alloc;
 
 mod buf;
