@@ -6,7 +6,7 @@ use core::{borrow, cmp, mem, ops};
 use alloc::borrow::ToOwned;
 use alloc::vec::Vec;
 
-use crate::pixel::{constants::MAX, MaxAligned, Pixel, MAX_ALIGN};
+use crate::pixel::{constants::MAX, MaxAligned, Pixel};
 
 /// Allocates and manages raw bytes.
 ///
@@ -28,6 +28,11 @@ pub(crate) struct Buffer {
 }
 
 /// An aligned slice of memory.
+///
+/// This is a wrapper around a byte slice that additionally requires the slice to be highly
+/// aligned.
+///
+/// See `pixel.rs` for the only constructors.
 #[repr(transparent)]
 #[allow(non_camel_case_types)]
 pub(crate) struct buf([u8]);
@@ -124,8 +129,6 @@ impl Cog<'_> {
 }
 
 impl buf {
-    pub const ALIGNMENT: usize = MAX_ALIGN;
-
     /// Wraps an aligned buffer into `buf`.
     ///
     /// This method will never panic, as the alignment of the data is guaranteed.
@@ -146,28 +149,6 @@ impl buf {
     {
         let bytes = MAX.cast_mut_bytes(data.as_mut());
         Self::from_bytes_mut(bytes).unwrap()
-    }
-
-    /// Wrap bytes in a `buf`.
-    ///
-    /// The bytes need to be aligned to `ALIGNMENT`.
-    pub fn from_bytes(bytes: &[u8]) -> Option<&Self> {
-        if bytes.as_ptr() as usize % Self::ALIGNMENT == 0 {
-            Some(unsafe { &*(bytes as *const [u8] as *const Self) })
-        } else {
-            None
-        }
-    }
-
-    /// Wrap bytes in a `buf`.
-    ///
-    /// The bytes need to be aligned to `ALIGNMENT`.
-    pub fn from_bytes_mut(bytes: &mut [u8]) -> Option<&mut Self> {
-        if bytes.as_ptr() as usize % Self::ALIGNMENT == 0 {
-            Some(unsafe { &mut *(bytes as *mut [u8] as *mut Self) })
-        } else {
-            None
-        }
     }
 
     pub fn as_bytes(&self) -> &[u8] {
