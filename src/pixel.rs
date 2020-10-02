@@ -96,6 +96,32 @@ impl<P: bytemuck::Pod> Pixel<P> {
     }
 }
 
+impl buf {
+    pub const ALIGNMENT: usize = MAX_ALIGN;
+
+    /// Wrap bytes in a `buf`.
+    ///
+    /// The bytes need to be aligned to `ALIGNMENT`.
+    pub fn from_bytes(bytes: &[u8]) -> Option<&Self> {
+        if bytes.as_ptr() as usize % Self::ALIGNMENT == 0 {
+            Some(unsafe { &*(bytes as *const [u8] as *const Self) })
+        } else {
+            None
+        }
+    }
+
+    /// Wrap bytes in a `buf`.
+    ///
+    /// The bytes need to be aligned to `ALIGNMENT`.
+    pub fn from_bytes_mut(bytes: &mut [u8]) -> Option<&mut Self> {
+        if bytes.as_ptr() as usize % Self::ALIGNMENT == 0 {
+            Some(unsafe { &mut *(bytes as *mut [u8] as *mut Self) })
+        } else {
+            None
+        }
+    }
+}
+
 impl<P> Pixel<P> {
     /// Create a witness certifying `P` as a pixel without checks.
     ///
