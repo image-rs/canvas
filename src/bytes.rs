@@ -1,6 +1,6 @@
 //! Byte-based operations on a canvas.
 use crate::canvas::Canvas;
-use crate::layout::Layout;
+use crate::layout::{self, Layout};
 use core::{convert::TryFrom, ops::Range};
 
 /// A simple layout describing some pixels as a byte matrix.
@@ -47,6 +47,7 @@ pub struct ByteCanvasMut<'data> {
 }
 
 impl ByteMatrixSpec {
+    /// Compare sizes without taking into account the offset or strides.
     fn matches(&self, other: &Self) -> bool {
         self.elsize == other.elsize && self.width == other.width && self.height == other.height
     }
@@ -57,6 +58,27 @@ impl ByteMatrixSpec {
 
     fn has_contiguous_cols(&self) -> bool {
         self.elsize == self.h_stride
+    }
+
+    fn element_start(&self, row: u32, col: u32) -> usize {
+        (row as usize * self.h_stride) + (col as usize * self.w_stride) + self.offset
+    }
+
+    fn element(&self, row: u32, col: u32) -> Range<usize> {
+        let start = self.element_start(row, col);
+        start..start + self.elsize
+    }
+
+    fn contiguous_row(&self, row: u32) -> Range<usize> {
+        let start = self.element_start(row, 0);
+        let length = self.width as usize * self.elsize;
+        start..start + length
+    }
+
+    fn contiguous_col(&self, col: u32) -> Range<usize> {
+        let start = self.element_start(0, col);
+        let length = self.height as usize * self.elsize;
+        start..start + length
     }
 }
 
@@ -84,6 +106,35 @@ impl ByteMatrix {
         Some(ByteMatrix { spec, total })
     }
 
+    /// Construct from a packed matrix of elements in column major layout.
+    pub fn with_column_major(matrix: layout::Matrix) -> Option<Self> {
+        Self::new(ByteMatrixSpec {
+            elsize: matrix.element().size(),
+            width: u32::try_from(matrix.width()).ok()?,
+            height: u32::try_from(matrix.height()).ok()?,
+            h_stride: matrix.element().size(),
+            // Overflow can't happen because all of `matrix` fits in memory according to its own
+            // internal invariant.
+            w_stride: matrix.height() * matrix.element().size(),
+            offset: 0,
+        })
+    }
+
+    /// Construct from a packed matrix of elements in row major layout.
+    pub fn with_row_major(matrix: layout::Matrix) -> Option<Self> {
+        Self::new(ByteMatrixSpec {
+            elsize: matrix.element().size(),
+            width: u32::try_from(matrix.width()).ok()?,
+            height: u32::try_from(matrix.height()).ok()?,
+            // Overflow can't happen because all of `matrix` fits in memory according to its own
+            // internal invariant.
+            h_stride: matrix.width() * matrix.element().size(),
+            w_stride: matrix.element().size(),
+            offset: 0,
+        })
+    }
+
+    /// Get the specification of this matrix.
     pub fn spec(&self) -> ByteMatrixSpec {
         self.spec
     }
@@ -92,21 +143,24 @@ impl ByteMatrix {
         self.spec.matches(&other.spec)
     }
 
-    fn contiguous_row(&self, _: u32) -> Option<Range<usize>> {
-        todo!()
+    fn contiguous_rows(&self) -> Option<impl Iterator<Item = Range<usize>> + '_> {
+        if self.spec.has_contiguous_rows() {
+            Some((0..self.spec.height).map(move |row| self.spec.contiguous_row(row)))
+        } else {
+            None
+        }
     }
 
-    fn contiguous_column(&self, _: u32) -> Option<Range<usize>> {
-        todo!()
+    fn contiguous_columns(&self) -> Option<impl Iterator<Item = Range<usize>> + '_> {
+        if self.spec.has_contiguous_cols() {
+            Some((0..self.spec.width).map(move |row| self.spec.contiguous_col(row)))
+        } else {
+            None
+        }
     }
 
     fn pixel(&self, x: u32, y: u32) -> Range<usize> {
-        // We validated that the result is at most `total`..
-        let start = (x as usize * self.spec.w_stride)
-            + (y as usize * self.spec.w_stride)
-            + self.spec.offset;
-        let end = start + self.spec.elsize;
-        start..end
+        self.spec.element(x, y)
     }
 }
 
@@ -141,7 +195,26 @@ impl<'data> ByteCanvasMut<'data> {
     /// The source must have the same width, height, and element size.
     pub fn copy_from_canvas(&mut self, source: ByteCanvasRef<'_>) {
         assert!(self.layout.matches(&source.layout), "Mismatching layouts.");
-        // FIXME: Special case copying for contiguous layouts
+        // FIXME: Special case copying for 100% contiguous layouts.
+
+        if let Some(rows) = self.layout.contiguous_rows() {
+            if let Some(src_rows) = source.layout.contiguous_rows() {
+                for (row, src) in rows.zip(src_rows) {
+                    self.data[row].copy_from_slice(&source.data[src]);
+                }
+                return;
+            }
+        }
+
+        if let Some(cols) = self.layout.contiguous_columns() {
+            if let Some(src_cols) = source.layout.contiguous_columns() {
+                for (col, src) in cols.zip(src_cols) {
+                    self.data[col].copy_from_slice(&source.data[src]);
+                }
+                return;
+            }
+        }
+
         // Panics: we've validated that the widths and heights match.
         for x in 0..self.layout.spec.width {
             for y in 0..self.layout.spec.height {
@@ -185,4 +258,26 @@ impl Rectangular for ByteMatrix {
     fn rectangular(&self) -> ByteMatrix {
         *self
     }
+}
+
+#[test]
+fn canvas_copies() {
+    let matrix = layout::Matrix::from_width_height(layout::Element::from_pixel::<u8>(), 2, 2)
+        .expect("Valid matrix");
+    let row_layout = ByteMatrix::with_row_major(matrix).expect("Valid layout");
+    let col_layout = ByteMatrix::with_column_major(matrix).expect("Valid layout");
+
+    let src = Canvas::with_bytes(row_layout, &[0u8, 1, 2, 3]);
+
+    let mut dst = Canvas::new(row_layout);
+    ByteCanvasMut::new(&mut dst).copy_from_canvas(ByteCanvasRef::new(&src));
+    assert_eq!(dst.as_bytes(), &[0u8, 1, 2, 3], "Still in same order");
+
+    let mut dst = Canvas::new(col_layout);
+    ByteCanvasMut::new(&mut dst).copy_from_canvas(ByteCanvasRef::new(&src));
+    assert_eq!(
+        dst.as_bytes(),
+        &[0u8, 2, 1, 3],
+        "In transposed matrix order"
+    );
 }

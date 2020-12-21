@@ -226,6 +226,10 @@ pub(crate) enum LayoutRepr {
 }
 
 /// A matrix of packed pixels (channel groups).
+///
+/// This is a simple layout of exactly width·height homogeneous pixels. Note that it does not
+/// prescribe any particular order of arrangement of these channels. Indeed, they could be in
+/// column major format, in row major format, ordered according to some space filling curve, etc.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub struct Matrix {
     element: Element,
@@ -242,6 +246,8 @@ pub struct Yuv420p {
 }
 
 /// A typed matrix of packed pixels (channel groups).
+///
+/// This is a strongly-typed equivalent to [`Matrix`]. See it for details.
 #[derive(Debug, PartialEq, Eq, Hash)]
 pub struct TMatrix<P> {
     pixel: Pixel<P>,
@@ -317,6 +323,21 @@ impl Matrix {
         })
     }
 
+    /// Get the element type of this matrix.
+    pub const fn element(&self) -> Element {
+        self.element
+    }
+
+    /// Get the width of this matrix.
+    pub const fn width(&self) -> usize {
+        self.first_dim
+    }
+
+    /// Get the height of this matrix.
+    pub const fn height(&self) -> usize {
+        self.second_dim
+    }
+
     /// Get the required bytes for this layout.
     pub const fn byte_len(self) -> usize {
         // Exactly this does not overflow due to construction.
@@ -328,29 +349,32 @@ impl Matrix {
         self.first_dim * self.second_dim
     }
 
-    pub fn offset(self, coord1: usize, coord2: usize) -> Option<usize> {
-        if self.first_dim >= coord1 || self.second_dim >= coord2 {
-            None
-        } else {
-            Some(self.offset_unchecked(coord1, coord2))
+    /* FIXME: These methods would rely on a particular column/row major layout. Move them somewhere
+     * else or make another matrix type.
+        pub fn offset(self, coord1: usize, coord2: usize) -> Option<usize> {
+            if self.first_dim >= coord1 || self.second_dim >= coord2 {
+                None
+            } else {
+                Some(self.offset_unchecked(coord1, coord2))
+            }
         }
-    }
 
-    pub const fn offset_unchecked(self, coord1: usize, coord2: usize) -> usize {
-        coord1 + coord2 * self.first_dim
-    }
-
-    pub fn byte_offset(self, coord1: usize, coord2: usize) -> Option<usize> {
-        if self.first_dim >= coord1 || self.second_dim >= coord2 {
-            None
-        } else {
-            Some(self.byte_offset_unchecked(coord1, coord2))
+        pub const fn offset_unchecked(self, coord1: usize, coord2: usize) -> usize {
+            coord1 + coord2 * self.first_dim
         }
-    }
 
-    pub const fn byte_offset_unchecked(self, coord1: usize, coord2: usize) -> usize {
-        (coord1 + coord2 * self.first_dim) * self.element.size
-    }
+        pub fn byte_offset(self, coord1: usize, coord2: usize) -> Option<usize> {
+            if self.first_dim >= coord1 || self.second_dim >= coord2 {
+                None
+            } else {
+                Some(self.byte_offset_unchecked(coord1, coord2))
+            }
+        }
+
+        pub const fn byte_offset_unchecked(self, coord1: usize, coord2: usize) -> usize {
+            (coord1 + coord2 * self.first_dim) * self.element.size
+        }
+    */
 }
 
 impl<P> TMatrix<P> {
