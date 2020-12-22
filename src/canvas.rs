@@ -109,6 +109,11 @@ impl<L: Layout> Canvas<L> {
         RawCanvas::<Buffer, L>::new(layout).into()
     }
 
+    /// Create a new canvas with initial content.
+    pub fn with_bytes(layout: L, bytes: &[u8]) -> Self {
+        RawCanvas::with_contents(bytes, layout).into()
+    }
+
     /// Get a reference to those bytes used by the layout.
     pub fn as_bytes(&self) -> &[u8] {
         self.inner.as_bytes()

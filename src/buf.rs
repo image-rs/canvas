@@ -399,6 +399,7 @@ impl<'a> ByteSlice for &'a mut [u8] {
 
 impl From<&'_ [u8]> for Buffer {
     fn from(content: &'_ [u8]) -> Self {
+        // TODO: can this be optimized to avoid initialization before copy?
         let mut buffer = Buffer::new(content.len());
         buffer[..content.len()].copy_from_slice(content);
         buffer

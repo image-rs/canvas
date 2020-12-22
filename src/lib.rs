@@ -36,6 +36,7 @@
 extern crate alloc;
 
 mod buf;
+pub mod bytes;
 mod canvas;
 mod drm;
 pub mod layout;

@@ -90,6 +90,37 @@ impl<P> Rec<P> {
         }
     }
 
+    /// Allocate a buffer with initial contents.
+    ///
+    /// The `Rec` will have a byte capacity that holds exactly as many elements as the slice
+    /// contains. Note that the elements are copied bytewise.
+    ///
+    /// # Panics
+    ///
+    /// This function will panic if the allocation fails.
+    pub fn with_elements(elements: &[P]) -> Self
+    where
+        P: AsPixel,
+    {
+        Self::with_elements_for_pixel(P::pixel(), elements)
+    }
+
+    /// Allocate a buffer with initial contents.
+    ///
+    /// The `Rec` will have a byte capacity that holds exactly as many elements as the slice
+    /// contains. Note that the elements are copied bytewise.
+    ///
+    /// # Panics
+    ///
+    /// This function will panic if the allocation fails.
+    pub fn with_elements_for_pixel(pixel: Pixel<P>, elements: &[P]) -> Self {
+        let src = pixel.cast_bytes(elements);
+        let mut buffer = Rec::from_buffer(Buffer::from(src), pixel);
+        // Will be treated as empty, so adjust to be filled up to count.
+        buffer.length = src.len();
+        buffer
+    }
+
     pub(crate) fn from_buffer(inner: Buffer, pixel: Pixel<P>) -> Self {
         Rec {
             inner,
@@ -350,6 +381,12 @@ impl<P: AsPixel> Default for Rec<P> {
     }
 }
 
+impl<P: AsPixel + Clone> From<&'_ [P]> for Rec<P> {
+    fn from(elements: &'_ [P]) -> Self {
+        Rec::with_elements(elements)
+    }
+}
+
 impl<P: cmp::PartialEq> cmp::PartialEq for Rec<P> {
     fn eq(&self, other: &Self) -> bool {
         self.as_slice().eq(other.as_slice())
@@ -423,5 +460,16 @@ mod tests {
         let buffer = buffer.map(|p| p as u8);
         assert_eq!(buffer.len(), 8);
         assert_eq!(buffer.as_slice(), &[0, 1, 2, 3, 4, 5, 6, 7]);
+    }
+
+    #[test]
+    fn with_elements() {
+        const HELLO_WORLD: &[u8] = b"Hello, World!";
+        let buffer = Rec::with_elements(HELLO_WORLD);
+        assert_eq!(buffer.as_slice(), HELLO_WORLD);
+        assert_eq!(buffer.byte_len(), HELLO_WORLD.len());
+
+        let from_buffer = Rec::from(HELLO_WORLD);
+        assert_eq!(buffer, from_buffer);
     }
 }
