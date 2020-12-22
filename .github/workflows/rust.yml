@@ -8,7 +8,7 @@ jobs:
   build:
     strategy:
       matrix:
-        runson: [ ubuntu-latest ]
+        runson: [ ubuntu-latest, macos-latest, windows-latest ]
         rust: [ stable, nightly ]
     runs-on: ${{ matrix.runson }}
     steps:
