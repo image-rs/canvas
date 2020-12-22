@@ -141,17 +141,17 @@ impl<P> Pixel<P> {
     /// * have an alignment larger than [`MaxAligned`].
     ///
     /// [`MaxAligned`]: struct.MaxAligned.html
-    pub unsafe fn new_unchecked() -> Self {
+    pub const unsafe fn new_unchecked() -> Self {
         Pixel(PhantomData)
     }
 
     /// Proxy of `core::mem::align_of`.
-    pub fn align(self) -> usize {
+    pub const fn align(self) -> usize {
         mem::align_of::<P>()
     }
 
     /// Proxy of `core::mem::size_of`.
-    pub fn size(self) -> usize {
+    pub const fn size(self) -> usize {
         mem::size_of::<P>()
     }
 
@@ -162,6 +162,32 @@ impl<P> Pixel<P> {
     pub fn copy_val(self, val: &P) -> P {
         // SAFETY: by the constructor, this type can be copied byte-by-byte.
         unsafe { ptr::read(val) }
+    }
+
+    /// Reinterpret a slice of aligned bytes as a slice of the pixel.
+    ///
+    /// Note that the size (in bytes) of the slice will be shortened if the size of `P` is not a
+    /// divisor of the input slice's size.
+    pub fn cast_to_slice<'buf>(self, buffer: &'buf [MaxAligned]) -> &'buf [P] {
+        self.cast_buf(buf::new(buffer))
+    }
+
+    /// Reinterpret a slice of aligned bytes as a mutable slice of the pixel.
+    ///
+    /// Note that the size (in bytes) of the slice will be shortened if the size of `P` is not a
+    /// divisor of the input slice's size.
+    pub fn cast_to_mut_slice<'buf>(self, buffer: &'buf mut [MaxAligned]) -> &'buf mut [P] {
+        self.cast_mut_buf(buf::new_mut(buffer))
+    }
+
+    /// Reinterpret a slice of pixels as memory.
+    pub fn cast_to_bytes<'buf>(self, pixel: &'buf [P]) -> &'buf [u8] {
+        self.cast_bytes(pixel)
+    }
+
+    /// Reinterpret a mutable slice of pixels as memory.
+    pub fn cast_to_mut_bytes<'buf>(self, pixel: &'buf mut [P]) -> &'buf mut [u8] {
+        self.cast_mut_bytes(pixel)
     }
 
     pub(crate) fn cast_buf<'buf>(self, buffer: &'buf buf) -> &'buf [P] {
