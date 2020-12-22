@@ -29,6 +29,14 @@ use crate::buf::buf;
 ///   your own interfaces!
 pub struct Pixel<P: ?Sized>(PhantomData<P>);
 
+/// Marker struct to denote that P is transparently wrapped in O.
+///
+/// The only way to construct it is by accessing its associated constant which only exists when the
+/// bound `bytemuck::TransparentWrapper` holds as required. This encodes a type-level set and is
+/// a workaround for such bounds not yet being allowed in `const fn`. Expect this type to be
+/// deprecated sooner or later.
+pub struct IsTransparentWrapper<P, O>(PhantomData<(P, O)>);
+
 /// Describes a type which can represent a `Pixel` and for which this is statically known.
 pub trait AsPixel {
     /// Get the pixel struct for this type.
@@ -98,6 +106,10 @@ impl<P: bytemuck::Pod> Pixel<P> {
     }
 }
 
+impl<P, O: bytemuck::TransparentWrapper<P>> IsTransparentWrapper<P, O> {
+    pub const CONST: Self = IsTransparentWrapper(PhantomData);
+}
+
 /// The **only** ways to construct a `buf`, protecting the alignment invariant.
 /// Hint: This is an unsized type so there is no safe way of constructing it.
 impl buf {
@@ -141,20 +153,87 @@ impl<P> Pixel<P> {
     /// * have an alignment larger than [`MaxAligned`].
     ///
     /// [`MaxAligned`]: struct.MaxAligned.html
-    pub unsafe fn new_unchecked() -> Self {
+    pub const unsafe fn new_unchecked() -> Self {
         Pixel(PhantomData)
     }
 
     /// Proxy of `core::mem::align_of`.
-    pub fn align(self) -> usize {
+    pub const fn align(self) -> usize {
         mem::align_of::<P>()
     }
 
     /// Proxy of `core::mem::size_of`.
-    pub fn size(self) -> usize {
+    pub const fn size(self) -> usize {
         mem::size_of::<P>()
     }
 
+    // A number of constructors that are technically unsafe. Note that we could write them as safe
+    // code here to pad our stats but they are not checked by the type system so it's risky. Better
+    // explain their safety in the code as comments.
+
+    /// Construct a pixel as an array of no elements.
+    pub const fn array0(self) -> Pixel<[P; 0]> {
+        // Safety:
+        // * has no validity/safety invariants
+        // * has the same alignment as P which is not larger then MaxAligned
+        unsafe { Pixel::new_unchecked() }
+    }
+
+    /// Construct a pixel as an array of one element.
+    pub const fn array1(self) -> Pixel<[P; 1]> {
+        // Safety:
+        // * has validity/safety invariants of P, none
+        // * has the same alignment as P which is not larger then MaxAligned
+        unsafe { Pixel::new_unchecked() }
+    }
+
+    /// Construct a pixel as an array of two elements.
+    pub const fn array2(self) -> Pixel<[P; 2]> {
+        // Safety:
+        // * has validity/safety invariants of P, none
+        // * has the same alignment as P which is not larger then MaxAligned
+        unsafe { Pixel::new_unchecked() }
+    }
+
+    /// Construct a pixel as an array of three elements.
+    pub const fn array3(self) -> Pixel<[P; 3]> {
+        // Safety:
+        // * has validity/safety invariants of P, none
+        // * has the same alignment as P which is not larger then MaxAligned
+        unsafe { Pixel::new_unchecked() }
+    }
+
+    /// Construct a pixel as an array of four elements.
+    pub const fn array4(self) -> Pixel<[P; 4]> {
+        // Safety:
+        // * has validity/safety invariants of P, none
+        // * has the same alignment as P which is not larger then MaxAligned
+        unsafe { Pixel::new_unchecked() }
+    }
+
+    /// Construct a pixel by wrapping into a transparent wrapper.
+    ///
+    /// TODO: a constructor for Pixel<O> based on proof of transmutation from &mut P to &mut O,
+    /// based on the standard transmutation RFC. This is more flexible than bytemuck's
+    /// TransparentWrapper trait.
+    pub const fn transparent_wrap<O>(self, _: IsTransparentWrapper<P, O>) -> Pixel<O> {
+        // Safety:
+        // * P and O must have the same invariants, none
+        // * P and O have the same alignment
+        unsafe { Pixel::new_unchecked() }
+    }
+
+    /// Construct a pixel by unwrapping a transparent wrapper.
+    pub const fn transparent_unwrap<O>(self, _: IsTransparentWrapper<O, P>) -> Pixel<O> {
+        // Safety:
+        // * P and O must have the same invariants, none
+        // * P and O have the same alignment
+        unsafe { Pixel::new_unchecked() }
+    }
+}
+
+/// Operations that can be performed based on the evidence of Pixel.
+impl<P> Pixel<P> {
     /// Copy a pixel.
     ///
     /// Note that this does not require `Copy` because that requirement was part of the
@@ -162,6 +241,32 @@ impl<P> Pixel<P> {
     pub fn copy_val(self, val: &P) -> P {
         // SAFETY: by the constructor, this type can be copied byte-by-byte.
         unsafe { ptr::read(val) }
+    }
+
+    /// Reinterpret a slice of aligned bytes as a slice of the pixel.
+    ///
+    /// Note that the size (in bytes) of the slice will be shortened if the size of `P` is not a
+    /// divisor of the input slice's size.
+    pub fn cast_to_slice<'buf>(self, buffer: &'buf [MaxAligned]) -> &'buf [P] {
+        self.cast_buf(buf::new(buffer))
+    }
+
+    /// Reinterpret a slice of aligned bytes as a mutable slice of the pixel.
+    ///
+    /// Note that the size (in bytes) of the slice will be shortened if the size of `P` is not a
+    /// divisor of the input slice's size.
+    pub fn cast_to_mut_slice<'buf>(self, buffer: &'buf mut [MaxAligned]) -> &'buf mut [P] {
+        self.cast_mut_buf(buf::new_mut(buffer))
+    }
+
+    /// Reinterpret a slice of pixels as memory.
+    pub fn cast_to_bytes<'buf>(self, pixel: &'buf [P]) -> &'buf [u8] {
+        self.cast_bytes(pixel)
+    }
+
+    /// Reinterpret a mutable slice of pixels as memory.
+    pub fn cast_to_mut_bytes<'buf>(self, pixel: &'buf mut [P]) -> &'buf mut [u8] {
+        self.cast_mut_bytes(pixel)
     }
 
     pub(crate) fn cast_buf<'buf>(self, buffer: &'buf buf) -> &'buf [P] {
