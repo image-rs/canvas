@@ -29,6 +29,14 @@ use crate::buf::buf;
 ///   your own interfaces!
 pub struct Pixel<P: ?Sized>(PhantomData<P>);
 
+/// Marker struct to denote that P is transparently wrapped in O.
+///
+/// The only way to construct it is by accessing its associated constant which only exists when the
+/// bound `bytemuck::TransparentWrapper` holds as required. This encodes a type-level set and is
+/// a workaround for such bounds not yet being allowed in `const fn`. Expect this type to be
+/// deprecated sooner or later.
+pub struct IsTransparentWrapper<P, O>(PhantomData<(P, O)>);
+
 /// Describes a type which can represent a `Pixel` and for which this is statically known.
 pub trait AsPixel {
     /// Get the pixel struct for this type.
@@ -96,6 +104,10 @@ impl<P: bytemuck::Pod> Pixel<P> {
             None
         }
     }
+}
+
+impl<P, O: bytemuck::TransparentWrapper<P>> IsTransparentWrapper<P, O> {
+    pub const CONST: Self = IsTransparentWrapper(PhantomData);
 }
 
 /// The **only** ways to construct a `buf`, protecting the alignment invariant.
@@ -204,10 +216,7 @@ impl<P> Pixel<P> {
     /// TODO: a constructor for Pixel<O> based on proof of transmutation from &mut P to &mut O,
     /// based on the standard transmutation RFC. This is more flexible than bytemuck's
     /// TransparentWrapper trait.
-    pub fn transparent_wrap<O>(self) -> Pixel<O>
-    where
-        O: bytemuck::TransparentWrapper<P>,
-    {
+    pub const fn transparent_wrap<O>(self, _: IsTransparentWrapper<P, O>) -> Pixel<O> {
         // Safety:
         // * P and O must have the same invariants, none
         // * P and O have the same alignment
@@ -215,10 +224,7 @@ impl<P> Pixel<P> {
     }
 
     /// Construct a pixel by unwrapping a transparent wrapper.
-    pub fn transparent_unwrap<O>(self) -> Pixel<O>
-    where
-        P: bytemuck::TransparentWrapper<O>,
-    {
+    pub const fn transparent_unwrap<O>(self, _: IsTransparentWrapper<O, P>) -> Pixel<O> {
         // Safety:
         // * P and O must have the same invariants, none
         // * P and O have the same alignment

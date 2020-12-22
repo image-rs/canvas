@@ -52,5 +52,6 @@ pub use self::rec::{Rec, ReuseError};
 /// Constants for predefined pixel types.
 pub mod pixels {
     pub use crate::pixel::constants::*;
+    pub use crate::pixel::IsTransparentWrapper;
     pub use crate::pixel::MaxAligned;
 }
