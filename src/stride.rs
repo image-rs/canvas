@@ -1,11 +1,11 @@
-//! Byte-based operations on a canvas.
+//! Byte-based, stride operations on a canvas.
 use crate::canvas::Canvas;
 use crate::layout::{self, Layout};
 use core::{convert::TryFrom, ops::Range};
 
 /// A simple layout describing some pixels as a byte matrix.
 #[derive(Clone, Copy, PartialEq, Eq)]
-pub struct ByteMatrixSpec {
+pub struct StrideSpec {
     /// The number of pixels in width direction.
     pub width: u32,
     /// The number of pixels in height direction.
@@ -25,28 +25,28 @@ pub struct ByteMatrixSpec {
 
 /// A validated layout of a rectangular matrix of pixels, treated as bytes.
 #[derive(Clone, Copy, PartialEq, Eq)]
-pub struct ByteMatrix {
-    spec: ByteMatrixSpec,
+pub struct StrideLayout {
+    spec: StrideSpec,
     /// The total number of bytes, as proof of calculation basically.
     total: usize,
 }
 
 /// An untyped matrix of pixels treated as pure bytes.
-pub struct ByteCanvas {
-    inner: Canvas<ByteMatrix>,
+pub struct Strides {
+    inner: Canvas<StrideLayout>,
 }
 
 pub struct ByteCanvasRef<'data> {
-    layout: ByteMatrix,
+    layout: StrideLayout,
     data: &'data [u8],
 }
 
 pub struct ByteCanvasMut<'data> {
-    layout: ByteMatrix,
+    layout: StrideLayout,
     data: &'data mut [u8],
 }
 
-impl ByteMatrixSpec {
+impl StrideSpec {
     /// Compare sizes without taking into account the offset or strides.
     fn matches(&self, other: &Self) -> bool {
         self.elsize == other.elsize && self.width == other.width && self.height == other.height
@@ -82,8 +82,8 @@ impl ByteMatrixSpec {
     }
 }
 
-impl ByteMatrix {
-    pub fn new(spec: ByteMatrixSpec) -> Option<Self> {
+impl StrideLayout {
+    pub fn new(spec: StrideSpec) -> Option<Self> {
         let relative_past_end = if spec.height > 0 && spec.width > 0 {
             let max_w = usize::try_from(spec.width - 1).ok()?;
             let max_h = usize::try_from(spec.height - 1).ok()?;
@@ -103,12 +103,12 @@ impl ByteMatrix {
         // additions such as calculating free space (?) this would also be required.
         let total = relative_past_end.checked_add(spec.offset)?;
 
-        Some(ByteMatrix { spec, total })
+        Some(StrideLayout { spec, total })
     }
 
     /// Construct from a packed matrix of elements in column major layout.
     pub fn with_column_major(matrix: layout::Matrix) -> Option<Self> {
-        Self::new(ByteMatrixSpec {
+        Self::new(StrideSpec {
             elsize: matrix.element().size(),
             width: u32::try_from(matrix.width()).ok()?,
             height: u32::try_from(matrix.height()).ok()?,
@@ -122,7 +122,7 @@ impl ByteMatrix {
 
     /// Construct from a packed matrix of elements in row major layout.
     pub fn with_row_major(matrix: layout::Matrix) -> Option<Self> {
-        Self::new(ByteMatrixSpec {
+        Self::new(StrideSpec {
             elsize: matrix.element().size(),
             width: u32::try_from(matrix.width()).ok()?,
             height: u32::try_from(matrix.height()).ok()?,
@@ -135,7 +135,7 @@ impl ByteMatrix {
     }
 
     /// Get the specification of this matrix.
-    pub fn spec(&self) -> ByteMatrixSpec {
+    pub fn spec(&self) -> StrideSpec {
         self.spec
     }
 
@@ -164,28 +164,28 @@ impl ByteMatrix {
     }
 }
 
-impl ByteCanvas {
-    pub fn new(inner: Canvas<ByteMatrix>) -> Self {
+impl Strides {
+    pub fn new(inner: Canvas<StrideLayout>) -> Self {
         let layout = inner.layout();
         assert!(
             inner.as_bytes().get(..layout.total).is_some(),
             "Contract violation, canvas smaller than required by layout"
         );
-        ByteCanvas { inner }
+        Strides { inner }
     }
 }
 
 impl<'data> ByteCanvasRef<'data> {
-    pub fn new(canvas: &'data Canvas<impl Rectangular>) -> Self {
-        let layout = canvas.layout().rectangular();
+    pub fn new(canvas: &'data Canvas<impl Strided>) -> Self {
+        let layout = canvas.layout().strided();
         let data = &canvas.as_bytes()[..layout.total];
         ByteCanvasRef { layout, data }
     }
 }
 
 impl<'data> ByteCanvasMut<'data> {
-    pub fn new(canvas: &'data mut Canvas<impl Rectangular>) -> Self {
-        let layout = canvas.layout().rectangular();
+    pub fn new(canvas: &'data mut Canvas<impl Strided>) -> Self {
+        let layout = canvas.layout().strided();
         let data = &mut canvas.as_bytes_mut()[..layout.total];
         ByteCanvasMut { layout, data }
     }
@@ -244,18 +244,18 @@ impl<'data> ByteCanvasMut<'data> {
 }
 
 /// Describes a rectangular matrix of pixels.
-pub trait Rectangular: Layout {
-    fn rectangular(&self) -> ByteMatrix;
+pub trait Strided: Layout {
+    fn strided(&self) -> StrideLayout;
 }
 
-impl Layout for ByteMatrix {
+impl Layout for StrideLayout {
     fn byte_len(&self) -> usize {
         self.total
     }
 }
 
-impl Rectangular for ByteMatrix {
-    fn rectangular(&self) -> ByteMatrix {
+impl Strided for StrideLayout {
+    fn strided(&self) -> StrideLayout {
         *self
     }
 }
@@ -264,8 +264,8 @@ impl Rectangular for ByteMatrix {
 fn canvas_copies() {
     let matrix = layout::Matrix::from_width_height(layout::Element::from_pixel::<u8>(), 2, 2)
         .expect("Valid matrix");
-    let row_layout = ByteMatrix::with_row_major(matrix).expect("Valid layout");
-    let col_layout = ByteMatrix::with_column_major(matrix).expect("Valid layout");
+    let row_layout = StrideLayout::with_row_major(matrix).expect("Valid layout");
+    let col_layout = StrideLayout::with_column_major(matrix).expect("Valid layout");
 
     let src = Canvas::with_bytes(row_layout, &[0u8, 1, 2, 3]);
 

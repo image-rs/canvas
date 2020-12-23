@@ -36,13 +36,13 @@
 extern crate alloc;
 
 mod buf;
-pub mod bytes;
 mod canvas;
 mod drm;
 pub mod layout;
 mod matrix;
 mod pixel;
 mod rec;
+pub mod stride;
 
 pub use self::canvas::Canvas;
 pub use self::matrix::{Layout, Matrix, MatrixReuseError};

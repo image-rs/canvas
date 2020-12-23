@@ -36,13 +36,13 @@ use crate::{layout, AsPixel, Pixel, Rec, ReuseError};
 /// `Vec` become stable this will change).  But one still may want to check the required size
 /// before allocation.
 ///
-/// Firstly, no method will implicitely try to allocate memory and methods that will note the
+/// Firstly, no method will implicitly try to allocate memory and methods that will note the
 /// potential panic from allocation failure.
 ///
 /// Secondly, an instance of [`Layout`] can be constructed in a panic free manner without any
 /// allocation and independently from the `Matrix` instance. By providing it to the `with_layout`
 /// constructor ensures that all potential intermediate failures–except as mentioned before–can be
-/// explicitely handled by the caller. Furthermore, some utility methods allow inspection of the
+/// explicitly handled by the caller. Furthermore, some utility methods allow inspection of the
 /// eventual allocation size before the reservation of memory.
 ///
 /// ## Restrictions
@@ -50,9 +50,9 @@ use crate::{layout, AsPixel, Pixel, Rec, ReuseError};
 /// As previously mentioned, the samples in the internal buffer layout always appear without any
 /// holes. Therefore a fast `crop` operation requires wrapping the abstraction layer provided here
 /// into another layer describing the *accessible image*, independent from the layout of the actual
-/// *pixel data*. This separation of concern–layout vs. acess logic–simplifies the implementation
+/// *pixel data*. This separation of concern–layout versus access logic–simplifies the implementation
 /// and keeps it agnostic of the desired low-cost operations. Consider that other use cases may
-/// require operatios other than `crop` with constant time. Instead of choosing some consistent by
+/// require operations other than `crop` with constant time. Instead of choosing some consistent by
 /// limited set here, the mechanism to achieve it is deferred to an upper layer for further
 /// freedom. Other structs may, in the future, provide other pixel layouts.
 ///
