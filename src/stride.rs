@@ -1,29 +1,34 @@
 //! Byte-based, stride operations on a canvas.
 use crate::canvas::Canvas;
-use crate::layout::{self, Layout};
-use core::{convert::TryFrom, ops::Range};
+use crate::layout::Layout;
+use crate::pixel::AsPixel;
+use crate::{layout, matrix};
+use core::ops::Range;
 
 /// A simple layout describing some pixels as a byte matrix.
 #[derive(Clone, Copy, PartialEq, Eq)]
 pub struct StrideSpec {
     /// The number of pixels in width direction.
-    pub width: u32,
+    pub width: usize,
     /// The number of pixels in height direction.
-    pub height: u32,
+    pub height: usize,
     /// The number of bytes of a single pixel.
     ///
-    /// If this differs from both `w_stride` and `h_stride` the any copy must loop over individual
-    /// pixels. Otherwise, whole rows or columns of contiguous data may be inspected.
-    pub elsize: usize,
+    /// If this differs from both `width_stride` and `height_stride` the any copy must loop over
+    /// individual pixels. Otherwise, whole rows or columns of contiguous data may be inspected.
+    pub element_size: usize,
     /// The number of bytes to go one pixel along the width.
-    pub w_stride: usize,
+    pub width_stride: usize,
     /// The number of bytes to go one pixel along the height.
-    pub h_stride: usize,
+    pub height_stride: usize,
     /// Offset of this matrix from the start.
     pub offset: usize,
 }
 
 /// A validated layout of a rectangular matrix of pixels, treated as bytes.
+///
+/// The invariants are that the whole layout fits into memory, additionally ensuring that all
+/// indices within have proper indices into the byte slice containing the data.
 #[derive(Clone, Copy, PartialEq, Eq)]
 pub struct StrideLayout {
     spec: StrideSpec,
@@ -32,6 +37,10 @@ pub struct StrideLayout {
 }
 
 /// An untyped matrix of pixels treated as pure bytes.
+///
+/// This leverages the invariants of a `StrideLayout` and additionally ensures that the allocated
+/// buffer of the matrix conforms to the requirements of the layout, which would not be strictly
+/// ensured by the `Canvas` wrapper itself.
 pub struct Strides {
     inner: Canvas<StrideLayout>,
 }
@@ -49,35 +58,37 @@ pub struct ByteCanvasMut<'data> {
 impl StrideSpec {
     /// Compare sizes without taking into account the offset or strides.
     fn matches(&self, other: &Self) -> bool {
-        self.elsize == other.elsize && self.width == other.width && self.height == other.height
+        self.element_size == other.element_size
+            && self.width == other.width
+            && self.height == other.height
     }
 
     fn has_contiguous_rows(&self) -> bool {
-        self.elsize == self.w_stride
+        self.element_size == self.width_stride
     }
 
     fn has_contiguous_cols(&self) -> bool {
-        self.elsize == self.h_stride
+        self.element_size == self.height_stride
     }
 
-    fn element_start(&self, row: u32, col: u32) -> usize {
-        (row as usize * self.h_stride) + (col as usize * self.w_stride) + self.offset
+    fn element_start(&self, row: usize, col: usize) -> usize {
+        (row * self.height_stride) + (col * self.width_stride) + self.offset
     }
 
-    fn element(&self, row: u32, col: u32) -> Range<usize> {
+    fn element(&self, row: usize, col: usize) -> Range<usize> {
         let start = self.element_start(row, col);
-        start..start + self.elsize
+        start..start + self.element_size
     }
 
-    fn contiguous_row(&self, row: u32) -> Range<usize> {
+    fn contiguous_row(&self, row: usize) -> Range<usize> {
         let start = self.element_start(row, 0);
-        let length = self.width as usize * self.elsize;
+        let length = self.width * self.element_size;
         start..start + length
     }
 
-    fn contiguous_col(&self, col: u32) -> Range<usize> {
+    fn contiguous_col(&self, col: usize) -> Range<usize> {
         let start = self.element_start(0, col);
-        let length = self.height as usize * self.elsize;
+        let length = self.height * self.element_size;
         start..start + length
     }
 }
@@ -85,13 +96,13 @@ impl StrideSpec {
 impl StrideLayout {
     pub fn new(spec: StrideSpec) -> Option<Self> {
         let relative_past_end = if spec.height > 0 && spec.width > 0 {
-            let max_w = usize::try_from(spec.width - 1).ok()?;
-            let max_h = usize::try_from(spec.height - 1).ok()?;
+            let max_w = spec.width - 1;
+            let max_h = spec.height - 1;
 
-            let max_w_offset = max_w.checked_mul(spec.w_stride)?;
-            let max_h_offset = max_h.checked_mul(spec.h_stride)?;
+            let max_w_offset = max_w.checked_mul(spec.width_stride)?;
+            let max_h_offset = max_h.checked_mul(spec.height_stride)?;
 
-            spec.elsize
+            spec.element_size
                 .checked_add(max_h_offset)?
                 .checked_add(max_w_offset)?
         } else {
@@ -107,31 +118,37 @@ impl StrideLayout {
     }
 
     /// Construct from a packed matrix of elements in column major layout.
-    pub fn with_column_major(matrix: layout::Matrix) -> Option<Self> {
-        Self::new(StrideSpec {
-            elsize: matrix.element().size(),
-            width: u32::try_from(matrix.width()).ok()?,
-            height: u32::try_from(matrix.height()).ok()?,
-            h_stride: matrix.element().size(),
-            // Overflow can't happen because all of `matrix` fits in memory according to its own
-            // internal invariant.
-            w_stride: matrix.height() * matrix.element().size(),
-            offset: 0,
-        })
+    pub fn with_column_major(matrix: layout::Matrix) -> Self {
+        StrideLayout {
+            spec: StrideSpec {
+                element_size: matrix.element().size(),
+                width: matrix.width(),
+                height: matrix.height(),
+                height_stride: matrix.element().size(),
+                // Overflow can't happen because all of `matrix` fits in memory according to its own
+                // internal invariant.
+                width_stride: matrix.height() * matrix.element().size(),
+                offset: 0,
+            },
+            total: matrix.byte_len(),
+        }
     }
 
     /// Construct from a packed matrix of elements in row major layout.
-    pub fn with_row_major(matrix: layout::Matrix) -> Option<Self> {
-        Self::new(StrideSpec {
-            elsize: matrix.element().size(),
-            width: u32::try_from(matrix.width()).ok()?,
-            height: u32::try_from(matrix.height()).ok()?,
-            // Overflow can't happen because all of `matrix` fits in memory according to its own
-            // internal invariant.
-            h_stride: matrix.width() * matrix.element().size(),
-            w_stride: matrix.element().size(),
-            offset: 0,
-        })
+    pub fn with_row_major(matrix: layout::Matrix) -> Self {
+        StrideLayout {
+            spec: StrideSpec {
+                element_size: matrix.element().size(),
+                width: matrix.width(),
+                height: matrix.height(),
+                // Overflow can't happen because all of `matrix` fits in memory according to its own
+                // internal invariant.
+                height_stride: matrix.width() * matrix.element().size(),
+                width_stride: matrix.element().size(),
+                offset: 0,
+            },
+            total: matrix.byte_len(),
+        }
     }
 
     /// Get the specification of this matrix.
@@ -159,7 +176,7 @@ impl StrideLayout {
         }
     }
 
-    fn pixel(&self, x: u32, y: u32) -> Range<usize> {
+    fn pixel(&self, x: usize, y: usize) -> Range<usize> {
         self.spec.element(x, y)
     }
 }
@@ -260,12 +277,24 @@ impl Strided for StrideLayout {
     }
 }
 
+impl<P: AsPixel> Strided for matrix::Layout<P> {
+    fn strided(&self) -> StrideLayout {
+        let matrix = layout::Matrix::from_width_height(
+            layout::Element::from_pixel::<P>(),
+            self.width(),
+            self.height(),
+        );
+        let matrix = matrix.expect("Fits into memory");
+        StrideLayout::with_row_major(matrix)
+    }
+}
+
 #[test]
 fn canvas_copies() {
     let matrix = layout::Matrix::from_width_height(layout::Element::from_pixel::<u8>(), 2, 2)
         .expect("Valid matrix");
-    let row_layout = StrideLayout::with_row_major(matrix).expect("Valid layout");
-    let col_layout = StrideLayout::with_column_major(matrix).expect("Valid layout");
+    let row_layout = StrideLayout::with_row_major(matrix);
+    let col_layout = StrideLayout::with_column_major(matrix);
 
     let src = Canvas::with_bytes(row_layout, &[0u8, 1, 2, 3]);
 
