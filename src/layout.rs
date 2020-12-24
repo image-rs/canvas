@@ -18,8 +18,6 @@ pub struct Element {
     align: usize,
 }
 
-pub use crate::drm::{DrmFormatInfo, FourCC};
-
 /// A descriptor of the layout of image bytes.
 ///
 /// There is no color space and no strict type interpretation here, just some mapping to required

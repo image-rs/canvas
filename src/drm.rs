@@ -1,4 +1,5 @@
-use crate::layout::DynLayout;
+use crate::{layout, stride};
+use core::convert::TryFrom;
 
 /// A direct rendering manager format info.
 ///
@@ -41,6 +42,25 @@ pub struct DrmFormatInfo {
     pub is_yuv: bool,
 }
 
+struct PlaneInfo {
+    /// The 4CC of the whole buffer format.
+    format: FourCC,
+    /// Characters per block of this plane.
+    char_per_block: u8,
+    /// The width of a block in pixels.
+    block_w: u8,
+    /// The height of a block in pixels.
+    block_h: u8,
+    /// The horizontal chroma subsampling factor.
+    hsub: u8,
+    /// The vertical chroma subsampling factor.
+    vsub: u8,
+    /// Does the format embed an alpha component?
+    has_alpha: bool,
+    /// Is it a YUV format?
+    is_yuv: bool,
+}
+
 /// A descriptor for a single frame buffer.
 ///
 /// In Linux, used to request new buffers or reallocation of buffers. Here, we use it similarly as
@@ -74,7 +94,27 @@ pub(crate) struct DrmFramebuffer {
 
 /// A direct rendering manager format info that is supported as a layout.
 pub struct DrmLayout {
+    /// The frame buffer layout, checked for internal consistency.
     pub(crate) info: DrmFramebuffer,
+}
+
+/// The index of a plane in a frame buffer.
+#[repr(u8)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord)]
+pub enum PlaneIdx {
+    First = 1,
+    Second = 2,
+    Third = 3,
+}
+
+/// The layout of one plane of a DRM buffer.
+pub struct PlaneLayout {
+    format: PlaneInfo,
+    pitch: u32,
+    offset: u32,
+    modifier: u64,
+    width: u32,
+    height: u32,
 }
 
 /// An error converting an info into a supported layout.
@@ -109,15 +149,68 @@ impl DrmFormatInfo {
     /// This is a partial function to represent that not all descriptors can be convert to a
     /// possible dynamic layouts. No successful conversion will get removed across SemVer
     /// compatible versions.
-    pub fn into_layout(self, _: u32, _: u32) -> Option<DynLayout> {
+    pub fn into_layout(self, _: u32, _: u32) -> Option<layout::DynLayout> {
         None
     }
+
+    fn plane_width(self, _: u32, _: PlaneIdx) -> Option<u32> {
+        todo!()
+    }
+
+    fn plane_height(self, _: u32, _: PlaneIdx) -> Option<u32> {
+        todo!()
+    }
+}
+
+impl PlaneIdx {
+    const PLANES: [PlaneIdx; 3] = [PlaneIdx::First, PlaneIdx::Second, PlaneIdx::Third];
 }
 
 impl DrmLayout {
     pub fn new(info: &DrmFramebufferCmd) -> Result<Self, BadDrmError> {
-        let info = info.fourcc.info()?;
+        const DEFAULT_ERR: BadDrmError = BadDrmError { _private: () };
+        let format_info = info.fourcc.info()?;
+        usize::try_from(info.width).map_err(|_| DEFAULT_ERR)?;
+        usize::try_from(info.height).map_err(|_| DEFAULT_ERR)?;
+
+        if format_info.num_planes < 1 || format_info.num_planes > 3 {
+            return Err(DEFAULT_ERR);
+        }
+
+        for &plane in &PlaneIdx::PLANES[..usize::from(format_info.num_planes)] {
+            let width = format_info
+                .plane_width(info.width, plane)
+                .ok_or(DEFAULT_ERR)?;
+            let height = format_info
+                .plane_height(info.height, plane)
+                .ok_or(DEFAULT_ERR)?;
+            todo!()
+        }
+
         Err(BadDrmError { _private: () })
+    }
+
+    /// Get the layout of the nth plane of this frame buffer.
+    pub fn plane(&self, _: PlaneIdx) -> Option<PlaneLayout> {
+        todo!()
+    }
+
+    fn width(&self) -> usize {
+        self.info.width as usize
+    }
+
+    fn height(&self) -> usize {
+        self.info.height as usize
+    }
+}
+
+impl PlaneLayout {
+    fn width(&self) -> usize {
+        self.width as usize
+    }
+
+    fn height(&self) -> usize {
+        self.height as usize
     }
 }
 
@@ -172,5 +265,23 @@ impl FourCC {
         };
         info.format = self;
         Ok(info)
+    }
+}
+
+impl layout::Layout for DrmLayout {
+    fn byte_len(&self) -> usize {
+        todo!()
+    }
+}
+
+impl layout::Layout for PlaneLayout {
+    fn byte_len(&self) -> usize {
+        todo!()
+    }
+}
+
+impl stride::Strided for PlaneLayout {
+    fn strided(&self) -> stride::StrideLayout {
+        todo!()
     }
 }
