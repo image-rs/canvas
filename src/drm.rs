@@ -1,5 +1,6 @@
-use crate::{layout, stride};
+use crate::{layout, pixel, stride};
 use core::convert::TryFrom;
+use core::ops::Range;
 
 /// A direct rendering manager format info.
 ///
@@ -89,13 +90,19 @@ pub(crate) struct DrmFramebuffer {
     pub modifier: u64,
     pub width: u32,
     pub height: u32,
+    /// A bit mask for which modifiers are actually to be enabled. All 0 for now.
     pub flags: i32,
 }
 
 /// A direct rendering manager format info that is supported as a layout.
+///
+/// You can't edit this format in-place. This ensures that a bunch of pre-computation are always
+/// fresh. It might be relaxed later when we find a strategy to ensure this through other means.
 pub struct DrmLayout {
     /// The frame buffer layout, checked for internal consistency.
     pub(crate) info: DrmFramebuffer,
+    pub(crate) element: layout::Element,
+    pub(crate) total_len: usize,
 }
 
 /// The index of a plane in a frame buffer.
@@ -120,6 +127,11 @@ pub struct PlaneLayout {
 /// An error converting an info into a supported layout.
 pub struct BadDrmError {
     _private: (),
+}
+
+fn round_up_div(dimension: u32, div: u8) -> u32 {
+    let div = u32::from(div);
+    dimension / div + if dimension % div == 0 { 0 } else { 1 }
 }
 
 /// A 4CC format identifier.
@@ -149,24 +161,48 @@ impl DrmFormatInfo {
     /// This is a partial function to represent that not all descriptors can be convert to a
     /// possible dynamic layouts. No successful conversion will get removed across SemVer
     /// compatible versions.
-    pub fn into_layout(self, _: u32, _: u32) -> Option<layout::DynLayout> {
+    pub fn into_layout(self, width: u32, height: u32) -> Option<layout::DynLayout> {
         None
     }
 
-    fn plane_width(self, _: u32, _: PlaneIdx) -> Option<u32> {
-        todo!()
+    fn plane_width(self, width: u32, idx: PlaneIdx) -> Option<u32> {
+        // If this one of the subsampled yuv planes.
+        let width = if self.is_yuv && idx != PlaneIdx::First {
+            round_up_div(width, self.vsub)
+        } else {
+            width
+        };
+        let idx = idx.to_index();
+        let width = round_up_div(width, self.block_w[idx]);
+        Some(width)
     }
 
-    fn plane_height(self, _: u32, _: PlaneIdx) -> Option<u32> {
-        todo!()
+    fn plane_height(self, height: u32, idx: PlaneIdx) -> Option<u32> {
+        // If this one of the subsampled yuv planes.
+        let height = if self.is_yuv && idx != PlaneIdx::First {
+            round_up_div(height, self.hsub)
+        } else {
+            height
+        };
+        let idx = idx.to_index();
+        let height = round_up_div(height, self.block_h[idx]);
+        Some(height)
     }
 }
 
 impl PlaneIdx {
     const PLANES: [PlaneIdx; 3] = [PlaneIdx::First, PlaneIdx::Second, PlaneIdx::Third];
+    pub fn to_index(self) -> usize {
+        self as usize - 1
+    }
 }
 
 impl DrmLayout {
+    /// Try to construct a layout from a filled request.
+    ///
+    /// Due to limited support we enforce a number of extra conditions:
+    /// * Modifier must be `0`, for all planes.
+    /// * Only YUV can be sub sampled.
     pub fn new(info: &DrmFramebufferCmd) -> Result<Self, BadDrmError> {
         const DEFAULT_ERR: BadDrmError = BadDrmError { _private: () };
         let format_info = info.fourcc.info()?;
@@ -177,34 +213,170 @@ impl DrmLayout {
             return Err(DEFAULT_ERR);
         }
 
-        for &plane in &PlaneIdx::PLANES[..usize::from(format_info.num_planes)] {
+        let element = info.fourcc.block_element().ok_or(DEFAULT_ERR)?;
+
+        let modifier = info.modifier[0];
+        if info.modifier.iter().any(|&m| m != modifier) {
+            // All modifiers must be the same (and as later enforced 0 since we don't support
+            // vendor specific codes at the moment).
+            return Err(DEFAULT_ERR);
+        }
+
+        let mut last_plane_end = 0;
+        let planes = PlaneIdx::PLANES[..usize::from(format_info.num_planes)]
+            .iter()
+            .enumerate();
+
+        for (idx, &plane) in planes {
+            if info.modifier[idx] != 0 {
+                return Err(DEFAULT_ERR);
+            }
+
+            if format_info.char_per_block[idx] == 0 {
+                return Err(DEFAULT_ERR);
+            }
+
+            if format_info.block_w[idx] == 0 {
+                return Err(DEFAULT_ERR);
+            }
+
+            if format_info.block_h[idx] == 0 {
+                return Err(DEFAULT_ERR);
+            }
+
+            if info.offsets[idx] < last_plane_end {
+                // Only planes in order supported.
+                return Err(DEFAULT_ERR);
+            }
+
             let width = format_info
                 .plane_width(info.width, plane)
                 .ok_or(DEFAULT_ERR)?;
             let height = format_info
                 .plane_height(info.height, plane)
                 .ok_or(DEFAULT_ERR)?;
-            todo!()
+
+            let char_per_line = u32::from(format_info.char_per_block[idx])
+                .checked_mul(width)
+                .ok_or(DEFAULT_ERR)?;
+
+            if info.pitches[idx] < char_per_line {
+                return Err(DEFAULT_ERR);
+            }
+
+            let char_for_plane = info.pitches[idx].checked_mul(height).ok_or(DEFAULT_ERR)?;
+
+            last_plane_end = info.offsets[idx]
+                .checked_add(char_for_plane)
+                .ok_or(DEFAULT_ERR)?;
         }
 
-        Err(BadDrmError { _private: () })
+        // Validates that all indices are valid as planes are ordered.
+        let total_len = usize::try_from(last_plane_end).map_err(|_| DEFAULT_ERR)?;
+
+        if !format_info.is_yuv && (format_info.hsub != 1 || format_info.vsub != 1) {
+            // subsampling only supported for yuv.
+            return Err(DEFAULT_ERR);
+        }
+
+        if format_info.hsub > 4 || !format_info.hsub.is_power_of_two() {
+            return Err(DEFAULT_ERR);
+        }
+
+        if format_info.vsub > 4 || !format_info.vsub.is_power_of_two() {
+            return Err(DEFAULT_ERR);
+        }
+
+        let descriptor = DrmFramebuffer {
+            format: format_info,
+            pitches: info.pitches,
+            offsets: info.offsets,
+            modifier,
+            width: info.width,
+            height: info.height,
+            flags: 0,
+        };
+
+        Ok(DrmLayout {
+            info: descriptor,
+            element,
+            total_len,
+        })
+    }
+
+    /// Get the FourCC of this layout.
+    pub fn fourcc(&self) -> FourCC {
+        self.info.format.format
     }
 
     /// Get the layout of the nth plane of this frame buffer.
-    pub fn plane(&self, _: PlaneIdx) -> Option<PlaneLayout> {
-        todo!()
+    pub fn plane(&self, plane_idx: PlaneIdx) -> Option<PlaneLayout> {
+        let idx = plane_idx.to_index();
+
+        if self.info.format.char_per_block[idx] == 0
+            || self.info.format.block_w[idx] == 0
+            || self.info.format.block_h[idx] == 0
+        {
+            // Not a Plane in the sense we're looking for.
+            // TODO: this is not supported (we don't accept it in the constructor) and we might
+            // want to make that distinction clear. Good for now though for forward compatible.
+            return None;
+        }
+
+        Some(PlaneLayout {
+            format: PlaneInfo {
+                format: self.info.format.format,
+                char_per_block: self.info.format.char_per_block[idx],
+                block_w: self.info.format.block_w[idx],
+                block_h: self.info.format.block_h[idx],
+                hsub: self.info.format.hsub,
+                vsub: self.info.format.vsub,
+                has_alpha: self.info.format.has_alpha,
+                is_yuv: self.info.format.is_yuv,
+            },
+            pitch: self.info.pitches[idx],
+            offset: self.info.offsets[idx],
+            modifier: self.info.modifier,
+            width: self
+                .info
+                .format
+                .plane_width(self.info.width, plane_idx)
+                .unwrap(),
+            height: self
+                .info
+                .format
+                .plane_height(self.info.height, plane_idx)
+                .unwrap(),
+        })
     }
 
+    /// The apparent width as a usize, as validated in constructor.
     fn width(&self) -> usize {
         self.info.width as usize
     }
 
+    /// The apparent height as a usize, as validated in constructor.
     fn height(&self) -> usize {
         self.info.height as usize
     }
 }
 
 impl PlaneLayout {
+    /// Get the FourCC of this layout.
+    pub fn fourcc(&self) -> FourCC {
+        self.format.format
+    }
+
+    fn byte_range(&self) -> Range<usize> {
+        let start = self.offset as usize;
+        let len = self.height() * self.pitch as usize;
+        start..start + len
+    }
+
+    fn element(&self) -> layout::Element {
+        todo!()
+    }
+
     fn width(&self) -> usize {
         self.width as usize
     }
@@ -266,22 +438,39 @@ impl FourCC {
         info.format = self;
         Ok(info)
     }
+
+    /// The element describing each block (atomic unit) of the described layout.
+    pub fn block_element(self) -> Option<layout::Element> {
+        Some(match self {
+            FourCC::C8 | FourCC::RGB332 | FourCC::BGR332 => pixel::constants::U8.into(),
+            FourCC::XRGB444 | FourCC::XBGR444 | FourCC::RGBX444 | FourCC::BGRX444 => {
+                pixel::constants::U16.into()
+            }
+            // No element that fits.
+            _ => return None,
+        })
+    }
 }
 
 impl layout::Layout for DrmLayout {
     fn byte_len(&self) -> usize {
-        todo!()
+        self.total_len
     }
 }
 
 impl layout::Layout for PlaneLayout {
     fn byte_len(&self) -> usize {
-        todo!()
+        self.byte_range().end
     }
 }
 
 impl stride::Strided for PlaneLayout {
     fn strided(&self) -> stride::StrideLayout {
-        todo!()
+        let element = self.element();
+        let width = self.width();
+        let height = self.height();
+        let matrix = layout::Matrix::from_width_height(element, width, height)
+            .expect("Fits in memory because the plane does");
+        stride::StrideLayout::with_row_major(matrix)
     }
 }
