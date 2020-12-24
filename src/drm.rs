@@ -101,7 +101,6 @@ pub(crate) struct DrmFramebuffer {
 pub struct DrmLayout {
     /// The frame buffer layout, checked for internal consistency.
     pub(crate) info: DrmFramebuffer,
-    pub(crate) element: layout::Element,
     pub(crate) total_len: usize,
 }
 
@@ -117,9 +116,9 @@ pub enum PlaneIdx {
 /// The layout of one plane of a DRM buffer.
 pub struct PlaneLayout {
     format: PlaneInfo,
+    element: layout::Element,
     pitch: u32,
     offset: u32,
-    modifier: u64,
     width: u32,
     height: u32,
 }
@@ -188,6 +187,79 @@ impl DrmFormatInfo {
         let height = round_up_div(height, self.block_h[idx]);
         Some(height)
     }
+
+    /// The element describing each block (atomic unit) of the described layout.
+    ///
+    /// If plane is outside the number of planes of this format or if the blocks can not be
+    /// described by a single element (e.g. they have extrinsic alignment requirements, their size
+    /// is not divisible by their alignment) then None is returned.
+    pub fn block_element(self, plane: PlaneIdx) -> Option<layout::Element> {
+        if usize::from(self.num_planes) <= plane.to_index() {
+            return None;
+        }
+
+        Some(match self.format {
+            FourCC::C8 | FourCC::RGB332 | FourCC::BGR332 => pixel::constants::U8.into(),
+            FourCC::XRGB444
+            | FourCC::XBGR444
+            | FourCC::RGBX444
+            | FourCC::BGRX444
+            | FourCC::RGB565
+            | FourCC::BGR565
+            | FourCC::ARGB444
+            | FourCC::ABGR444
+            | FourCC::RGBA444
+            | FourCC::BGRA444 => pixel::constants::U16.into(),
+            FourCC::RGB888 | FourCC::BGR888 => pixel::constants::U8.array3().into(),
+            FourCC::XRGB8888
+            | FourCC::XBGR8888
+            | FourCC::RGBX8888
+            | FourCC::BGRX8888
+            | FourCC::ARGB8888
+            | FourCC::ABGR8888
+            | FourCC::RGBA8888
+            | FourCC::BGRA8888 => pixel::constants::U8.array4().into(),
+            FourCC::XRGB2101010
+            | FourCC::XBGR2101010
+            | FourCC::RGBX1010102
+            | FourCC::BGRX1010102
+            | FourCC::ARGB2101010
+            | FourCC::ABGR2101010
+            | FourCC::RGBA1010102
+            | FourCC::BGRA1010102 => pixel::constants::U32.into(),
+            FourCC::XRGB16161616F
+            | FourCC::XBGR16161616F
+            | FourCC::ARGB16161616F
+            | FourCC::ABGR16161616F => pixel::constants::U16.array4().into(),
+            FourCC::YUYV | FourCC::YVYU | FourCC::AYUV => pixel::constants::U8.array4().into(),
+            FourCC::VUY101010 => pixel::constants::U32.into(),
+            FourCC::VUY888 => pixel::constants::U8.array3().into(),
+            // Actually planar formats.
+            FourCC::XRGB888_A8 | FourCC::XBGR888_A8 => {
+                if plane == PlaneIdx::First {
+                    pixel::constants::U8.array4().into()
+                } else {
+                    pixel::constants::U8.into()
+                }
+            }
+            FourCC::RGB888_A8 | FourCC::BGR888_A8 => {
+                if plane == PlaneIdx::First {
+                    pixel::constants::U8.array3().into()
+                } else {
+                    pixel::constants::U8.into()
+                }
+            }
+            FourCC::RGB565_A8 | FourCC::BGR565_A8 => {
+                if plane == PlaneIdx::First {
+                    pixel::constants::U8.array3().into()
+                } else {
+                    pixel::constants::U8.into()
+                }
+            }
+            // No element that fits (or not implemented?).
+            _ => return None,
+        })
+    }
 }
 
 impl PlaneIdx {
@@ -212,8 +284,6 @@ impl DrmLayout {
         if format_info.num_planes < 1 || format_info.num_planes > 3 {
             return Err(DEFAULT_ERR);
         }
-
-        let element = info.fourcc.block_element().ok_or(DEFAULT_ERR)?;
 
         let modifier = info.modifier[0];
         if info.modifier.iter().any(|&m| m != modifier) {
@@ -248,6 +318,8 @@ impl DrmLayout {
                 // Only planes in order supported.
                 return Err(DEFAULT_ERR);
             }
+
+            format_info.block_element(plane).ok_or(DEFAULT_ERR)?;
 
             let width = format_info
                 .plane_width(info.width, plane)
@@ -299,7 +371,6 @@ impl DrmLayout {
 
         Ok(DrmLayout {
             info: descriptor,
-            element,
             total_len,
         })
     }
@@ -334,9 +405,9 @@ impl DrmLayout {
                 has_alpha: self.info.format.has_alpha,
                 is_yuv: self.info.format.is_yuv,
             },
+            element: self.info.format.block_element(plane_idx).unwrap(),
             pitch: self.info.pitches[idx],
             offset: self.info.offsets[idx],
-            modifier: self.info.modifier,
             width: self
                 .info
                 .format
@@ -374,7 +445,7 @@ impl PlaneLayout {
     }
 
     fn element(&self) -> layout::Element {
-        todo!()
+        self.element
     }
 
     fn width(&self) -> usize {
@@ -636,18 +707,6 @@ impl FourCC {
         };
         info.format = self;
         Ok(info)
-    }
-
-    /// The element describing each block (atomic unit) of the described layout.
-    pub fn block_element(self) -> Option<layout::Element> {
-        Some(match self {
-            FourCC::C8 | FourCC::RGB332 | FourCC::BGR332 => pixel::constants::U8.into(),
-            FourCC::XRGB444 | FourCC::XBGR444 | FourCC::RGBX444 | FourCC::BGRX444 => {
-                pixel::constants::U16.into()
-            }
-            // No element that fits.
-            _ => return None,
-        })
     }
 }
 
