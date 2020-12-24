@@ -409,11 +409,113 @@ impl FourCC {
     /// 16 bpp bgrx with 4 bits each.
     pub const BGRX444: Self = FourCC::from(*b"BX12");
 
+    /// 16 bpp argb with 4 bits each.
+    pub const ARGB444: Self = FourCC::from(*b"AR12");
+    /// 16 bpp abgr with 4 bits each.
+    pub const ABGR444: Self = FourCC::from(*b"AB12");
+    /// 16 bpp rgba with 4 bits each.
+    pub const RGBA444: Self = FourCC::from(*b"RA12");
+    /// 16 bpp bgra with 4 bits each.
+    pub const BGRA444: Self = FourCC::from(*b"BA12");
+
+    // TODO 1:5:5:5 formats..?
+
+    /// 16 bpp rgb with 5-6-5 bit.
+    pub const RGB565: Self = FourCC::from(*b"RG16");
+    /// 16 bpp bgr with 5-6-5 bit.
+    pub const BGR565: Self = FourCC::from(*b"BG16");
+
+    /* 24 bpp rgb */
+
+    /// 24 bpp rgb with 8 bits each.
+    pub const RGB888: Self = FourCC::from(*b"RG24");
+    /// 24 bpp bgr with 8 bits each.
+    pub const BGR888: Self = FourCC::from(*b"BG24");
+
+    /* 32 bpp rgb */
+    pub const XRGB8888: Self = FourCC::from(*b"XR24");
+    pub const XBGR8888: Self = FourCC::from(*b"XB24");
+    pub const RGBX8888: Self = FourCC::from(*b"RX24");
+    pub const BGRX8888: Self = FourCC::from(*b"BX24");
+
+    pub const ARGB8888: Self = FourCC::from(*b"AR24");
+    pub const ABGR8888: Self = FourCC::from(*b"AB24");
+    pub const RGBA8888: Self = FourCC::from(*b"RA24");
+    pub const BGRA8888: Self = FourCC::from(*b"BA24");
+
+    pub const XRGB2101010: Self = FourCC::from(*b"XR30");
+    pub const XBGR2101010: Self = FourCC::from(*b"XB30");
+    pub const RGBX1010102: Self = FourCC::from(*b"RX30");
+    pub const BGRX1010102: Self = FourCC::from(*b"BX30");
+
+    pub const ARGB2101010: Self = FourCC::from(*b"AR30");
+    pub const ABGR2101010: Self = FourCC::from(*b"AB30");
+    pub const RGBA1010102: Self = FourCC::from(*b"RA30");
+    pub const BGRA1010102: Self = FourCC::from(*b"BA30");
+
+    /* 64bpp floating point
+     * IEEE 754-2008 binary16 half-precision float
+     * [15:0] sign:exponent:mantissa 1:5:10*
+     */
+
+    /// Half-precision float xrgb
+    pub const XRGB16161616F: Self = FourCC::from(*b"XR4H");
+    /// Half-precision float xbgr
+    pub const XBGR16161616F: Self = FourCC::from(*b"XB4H");
+
+    /// Half-precision float argb
+    pub const ARGB16161616F: Self = FourCC::from(*b"AR4H");
+    /// Half-precision float abgr
+    pub const ABGR16161616F: Self = FourCC::from(*b"AB4H");
+
+    /* YUV (or more accurately digital YCbCr) formats.
+     *
+     * The best resource that briefly explains the layout of where samples come from, how many
+     * there are any how the codes relate to sampling modes is, surprisingly, a Microsoft article:
+     * https://docs.microsoft.com/en-us/windows/win32/medfound/recommended-8-bit-yuv-formats-for-video-rendering
+     */
+
+    /// Packed YUYV (YCbYCr) with 8 bits each.
+    pub const YUYV: Self = FourCC::from(*b"YUYV");
+    /// Packed YVYU (YCrYCb) with 8 bits each.
+    pub const YVYU: Self = FourCC::from(*b"YVYU");
+
+    /// YUV with alpha, 8 bits each.
+    pub const AYUV: Self = FourCC::from(*b"AYUV");
+    /// YUV without alpha, 8 bits each.
+    pub const XYUV888: Self = FourCC::from(*b"XYUV");
+    /// 24-bit VUY, 8 bits each.
+    pub const VUY888: Self = FourCC::from(*b"VU24");
+    /// Packed 32-bit VUY, 10 bits each.
+    pub const VUY101010: Self = FourCC::from(*b"VU30");
+
+    // TODO: a few more YUV formats.
+
+    /* 2 plane formats.
+     * See the non-planar base format for layout.
+     * RGB + A, and Y + CbCr
+     */
+    /// XRGB with 8 bits and padding on first plane, alpha with 8 bits on second.
+    pub const XRGB888_A8: Self = FourCC::from(*b"XRA8");
+    /// XBGR with 8 bits and padding on first plane, alpha with 8 bits on second.
+    pub const XBGR888_A8: Self = FourCC::from(*b"XBA8");
+    /// RGB with 8 bits each on first plane, alpha with 8 bits on second.
+    pub const RGB888_A8: Self = FourCC::from(*b"R8A8");
+    /// BGR with 8 bits each on first plane, alpha with 8 bits on second.
+    pub const BGR888_A8: Self = FourCC::from(*b"B8A8");
+    /// RGB with 5-6-5 bits on first plane, alpha with 8 bits on second.
+    pub const RGB565_A8: Self = FourCC::from(*b"R5A8");
+    /// BGR with 5-6-5 bits on first plane, alpha with 8 bits on second.
+    pub const BGR565_A8: Self = FourCC::from(*b"B5A8");
+
+    // TODO: planar YUV formats, most pressingly NV12 and IMC[1-4]
+
     const fn from(arr: [u8; 4]) -> Self {
-        // FourCC(u32::from_be_bytes(arr)); not yet stable as const-fn
+        // FourCC(u32::from_le_bytes(arr)); not yet stable as const-fn
         FourCC(arr[0] as u32 | (arr[1] as u32) << 8 | (arr[2] as u32) << 16 | (arr[3] as u32) << 24)
     }
 
+    /// Try to convert the format into an info.
     pub fn info(self) -> Result<DrmFormatInfo, BadDrmError> {
         let mut info = match self {
             FourCC::C8 => DrmFormatInfo {
@@ -426,13 +528,110 @@ impl FourCC {
                 char_per_block: [1, 0, 0, 0],
                 ..DrmFormatInfo::PIXEL1_TEMPLATE
             },
-            FourCC::XRGB444 | FourCC::XBGR444 | FourCC::RGBX444 | FourCC::BGRX444 => {
+            FourCC::XRGB444
+            | FourCC::XBGR444
+            | FourCC::RGBX444
+            | FourCC::BGRX444
+            | FourCC::RGB565
+            | FourCC::BGR565 => DrmFormatInfo {
+                num_planes: 1,
+                char_per_block: [2, 0, 0, 0],
+                ..DrmFormatInfo::PIXEL1_TEMPLATE
+            },
+            FourCC::ARGB444 | FourCC::ABGR444 | FourCC::RGBA444 | FourCC::BGRA444 => {
                 DrmFormatInfo {
                     num_planes: 1,
                     char_per_block: [2, 0, 0, 0],
+                    has_alpha: true,
                     ..DrmFormatInfo::PIXEL1_TEMPLATE
                 }
             }
+            FourCC::RGB888 | FourCC::BGR888 => DrmFormatInfo {
+                num_planes: 1,
+                char_per_block: [3, 0, 0, 0],
+                ..DrmFormatInfo::PIXEL1_TEMPLATE
+            },
+            FourCC::XRGB8888
+            | FourCC::XBGR8888
+            | FourCC::RGBX8888
+            | FourCC::BGRX8888
+            | FourCC::XRGB2101010
+            | FourCC::XBGR2101010
+            | FourCC::RGBX1010102
+            | FourCC::BGRX1010102 => DrmFormatInfo {
+                num_planes: 1,
+                char_per_block: [4, 0, 0, 0],
+                ..DrmFormatInfo::PIXEL1_TEMPLATE
+            },
+            FourCC::ARGB8888
+            | FourCC::ABGR8888
+            | FourCC::RGBA8888
+            | FourCC::BGRA8888
+            | FourCC::ARGB2101010
+            | FourCC::ABGR2101010
+            | FourCC::RGBA1010102
+            | FourCC::BGRA1010102 => DrmFormatInfo {
+                num_planes: 1,
+                char_per_block: [4, 0, 0, 0],
+                has_alpha: true,
+                ..DrmFormatInfo::PIXEL1_TEMPLATE
+            },
+            FourCC::XRGB16161616F | FourCC::XBGR16161616F => DrmFormatInfo {
+                num_planes: 1,
+                char_per_block: [8, 0, 0, 0],
+                ..DrmFormatInfo::PIXEL1_TEMPLATE
+            },
+            FourCC::ARGB16161616F | FourCC::ABGR16161616F => DrmFormatInfo {
+                num_planes: 1,
+                char_per_block: [8, 0, 0, 0],
+                has_alpha: true,
+                ..DrmFormatInfo::PIXEL1_TEMPLATE
+            },
+            FourCC::YUYV | FourCC::YVYU => DrmFormatInfo {
+                num_planes: 1,
+                char_per_block: [4, 0, 0, 0],
+                block_w: [2, 0, 0, 0],
+                hsub: 2,
+                is_yuv: true,
+                ..DrmFormatInfo::PIXEL1_TEMPLATE
+            },
+            FourCC::XYUV888 | FourCC::VUY101010 => DrmFormatInfo {
+                num_planes: 1,
+                char_per_block: [4, 0, 0, 0],
+                is_yuv: true,
+                ..DrmFormatInfo::PIXEL1_TEMPLATE
+            },
+            FourCC::AYUV => DrmFormatInfo {
+                num_planes: 1,
+                char_per_block: [4, 0, 0, 0],
+                is_yuv: true,
+                has_alpha: true,
+                ..DrmFormatInfo::PIXEL1_TEMPLATE
+            },
+            FourCC::VUY888 => DrmFormatInfo {
+                num_planes: 1,
+                char_per_block: [3, 0, 0, 0],
+                is_yuv: true,
+                ..DrmFormatInfo::PIXEL1_TEMPLATE
+            },
+            FourCC::XRGB888_A8 | FourCC::XBGR888_A8 => DrmFormatInfo {
+                num_planes: 2,
+                char_per_block: [4, 1, 0, 0],
+                has_alpha: true,
+                ..DrmFormatInfo::PIXEL1_TEMPLATE
+            },
+            FourCC::RGB888_A8 | FourCC::BGR888_A8 => DrmFormatInfo {
+                num_planes: 2,
+                char_per_block: [3, 1, 0, 0],
+                has_alpha: true,
+                ..DrmFormatInfo::PIXEL1_TEMPLATE
+            },
+            FourCC::RGB565_A8 | FourCC::BGR565_A8 => DrmFormatInfo {
+                num_planes: 2,
+                char_per_block: [2, 1, 0, 0],
+                has_alpha: true,
+                ..DrmFormatInfo::PIXEL1_TEMPLATE
+            },
             _ => return Err(BadDrmError { _private: () }),
         };
         info.format = self;
