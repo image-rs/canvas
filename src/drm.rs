@@ -1,5 +1,6 @@
 use crate::{layout, pixel, stride};
 use core::convert::TryFrom;
+use core::fmt;
 use core::ops::Range;
 
 /// A direct rendering manager format info.
@@ -160,8 +161,35 @@ impl DrmFormatInfo {
     /// This is a partial function to represent that not all descriptors can be convert to a
     /// possible dynamic layouts. No successful conversion will get removed across SemVer
     /// compatible versions.
-    pub fn into_layout(self, width: u32, height: u32) -> Option<layout::DynLayout> {
-        None
+    ///
+    /// This only works for formats where all planes can be laid out consecutively in memory.
+    pub fn as_layout(&self, width: u32, height: u32) -> Result<DrmLayout, BadDrmError> {
+        let mut request = DrmFramebufferCmd {
+            width,
+            height,
+            fourcc: self.format,
+            flags: 0,
+            pitches: [0; 4],
+            offsets: [0; 4],
+            modifier: [0; 4],
+        };
+
+        let mut plane_offset = 0;
+
+        let planes = &PlaneIdx::PLANES[..usize::from(self.num_planes)];
+        for (idx, &plane) in planes.iter().enumerate() {
+            let plane_width = self
+                .plane_width(width, plane)
+                .ok_or(BadDrmError::DEFAULT_ERR)?;
+            // This can overflow buy later will be checked more strictly in `DrmLayout::new`.
+            let bytes = u32::from(self.char_per_block[idx]).wrapping_mul(plane_width);
+            request.offsets[idx] = plane_offset;
+            request.pitches[idx] = bytes;
+            // This can overflow buy later will be checked more strictly in `DrmLayout::new`.
+            plane_offset = plane_offset.wrapping_add(bytes);
+        }
+
+        DrmLayout::new(&request)
     }
 
     fn plane_width(self, width: u32, idx: PlaneIdx) -> Option<u32> {
@@ -276,7 +304,7 @@ impl DrmLayout {
     /// * Modifier must be `0`, for all planes.
     /// * Only YUV can be sub sampled.
     pub fn new(info: &DrmFramebufferCmd) -> Result<Self, BadDrmError> {
-        const DEFAULT_ERR: BadDrmError = BadDrmError { _private: () };
+        const DEFAULT_ERR: BadDrmError = BadDrmError::DEFAULT_ERR;
         let format_info = info.fourcc.info()?;
         usize::try_from(info.width).map_err(|_| DEFAULT_ERR)?;
         usize::try_from(info.height).map_err(|_| DEFAULT_ERR)?;
@@ -710,6 +738,10 @@ impl FourCC {
     }
 }
 
+impl BadDrmError {
+    const DEFAULT_ERR: BadDrmError = BadDrmError { _private: () };
+}
+
 impl layout::Layout for DrmLayout {
     fn byte_len(&self) -> usize {
         self.total_len
@@ -731,4 +763,30 @@ impl stride::Strided for PlaneLayout {
             .expect("Fits in memory because the plane does");
         stride::StrideLayout::with_row_major(matrix)
     }
+}
+
+impl fmt::Debug for BadDrmError {
+    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+        f.debug_tuple("BadDrmError")
+            .field(&"unknown error")
+            .finish()
+    }
+}
+
+#[test]
+fn example_layouts() {
+    fn assert_4x4_layout_for(cc: FourCC) {
+        let info = cc.info().expect("Has info for");
+        let layout = info.as_layout(4, 4).expect("Compile to 4x4 layout");
+        assert_eq!(layout.width(), 4);
+        assert_eq!(layout.height(), 4);
+    }
+
+    assert_4x4_layout_for(FourCC::C8);
+    assert_4x4_layout_for(FourCC::RGB332);
+    assert_4x4_layout_for(FourCC::RGB888);
+    assert_4x4_layout_for(FourCC::RGB565);
+    assert_4x4_layout_for(FourCC::YUYV);
+    assert_4x4_layout_for(FourCC::AYUV);
+    assert_4x4_layout_for(FourCC::ARGB16161616F);
 }
