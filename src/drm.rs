@@ -205,7 +205,7 @@ impl DrmFormatInfo {
                 .plane_width(width, plane)
                 .ok_or(BadDrmError::DEFAULT_ERR)?;
             let plane_height = self
-                .plane_width(width, plane)
+                .plane_height(height, plane)
                 .ok_or(BadDrmError::DEFAULT_ERR)?;
             // This can overflow buy later will be checked more strictly in `DrmLayout::new`.
             let line_bytes = u32::from(self.char_per_block[idx]).wrapping_mul(plane_width);
@@ -301,6 +301,28 @@ impl DrmFormatInfo {
                     pixel::constants::U8.into()
                 }
             }
+            FourCC::NV12
+            | FourCC::NV21
+            | FourCC::NV16
+            | FourCC::NV61
+            | FourCC::NV24
+            | FourCC::NV42 => {
+                if plane == PlaneIdx::First {
+                    pixel::constants::U8.into()
+                } else {
+                    pixel::constants::U16.into()
+                }
+            }
+            FourCC::YUV410
+            | FourCC::YVU410
+            | FourCC::YUV411
+            | FourCC::YVU411
+            | FourCC::YUV420
+            | FourCC::YVU420
+            | FourCC::YUV422
+            | FourCC::YVU422
+            | FourCC::YUV444
+            | FourCC::YVU444 => pixel::constants::U8.into(),
             // No element that fits (or not implemented?).
             _ => return None,
         })
@@ -628,7 +650,41 @@ impl FourCC {
     /// BGR with 5-6-5 bits on first plane, alpha with 8 bits on second.
     pub const BGR565_A8: Self = FourCC::from(*b"B5A8");
 
-    // TODO: planar YUV formats, most pressingly NV12 and IMC[1-4]
+    /// Y+CbCr with 8 bits each and 2×2 subsampled on chromatic plane.
+    pub const NV12: Self = FourCC::from(*b"NV12");
+    /// Y+CrCb with 8 bits each and 2×2 subsampled on chromatic plane.
+    pub const NV21: Self = FourCC::from(*b"NV21");
+    /// Y+CbCr with 8 bits each and 2×1 subsampled on chromatic plane.
+    pub const NV16: Self = FourCC::from(*b"NV16");
+    /// Y+CrCb with 8 bits each and 2×1 subsampled on chromatic plane.
+    pub const NV61: Self = FourCC::from(*b"NV61");
+    /// Y+CbCr with 8 bits each and not subsampled on chromatic plane.
+    pub const NV24: Self = FourCC::from(*b"NV24");
+    /// Y+CrCb with 8 bits each and not subsampled on chromatic plane.
+    pub const NV42: Self = FourCC::from(*b"NV42");
+
+    // TODO: formats P???, Q???
+
+    /// Y+Cb+Cr with 8 bits each and 4×4 subsampled on chromatic planes.
+    pub const YUV410: Self = FourCC::from(*b"YUV9");
+    /// Y+Cr+Cb with 8 bits each and 4×4 subsampled on chromatic planes.
+    pub const YVU410: Self = FourCC::from(*b"YVU9");
+    /// Y+Cb+Cr with 8 bits each and 4×1 subsampled on chromatic planes.
+    pub const YUV411: Self = FourCC::from(*b"YU11");
+    /// Y+Cr+Cb with 8 bits each and 4×1 subsampled on chromatic planes.
+    pub const YVU411: Self = FourCC::from(*b"YV11");
+    /// Y+Cb+Cr with 8 bits each and 2×2 subsampled on chromatic planes.
+    pub const YUV420: Self = FourCC::from(*b"YU12");
+    /// Y+Cr+Cb with 8 bits each and 2×2 subsampled on chromatic planes.
+    pub const YVU420: Self = FourCC::from(*b"YV12");
+    /// Y+Cb+Cr with 8 bits each and 2×1 subsampled on chromatic planes.
+    pub const YUV422: Self = FourCC::from(*b"YU16");
+    /// Y+Cr+Cb with 8 bits each and 2×1 subsampled on chromatic planes.
+    pub const YVU422: Self = FourCC::from(*b"YV16");
+    /// Y+Cb+Cr with 8 bits each and not subsampled on chromatic planes.
+    pub const YUV444: Self = FourCC::from(*b"YU24");
+    /// Y+Cr+Cb with 8 bits each and not subsampled on chromatic planes.
+    pub const YVU444: Self = FourCC::from(*b"YV24");
 
     const fn from(arr: [u8; 4]) -> Self {
         // FourCC(u32::from_le_bytes(arr)); not yet stable as const-fn
@@ -752,6 +808,79 @@ impl FourCC {
                 has_alpha: true,
                 ..DrmFormatInfo::PIXEL1_TEMPLATE
             },
+            FourCC::NV12 | FourCC::NV21 => DrmFormatInfo {
+                num_planes: 2,
+                char_per_block: [1, 2, 0, 0],
+                block_w: [1, 2, 0, 0],
+                block_h: [1, 2, 0, 0],
+                vsub: 2,
+                hsub: 2,
+                is_yuv: true,
+                ..DrmFormatInfo::PIXEL1_TEMPLATE
+            },
+            FourCC::NV16 | FourCC::NV61 => DrmFormatInfo {
+                num_planes: 2,
+                char_per_block: [1, 2, 0, 0],
+                block_w: [1, 2, 0, 0],
+                block_h: [1, 1, 0, 0],
+                vsub: 2,
+                is_yuv: true,
+                ..DrmFormatInfo::PIXEL1_TEMPLATE
+            },
+            FourCC::NV24 | FourCC::NV42 => DrmFormatInfo {
+                num_planes: 2,
+                char_per_block: [1, 2, 0, 0],
+                block_w: [1, 1, 0, 0],
+                block_h: [1, 1, 0, 0],
+                is_yuv: true,
+                ..DrmFormatInfo::PIXEL1_TEMPLATE
+            },
+            FourCC::YUV410 | FourCC::YVU410 => DrmFormatInfo {
+                num_planes: 3,
+                char_per_block: [1, 1, 1, 0],
+                block_w: [1, 4, 4, 0],
+                block_h: [1, 4, 4, 0],
+                vsub: 4,
+                hsub: 4,
+                is_yuv: true,
+                ..DrmFormatInfo::PIXEL1_TEMPLATE
+            },
+            FourCC::YUV411 | FourCC::YVU411 => DrmFormatInfo {
+                num_planes: 3,
+                char_per_block: [1, 1, 1, 0],
+                block_w: [1, 4, 4, 0],
+                block_h: [1, 1, 1, 0],
+                vsub: 4,
+                is_yuv: true,
+                ..DrmFormatInfo::PIXEL1_TEMPLATE
+            },
+            FourCC::YUV420 | FourCC::YVU420 => DrmFormatInfo {
+                num_planes: 3,
+                char_per_block: [1, 1, 1, 0],
+                block_w: [1, 2, 2, 0],
+                block_h: [1, 2, 2, 0],
+                vsub: 2,
+                hsub: 2,
+                is_yuv: true,
+                ..DrmFormatInfo::PIXEL1_TEMPLATE
+            },
+            FourCC::YUV422 | FourCC::YVU422 => DrmFormatInfo {
+                num_planes: 3,
+                char_per_block: [1, 1, 1, 0],
+                block_w: [1, 2, 2, 0],
+                block_h: [1, 1, 1, 0],
+                vsub: 2,
+                is_yuv: true,
+                ..DrmFormatInfo::PIXEL1_TEMPLATE
+            },
+            FourCC::YUV444 | FourCC::YVU444 => DrmFormatInfo {
+                num_planes: 3,
+                char_per_block: [1, 1, 1, 0],
+                block_w: [1, 1, 1, 0],
+                block_h: [1, 1, 1, 0],
+                is_yuv: true,
+                ..DrmFormatInfo::PIXEL1_TEMPLATE
+            },
             _ => return Err(BadDrmError::DEFAULT_ERR),
         };
         info.format = self;
@@ -817,10 +946,18 @@ fn example_layouts() {
     assert_4x4_layout_for(FourCC::AYUV);
     assert_4x4_layout_for(FourCC::ARGB16161616F);
     assert_4x4_layout_for(FourCC::RGB565_A8);
+    assert_4x4_layout_for(FourCC::NV12);
+    assert_4x4_layout_for(FourCC::NV16);
+    assert_4x4_layout_for(FourCC::NV24);
+    assert_4x4_layout_for(FourCC::YUV410);
+    assert_4x4_layout_for(FourCC::YUV411);
+    assert_4x4_layout_for(FourCC::YUV420);
+    assert_4x4_layout_for(FourCC::YUV422);
+    assert_4x4_layout_for(FourCC::YUV444);
 }
 
 #[test]
-fn format_planes() {
+fn simple_planes() {
     use stride::Strided;
 
     let info = FourCC::RGB565_A8.info().expect("Has info for");
@@ -835,7 +972,6 @@ fn format_planes() {
     assert_eq!(first.width(), 900);
     assert_eq!(first.height(), 600);
     let first = first.strided().spec();
-
     assert_eq!(first.width, 900);
     assert_eq!(first.height, 600);
     assert_eq!(first.element_size, 2);
@@ -846,4 +982,32 @@ fn format_planes() {
     assert_eq!(second.width, 900);
     assert_eq!(second.height, 600);
     assert_eq!(second.element_size, 1);
+}
+
+#[test]
+fn yuv_planes() {
+    use stride::Strided;
+
+    let info = FourCC::NV12.info().expect("Has info for");
+    let layout = info.as_layout(900, 600).expect("Compile to a small layout");
+    assert_eq!(layout.width(), 900);
+    assert_eq!(layout.height(), 600);
+
+    let first = layout.plane(PlaneIdx::First).unwrap();
+    let second = layout.plane(PlaneIdx::Second).unwrap();
+    assert!(layout.plane(PlaneIdx::Third).is_none());
+
+    assert_eq!(first.width(), 900);
+    assert_eq!(first.height(), 600);
+    let first = first.strided().spec();
+    assert_eq!(first.width, 900);
+    assert_eq!(first.height, 600);
+    assert_eq!(first.element_size, 1);
+
+    assert_eq!(second.width(), 450);
+    assert_eq!(second.height(), 300);
+    let second = second.strided().spec();
+    assert_eq!(second.width, 450);
+    assert_eq!(second.height, 300);
+    assert_eq!(second.element_size, 2);
 }
