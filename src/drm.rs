@@ -124,9 +124,32 @@ pub struct PlaneLayout {
     height: u32,
 }
 
+#[derive(Debug)]
+enum BadDrmKind {
+    Unknown,
+    PlaneCount,
+    InconsistentModifier,
+    IllegalModifier,
+    ZeroBlockSize,
+    ZeroBlockWidth,
+    ZeroBlockHeight,
+    OverlappingPlanes,
+    UndescribableElement,
+    IllegalPlaneWidth,
+    IllegalPlaneHeight,
+    LineSize,
+    IllegalPlanePitch,
+    PlaneSize,
+    PlaneEnd,
+    BufferSize,
+    IllegalSubsampling,
+    IllegalHsub,
+    IllegalVsub,
+}
+
 /// An error converting an info into a supported layout.
 pub struct BadDrmError {
-    _private: (),
+    kind: BadDrmKind,
 }
 
 fn round_up_div(dimension: u32, div: u8) -> u32 {
@@ -181,10 +204,14 @@ impl DrmFormatInfo {
             let plane_width = self
                 .plane_width(width, plane)
                 .ok_or(BadDrmError::DEFAULT_ERR)?;
+            let plane_height = self
+                .plane_width(width, plane)
+                .ok_or(BadDrmError::DEFAULT_ERR)?;
             // This can overflow buy later will be checked more strictly in `DrmLayout::new`.
-            let bytes = u32::from(self.char_per_block[idx]).wrapping_mul(plane_width);
+            let line_bytes = u32::from(self.char_per_block[idx]).wrapping_mul(plane_width);
+            let bytes = line_bytes.wrapping_mul(plane_height);
             request.offsets[idx] = plane_offset;
-            request.pitches[idx] = bytes;
+            request.pitches[idx] = line_bytes;
             // This can overflow buy later will be checked more strictly in `DrmLayout::new`.
             plane_offset = plane_offset.wrapping_add(bytes);
         }
@@ -193,24 +220,14 @@ impl DrmFormatInfo {
     }
 
     fn plane_width(self, width: u32, idx: PlaneIdx) -> Option<u32> {
-        // If this one of the subsampled yuv planes.
-        let width = if self.is_yuv && idx != PlaneIdx::First {
-            round_up_div(width, self.vsub)
-        } else {
-            width
-        };
         let idx = idx.to_index();
+        // If this one of the subsampled yuv planes.
         let width = round_up_div(width, self.block_w[idx]);
         Some(width)
     }
 
     fn plane_height(self, height: u32, idx: PlaneIdx) -> Option<u32> {
         // If this one of the subsampled yuv planes.
-        let height = if self.is_yuv && idx != PlaneIdx::First {
-            round_up_div(height, self.hsub)
-        } else {
-            height
-        };
         let idx = idx.to_index();
         let height = round_up_div(height, self.block_h[idx]);
         Some(height)
@@ -279,7 +296,7 @@ impl DrmFormatInfo {
             }
             FourCC::RGB565_A8 | FourCC::BGR565_A8 => {
                 if plane == PlaneIdx::First {
-                    pixel::constants::U8.array3().into()
+                    pixel::constants::U16.into()
                 } else {
                     pixel::constants::U8.into()
                 }
@@ -310,14 +327,14 @@ impl DrmLayout {
         usize::try_from(info.height).map_err(|_| DEFAULT_ERR)?;
 
         if format_info.num_planes < 1 || format_info.num_planes > 3 {
-            return Err(DEFAULT_ERR);
+            return Err(BadDrmKind::PlaneCount.into());
         }
 
         let modifier = info.modifier[0];
         if info.modifier.iter().any(|&m| m != modifier) {
             // All modifiers must be the same (and as later enforced 0 since we don't support
             // vendor specific codes at the moment).
-            return Err(DEFAULT_ERR);
+            return Err(BadDrmKind::InconsistentModifier.into());
         }
 
         let mut last_plane_end = 0;
@@ -327,64 +344,68 @@ impl DrmLayout {
 
         for (idx, &plane) in planes {
             if info.modifier[idx] != 0 {
-                return Err(DEFAULT_ERR);
+                return Err(BadDrmKind::IllegalModifier.into());
             }
 
             if format_info.char_per_block[idx] == 0 {
-                return Err(DEFAULT_ERR);
+                return Err(BadDrmKind::ZeroBlockSize.into());
             }
 
             if format_info.block_w[idx] == 0 {
-                return Err(DEFAULT_ERR);
+                return Err(BadDrmKind::ZeroBlockWidth.into());
             }
 
             if format_info.block_h[idx] == 0 {
-                return Err(DEFAULT_ERR);
+                return Err(BadDrmKind::ZeroBlockHeight.into());
             }
 
             if info.offsets[idx] < last_plane_end {
                 // Only planes in order supported.
-                return Err(DEFAULT_ERR);
+                return Err(BadDrmKind::OverlappingPlanes.into());
             }
 
-            format_info.block_element(plane).ok_or(DEFAULT_ERR)?;
+            format_info
+                .block_element(plane)
+                .ok_or(BadDrmKind::UndescribableElement)?;
 
             let width = format_info
                 .plane_width(info.width, plane)
-                .ok_or(DEFAULT_ERR)?;
+                .ok_or(BadDrmKind::IllegalPlaneWidth)?;
             let height = format_info
                 .plane_height(info.height, plane)
-                .ok_or(DEFAULT_ERR)?;
+                .ok_or(BadDrmKind::IllegalPlaneHeight)?;
 
             let char_per_line = u32::from(format_info.char_per_block[idx])
                 .checked_mul(width)
-                .ok_or(DEFAULT_ERR)?;
+                .ok_or(BadDrmKind::LineSize)?;
 
             if info.pitches[idx] < char_per_line {
-                return Err(DEFAULT_ERR);
+                return Err(BadDrmKind::IllegalPlanePitch.into());
             }
 
-            let char_for_plane = info.pitches[idx].checked_mul(height).ok_or(DEFAULT_ERR)?;
+            let char_for_plane = info.pitches[idx]
+                .checked_mul(height)
+                .ok_or(BadDrmKind::PlaneSize)?;
 
             last_plane_end = info.offsets[idx]
                 .checked_add(char_for_plane)
-                .ok_or(DEFAULT_ERR)?;
+                .ok_or(BadDrmKind::PlaneEnd)?;
         }
 
         // Validates that all indices are valid as planes are ordered.
-        let total_len = usize::try_from(last_plane_end).map_err(|_| DEFAULT_ERR)?;
+        let total_len = usize::try_from(last_plane_end).map_err(|_| BadDrmKind::BufferSize)?;
 
         if !format_info.is_yuv && (format_info.hsub != 1 || format_info.vsub != 1) {
             // subsampling only supported for yuv.
-            return Err(DEFAULT_ERR);
+            return Err(BadDrmKind::IllegalSubsampling.into());
         }
 
         if format_info.hsub > 4 || !format_info.hsub.is_power_of_two() {
-            return Err(DEFAULT_ERR);
+            return Err(BadDrmKind::IllegalHsub.into());
         }
 
         if format_info.vsub > 4 || !format_info.vsub.is_power_of_two() {
-            return Err(DEFAULT_ERR);
+            return Err(BadDrmKind::IllegalVsub.into());
         }
 
         let descriptor = DrmFramebuffer {
@@ -731,7 +752,7 @@ impl FourCC {
                 has_alpha: true,
                 ..DrmFormatInfo::PIXEL1_TEMPLATE
             },
-            _ => return Err(BadDrmError { _private: () }),
+            _ => return Err(BadDrmError::DEFAULT_ERR),
         };
         info.format = self;
         Ok(info)
@@ -739,7 +760,15 @@ impl FourCC {
 }
 
 impl BadDrmError {
-    const DEFAULT_ERR: BadDrmError = BadDrmError { _private: () };
+    const DEFAULT_ERR: BadDrmError = BadDrmError {
+        kind: BadDrmKind::Unknown,
+    };
+}
+
+impl From<BadDrmKind> for BadDrmError {
+    fn from(kind: BadDrmKind) -> Self {
+        BadDrmError { kind }
+    }
 }
 
 impl layout::Layout for DrmLayout {
@@ -767,9 +796,7 @@ impl stride::Strided for PlaneLayout {
 
 impl fmt::Debug for BadDrmError {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
-        f.debug_tuple("BadDrmError")
-            .field(&"unknown error")
-            .finish()
+        f.debug_tuple("BadDrmError").field(&self.kind).finish()
     }
 }
 
@@ -789,4 +816,34 @@ fn example_layouts() {
     assert_4x4_layout_for(FourCC::YUYV);
     assert_4x4_layout_for(FourCC::AYUV);
     assert_4x4_layout_for(FourCC::ARGB16161616F);
+    assert_4x4_layout_for(FourCC::RGB565_A8);
+}
+
+#[test]
+fn format_planes() {
+    use stride::Strided;
+
+    let info = FourCC::RGB565_A8.info().expect("Has info for");
+    let layout = info.as_layout(900, 600).expect("Compile to a small layout");
+    assert_eq!(layout.width(), 900);
+    assert_eq!(layout.height(), 600);
+
+    let first = layout.plane(PlaneIdx::First).unwrap();
+    let second = layout.plane(PlaneIdx::Second).unwrap();
+    assert!(layout.plane(PlaneIdx::Third).is_none());
+
+    assert_eq!(first.width(), 900);
+    assert_eq!(first.height(), 600);
+    let first = first.strided().spec();
+
+    assert_eq!(first.width, 900);
+    assert_eq!(first.height, 600);
+    assert_eq!(first.element_size, 2);
+
+    assert_eq!(second.width(), 900);
+    assert_eq!(second.height(), 600);
+    let second = second.strided().spec();
+    assert_eq!(second.width, 900);
+    assert_eq!(second.height, 600);
+    assert_eq!(second.element_size, 1);
 }
