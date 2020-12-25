@@ -1,5 +1,7 @@
 //! A module for different pixel layouts.
+use crate::pixel::MaxAligned;
 use crate::{AsPixel, Pixel};
+use core::alloc;
 
 /// A byte layout that only describes the user bytes.
 ///
@@ -17,8 +19,6 @@ pub struct Element {
     size: usize,
     align: usize,
 }
-
-pub use crate::drm::{DrmFormatInfo, FourCC};
 
 /// A descriptor of the layout of image bytes.
 ///
@@ -273,6 +273,7 @@ impl Bytes {
 }
 
 impl Element {
+    /// Construct an element from a self-evident pixel.
     pub fn from_pixel<P: AsPixel>() -> Self {
         let pix = P::pixel();
         Element {
@@ -281,10 +282,32 @@ impl Element {
         }
     }
 
+    /// Create an element for a fictional type with specific layout.
+    ///
+    /// It's up to the caller to define or use an actual type with that same layout later. This
+    /// skips the check that such a type must not contain any padding and only performs the layout
+    /// related checks.
+    pub fn with_layout(layout: alloc::Layout) -> Option<Self> {
+        if layout.align() > MaxAligned::pixel().align() {
+            return None;
+        }
+
+        if layout.size() % layout.align() != 0 {
+            return None;
+        }
+
+        Some(Element {
+            size: layout.size(),
+            align: layout.align(),
+        })
+    }
+
+    /// Get the size of the element.
     pub const fn size(self) -> usize {
         self.size
     }
 
+    /// Get the minimum required alignment of the element.
     pub const fn align(self) -> usize {
         self.size
     }
@@ -502,6 +525,7 @@ impl<P> TryMend<Matrix> for Pixel<P> {
     }
 }
 
+/// Convert a pixel to an element, discarding the exact type information.
 impl<P> From<Pixel<P>> for Element {
     fn from(pix: Pixel<P>) -> Self {
         Element {
