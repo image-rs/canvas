@@ -16,7 +16,7 @@ pub struct StrideSpec {
     ///
     /// If this differs from both `width_stride` and `height_stride` the any copy must loop over
     /// individual pixels. Otherwise, whole rows or columns of contiguous data may be inspected.
-    pub element_size: usize,
+    pub element: layout::Element,
     /// The number of bytes to go one pixel along the width.
     pub width_stride: usize,
     /// The number of bytes to go one pixel along the height.
@@ -58,17 +58,17 @@ pub struct ByteCanvasMut<'data> {
 impl StrideSpec {
     /// Compare sizes without taking into account the offset or strides.
     fn matches(&self, other: &Self) -> bool {
-        self.element_size == other.element_size
+        self.element.size() == other.element.size()
             && self.width == other.width
             && self.height == other.height
     }
 
     fn has_contiguous_rows(&self) -> bool {
-        self.element_size == self.width_stride
+        self.element.size() == self.width_stride
     }
 
     fn has_contiguous_cols(&self) -> bool {
-        self.element_size == self.height_stride
+        self.element.size() == self.height_stride
     }
 
     fn element_start(&self, row: usize, col: usize) -> usize {
@@ -77,24 +77,36 @@ impl StrideSpec {
 
     fn element(&self, row: usize, col: usize) -> Range<usize> {
         let start = self.element_start(row, col);
-        start..start + self.element_size
+        start..start + self.element.size()
     }
 
     fn contiguous_row(&self, row: usize) -> Range<usize> {
         let start = self.element_start(row, 0);
-        let length = self.width * self.element_size;
+        let length = self.width * self.element.size();
         start..start + length
     }
 
     fn contiguous_col(&self, col: usize) -> Range<usize> {
         let start = self.element_start(0, col);
-        let length = self.height * self.element_size;
+        let length = self.height * self.element.size();
         start..start + length
     }
 }
 
 impl StrideLayout {
     pub fn new(spec: StrideSpec) -> Option<Self> {
+        if spec.offset % spec.element.align() != 0 {
+            return None;
+        }
+
+        if spec.width_stride % spec.element.align() != 0 {
+            return None;
+        }
+
+        if spec.height_stride % spec.element.align() != 0 {
+            return None;
+        }
+
         let relative_past_end = if spec.height > 0 && spec.width > 0 {
             let max_w = spec.width - 1;
             let max_h = spec.height - 1;
@@ -102,7 +114,8 @@ impl StrideLayout {
             let max_w_offset = max_w.checked_mul(spec.width_stride)?;
             let max_h_offset = max_h.checked_mul(spec.height_stride)?;
 
-            spec.element_size
+            spec.element
+                .size()
                 .checked_add(max_h_offset)?
                 .checked_add(max_w_offset)?
         } else {
@@ -121,7 +134,7 @@ impl StrideLayout {
     pub fn with_column_major(matrix: layout::Matrix) -> Self {
         StrideLayout {
             spec: StrideSpec {
-                element_size: matrix.element().size(),
+                element: matrix.element(),
                 width: matrix.width(),
                 height: matrix.height(),
                 height_stride: matrix.element().size(),
@@ -138,7 +151,7 @@ impl StrideLayout {
     pub fn with_row_major(matrix: layout::Matrix) -> Self {
         StrideLayout {
             spec: StrideSpec {
-                element_size: matrix.element().size(),
+                element: matrix.element(),
                 width: matrix.width(),
                 height: matrix.height(),
                 // Overflow can't happen because all of `matrix` fits in memory according to its own
@@ -287,6 +300,25 @@ impl<P: AsPixel> Strided for matrix::Layout<P> {
         let matrix = matrix.expect("Fits into memory");
         StrideLayout::with_row_major(matrix)
     }
+}
+
+#[test]
+fn align_validation() {
+    // Setup a good base specification.
+    let matrix = layout::Matrix::from_width_height(layout::Element::from_pixel::<u16>(), 2, 2)
+        .expect("Valid matrix");
+    let layout = StrideLayout::with_row_major(matrix);
+
+    let bad_offset = StrideSpec {
+        offset: 1,
+        ..layout.spec
+    };
+    assert!(StrideLayout::new(bad_offset).is_none());
+    let bad_pitch = StrideSpec {
+        width_stride: 5,
+        ..layout.spec
+    };
+    assert!(StrideLayout::new(bad_pitch).is_none());
 }
 
 #[test]

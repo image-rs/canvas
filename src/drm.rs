@@ -310,7 +310,7 @@ impl DrmFormatInfo {
                 if plane == PlaneIdx::First {
                     pixel::constants::U8.into()
                 } else {
-                    pixel::constants::U16.into()
+                    pixel::constants::U8.array2().into()
                 }
             }
             FourCC::YUV410
@@ -974,14 +974,14 @@ fn simple_planes() {
     let first = first.strided().spec();
     assert_eq!(first.width, 900);
     assert_eq!(first.height, 600);
-    assert_eq!(first.element_size, 2);
+    assert_eq!(first.element.size(), 2);
 
     assert_eq!(second.width(), 900);
     assert_eq!(second.height(), 600);
     let second = second.strided().spec();
     assert_eq!(second.width, 900);
     assert_eq!(second.height, 600);
-    assert_eq!(second.element_size, 1);
+    assert_eq!(second.element.size(), 1);
 }
 
 #[test]
@@ -1002,12 +1002,12 @@ fn yuv_planes() {
     let first = first.strided().spec();
     assert_eq!(first.width, 900);
     assert_eq!(first.height, 600);
-    assert_eq!(first.element_size, 1);
+    assert_eq!(first.element.size(), 1);
 
     assert_eq!(second.width(), 450);
     assert_eq!(second.height(), 300);
     let second = second.strided().spec();
     assert_eq!(second.width, 450);
     assert_eq!(second.height, 300);
-    assert_eq!(second.element_size, 2);
+    assert_eq!(second.element.size(), 2);
 }
