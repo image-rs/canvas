@@ -45,6 +45,19 @@ pub struct Strides {
     inner: Canvas<StrideLayout>,
 }
 
+#[derive(Debug)]
+pub struct BadStrideError {
+    kind: BadStrideKind,
+}
+
+#[derive(Debug)]
+enum BadStrideKind {
+    UnalignedOffset,
+    UnalignedWidthStride,
+    UnalignedHeightStride,
+    OutOfMemory,
+}
+
 pub struct ByteCanvasRef<'data> {
     layout: StrideLayout,
     data: &'data [u8],
@@ -91,46 +104,60 @@ impl StrideSpec {
         let length = self.height * self.element.size();
         start..start + length
     }
-}
 
-impl StrideLayout {
-    pub fn new(spec: StrideSpec) -> Option<Self> {
-        if spec.offset % spec.element.align() != 0 {
-            return None;
+    fn end(&self) -> Option<usize> {
+        if self.height == 0 || self.width == 0 {
+            return Some(self.offset);
         }
 
-        if spec.width_stride % spec.element.align() != 0 {
-            return None;
-        }
+        let max_w = self.width - 1;
+        let max_h = self.height - 1;
 
-        if spec.height_stride % spec.element.align() != 0 {
-            return None;
-        }
+        let max_w_offset = max_w.checked_mul(self.width_stride)?;
+        let max_h_offset = max_h.checked_mul(self.height_stride)?;
 
-        let relative_past_end = if spec.height > 0 && spec.width > 0 {
-            let max_w = spec.width - 1;
-            let max_h = spec.height - 1;
-
-            let max_w_offset = max_w.checked_mul(spec.width_stride)?;
-            let max_h_offset = max_h.checked_mul(spec.height_stride)?;
-
-            spec.element
-                .size()
-                .checked_add(max_h_offset)?
-                .checked_add(max_w_offset)?
-        } else {
-            0
-        };
+        let relative_past_end = self
+            .element
+            .size()
+            .checked_add(max_h_offset)?
+            .checked_add(max_w_offset)?;
 
         // We wouldn't need to validated if there are no elements. However, this is basically the
         // caller's responsibility. It's more consistent if we keep the offset. For future
         // additions such as calculating free space (?) this would also be required.
-        let total = relative_past_end.checked_add(spec.offset)?;
+        let total = relative_past_end.checked_add(self.offset)?;
+        Some(total)
+    }
+}
 
-        Some(StrideLayout { spec, total })
+impl StrideLayout {
+    /// Try to create a new layout from a specification.
+    ///
+    /// This fails if the specification does not describe a valid layout. The reasons for this
+    /// include the element being misaligned according to the provided offsets/strides or the
+    /// layout not describing a memory size expressible on the current architecture.
+    pub fn new(spec: StrideSpec) -> Result<Self, BadStrideError> {
+        if spec.offset % spec.element.align() != 0 {
+            return Err(BadStrideKind::UnalignedOffset.into());
+        }
+
+        if spec.width_stride % spec.element.align() != 0 {
+            return Err(BadStrideKind::UnalignedWidthStride.into());
+        }
+
+        if spec.height_stride % spec.element.align() != 0 {
+            return Err(BadStrideKind::UnalignedHeightStride.into());
+        }
+
+        let total = spec.end().ok_or(BadStrideKind::OutOfMemory)?;
+
+        Ok(StrideLayout { spec, total })
     }
 
     /// Construct from a packed matrix of elements in column major layout.
+    ///
+    /// This is guaranteed to succeed and will construct the strides such that a packed column
+    /// major matrix of elements at offset zero is described.
     pub fn with_column_major(matrix: layout::Matrix) -> Self {
         StrideLayout {
             spec: StrideSpec {
@@ -148,6 +175,9 @@ impl StrideLayout {
     }
 
     /// Construct from a packed matrix of elements in row major layout.
+    ///
+    /// This is guaranteed to succeed and will construct the strides such that a packed row major
+    /// matrix of elements at offset zero is described.
     pub fn with_row_major(matrix: layout::Matrix) -> Self {
         StrideLayout {
             spec: StrideSpec {
@@ -302,6 +332,12 @@ impl<P: AsPixel> Strided for matrix::Layout<P> {
     }
 }
 
+impl From<BadStrideKind> for BadStrideError {
+    fn from(kind: BadStrideKind) -> Self {
+        BadStrideError { kind }
+    }
+}
+
 #[test]
 fn align_validation() {
     // Setup a good base specification.
@@ -313,12 +349,12 @@ fn align_validation() {
         offset: 1,
         ..layout.spec
     };
-    assert!(StrideLayout::new(bad_offset).is_none());
+    assert!(StrideLayout::new(bad_offset).is_err());
     let bad_pitch = StrideSpec {
         width_stride: 5,
         ..layout.spec
     };
-    assert!(StrideLayout::new(bad_pitch).is_none());
+    assert!(StrideLayout::new(bad_pitch).is_err());
 }
 
 #[test]
