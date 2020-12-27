@@ -1,4 +1,18 @@
 //! Byte-based, stride operations on a canvas.
+//!
+//! This is the most general, uniform source of pixel data. The design allows pixels to alias each
+//! other even for mutable operations. The result is always as if performing pixel wise operations
+//! row-for-row and column-by-column, except where otherwise noted.
+//!
+//! The container type `Strides` is a simple wrapper around a `Canvas` that ensures that the
+//! backing buffer corresponds to the layout and offers additional operations that are only valid
+//! for the stride layout. Note that it ensures more strictly that the buffer is accurately sized
+//! as the raw methods for editing the layout are not exposed. It can always be converted to its
+//! general matrix form (by `From`) for such modifications but then the constructor is fallible.
+//!
+//! In comparison, the reference types do not have an interface for conversion to a borrowed
+//! canvas. They internally contain a simple byte slice which allows viewing any source buffer as a
+//! strided matrix even when it was not allocated with the special allocator.
 use crate::canvas::Canvas;
 use crate::layout::Layout;
 use crate::pixel::AsPixel;
@@ -199,6 +213,13 @@ impl StrideLayout {
         self.spec
     }
 
+    /// Shrink the element's size or alignment.
+    ///
+    /// This is always valid since the new layout is strictly contained within the old one.
+    pub fn shrink_element(&mut self, new: layout::Element) {
+        self.spec.element = self.spec.element.infimum(new);
+    }
+
     fn matches(&self, other: &Self) -> bool {
         self.spec.matches(&other.spec)
     }
@@ -225,7 +246,16 @@ impl StrideLayout {
 }
 
 impl Strides {
-    pub fn new(inner: Canvas<StrideLayout>) -> Self {
+    /// Create a matrix with a specific layout.
+    pub fn new(layout: StrideLayout) -> Self {
+        Self::with_canvas(Canvas::new(layout))
+    }
+
+    /// Construct from a canvas.
+    ///
+    /// This will assert that the bytes reserved by the canvas correspond to the layout. This
+    /// should already be the case but `Canvas` does not require it.
+    pub fn with_canvas(inner: Canvas<StrideLayout>) -> Self {
         let layout = inner.layout();
         assert!(
             inner.as_bytes().get(..layout.total).is_some(),
@@ -233,21 +263,78 @@ impl Strides {
         );
         Strides { inner }
     }
+
+    /// Shrink the element's size or alignment.
+    ///
+    /// This operation never reallocates the buffer.
+    pub fn shrink_element(&mut self, new: layout::Element) {
+        self.inner.layout_mut_unguarded().shrink_element(new)
+    }
+
+    /// Borrow this as a reference to an immutable byte matrix.
+    pub fn as_ref(&self) -> ByteCanvasRef<'_> {
+        ByteCanvasRef {
+            layout: *self.inner.layout(),
+            data: self.inner.as_bytes(),
+        }
+    }
+
+    /// Borrow this as a reference to a mutable byte matrix.
+    pub fn as_mut(&mut self) -> ByteCanvasMut<'_> {
+        ByteCanvasMut {
+            layout: *self.inner.layout(),
+            data: self.inner.as_bytes_mut(),
+        }
+    }
+}
+
+/// Unwrap the inner matrix.
+///
+/// This drops the strong assertion that the matrix buffer corresponds to the correct layout but
+/// allows reuse for a potentially unrelated layout.
+impl From<Strides> for Canvas<StrideLayout> {
+    fn from(strides: Strides) -> Canvas<StrideLayout> {
+        strides.inner
+    }
 }
 
 impl<'data> ByteCanvasRef<'data> {
+    /// Construct a reference to a strided canvas buffer.
     pub fn new(canvas: &'data Canvas<impl Strided>) -> Self {
         let layout = canvas.layout().strided();
         let data = &canvas.as_bytes()[..layout.total];
         ByteCanvasRef { layout, data }
     }
+
+    /// Shrink the element's size or alignment.
+    ///
+    /// This operation never reallocates the buffer.
+    pub fn shrink_element(&mut self, new: layout::Element) {
+        self.layout.shrink_element(new)
+    }
+
+    /// Borrow this as a reference to a strided byte matrix.
+    pub fn as_ref(&self) -> ByteCanvasRef<'_> {
+        ByteCanvasRef {
+            layout: self.layout,
+            data: &*self.data,
+        }
+    }
 }
 
 impl<'data> ByteCanvasMut<'data> {
+    /// Construct a mutable reference to a strided canvas buffer.
     pub fn new(canvas: &'data mut Canvas<impl Strided>) -> Self {
         let layout = canvas.layout().strided();
         let data = &mut canvas.as_bytes_mut()[..layout.total];
         ByteCanvasMut { layout, data }
+    }
+
+    /// Shrink the element's size or alignment.
+    ///
+    /// This operation never reallocates the buffer.
+    pub fn shrink_element(&mut self, new: layout::Element) {
+        self.layout.shrink_element(new)
     }
 
     /// Copy the bytes from another canvas.

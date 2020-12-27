@@ -302,6 +302,17 @@ impl Element {
         })
     }
 
+    /// Create an element having the smaller of both sizes and alignments.
+    #[must_use = "This does not modify `self`."]
+    pub fn infimum(self, other: Self) -> Element {
+        // We still have size divisible by align. Whatever the smaller of both, it's divisible by
+        // its align and thus also by the min of both alignments.
+        Element {
+            size: self.size.min(other.size),
+            align: self.align.min(other.align),
+        }
+    }
+
     /// Get the size of the element.
     pub const fn size(self) -> usize {
         self.size

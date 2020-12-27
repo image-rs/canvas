@@ -66,7 +66,7 @@ struct PlaneInfo {
 /// A descriptor for a single frame buffer.
 ///
 /// In Linux, used to request new buffers or reallocation of buffers. Here, we use it similarly as
-/// the builder type to fallibly construct a `DrmFramebuffer`, a complete layout descriptor for one
+/// the builder type to fallibly construct a `DrmLayout`, a complete layout descriptor for one
 /// sized image.
 ///
 /// See: the Linux kernel header `drm/drm_mode.h`.
@@ -83,8 +83,9 @@ pub struct DrmFramebufferCmd {
 
 /// The filled-in info about a frame buffer.
 ///
-/// This is equivalent to `drm_framebuffer`, minus the kernel internal stuff.
-pub(crate) struct DrmFramebuffer {
+/// This is equivalent to `drm_framebuffer`, minus the kernel internal stuff. This does not own any
+/// image data of its own, it's just an internally validated descriptor.
+pub(crate) struct DrmFramebufferInfo {
     pub format: DrmFormatInfo,
     pub pitches: [u32; 4],
     pub offsets: [u32; 4],
@@ -101,7 +102,7 @@ pub(crate) struct DrmFramebuffer {
 /// fresh. It might be relaxed later when we find a strategy to ensure this through other means.
 pub struct DrmLayout {
     /// The frame buffer layout, checked for internal consistency.
-    pub(crate) info: DrmFramebuffer,
+    pub(crate) info: DrmFramebufferInfo,
     pub(crate) total_len: usize,
 }
 
@@ -430,7 +431,7 @@ impl DrmLayout {
             return Err(BadDrmKind::IllegalVsub.into());
         }
 
-        let descriptor = DrmFramebuffer {
+        let descriptor = DrmFramebufferInfo {
             format: format_info,
             pitches: info.pitches,
             offsets: info.offsets,
@@ -493,12 +494,12 @@ impl DrmLayout {
     }
 
     /// The apparent width as a usize, as validated in constructor.
-    fn width(&self) -> usize {
+    pub fn width(&self) -> usize {
         self.info.width as usize
     }
 
     /// The apparent height as a usize, as validated in constructor.
-    fn height(&self) -> usize {
+    pub fn height(&self) -> usize {
         self.info.height as usize
     }
 }

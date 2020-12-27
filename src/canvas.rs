@@ -124,6 +124,19 @@ impl<L: Layout> Canvas<L> {
         self.inner.as_bytes_mut()
     }
 
+    /// If necessary, reallocate the buffer to fit the layout.
+    ///
+    /// Call this method after having mutated a layout with [`layout_mut_unguarded`] whenever you
+    /// are not sure that the layout did not grow. This will ensure the contract that the internal
+    /// buffer is large enough for the layout.
+    ///
+    /// # Panics
+    ///
+    /// This method panics when the allocation of the new buffer fails.
+    pub fn ensure_layout(&mut self) {
+        self.inner.mutate_layout(|_| ());
+    }
+
     /// Decay into a canvas with less specific layout.
     ///
     /// See the [`Decay`] trait for an explanation of this operation.
