@@ -1,7 +1,8 @@
 //! A module for different pixel layouts.
 use crate::pixel::MaxAligned;
 use crate::{AsPixel, Pixel};
-use core::alloc;
+use ::alloc::boxed::Box;
+use core::{alloc, cmp};
 
 /// A byte layout that only describes the user bytes.
 ///
@@ -13,8 +14,14 @@ pub struct Bytes(pub usize);
 /// Describes the byte layout of an element, untyped.
 ///
 /// This is not so different from `Pixel` and `Layout` but is a combination of both. It has the
-/// same invariants on alignment as the former which being untyped like the latter.
-#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)]
+/// same invariants on alignment as the former which being untyped like the latter. The alignment
+/// of an element must be at most that of [`MaxAligned`] and the size must be a multiple of its
+/// alignment.
+///
+/// This type is a lower semi lattice. That is, given two elements the type formed by taking the
+/// minimum of size and alignment individually will always form another valid element. This
+/// operation is implemented in the [`infimum`] method.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Ord, Hash)]
 pub struct Element {
     size: usize,
     align: usize,
@@ -282,6 +289,17 @@ impl Element {
         }
     }
 
+    /// An element with maximum size and no alignment requirements.
+    ///
+    /// This constructor is mainly useful for the purpose of using it as a modifier. When used with
+    /// [`infimum`] it will only shrink the alignment and keep the size unchanged.
+    pub const MAX_SIZE: Self = {
+        Element {
+            size: isize::MAX as usize,
+            align: 1,
+        }
+    };
+
     /// Create an element for a fictional type with specific layout.
     ///
     /// It's up to the caller to define or use an actual type with that same layout later. This
@@ -300,6 +318,38 @@ impl Element {
             size: layout.size(),
             align: layout.align(),
         })
+    }
+
+    /// Convert this into a type layout.
+    ///
+    /// This can never fail as `Element` refines the standard library layout type.
+    pub fn layout(self) -> alloc::Layout {
+        alloc::Layout::from_size_align(self.size, self.align).expect("Valid layout")
+    }
+
+    /// Reduce the alignment of the element.
+    ///
+    /// This will perform the same modification as `repr(packed)` on the element's type.
+    ///
+    /// # Panics
+    ///
+    /// This method panics if `align` is not a valid alignment.
+    #[must_use = "This does not modify `self`."]
+    pub fn packed(self, align: usize) -> Element {
+        assert!(align.is_power_of_two());
+        let align = self.align.min(align);
+        Element { align, ..self }
+    }
+
+    /// Create an element having the smaller of both sizes and alignments.
+    #[must_use = "This does not modify `self`."]
+    pub fn infimum(self, other: Self) -> Element {
+        // We still have size divisible by align. Whatever the smaller of both, it's divisible by
+        // its align and thus also by the min of both alignments.
+        Element {
+            size: self.size.min(other.size),
+            align: self.align.min(other.align),
+        }
     }
 
     /// Get the size of the element.
@@ -531,6 +581,54 @@ impl<P> From<Pixel<P>> for Element {
         Element {
             size: pix.size(),
             align: pix.align(),
+        }
+    }
+}
+
+impl<L: Layout + ?Sized> Layout for Box<L> {
+    fn byte_len(&self) -> usize {
+        (**self).byte_len()
+    }
+}
+
+impl<L: Layout> Decay<L> for Box<L> {
+    fn decay(from: L) -> Box<L> {
+        Box::new(from)
+    }
+}
+
+/// The partial order of elements is defined by comparing size and alignment.
+///
+/// This turns it into a semi-lattice structure, with infimum implementing the meet operation. For
+/// example, the following comparison all hold:
+///
+/// ```
+/// # use canvas::pixels::{U8, U16};
+/// # use canvas::layout::Element;
+/// let u8 = Element::from(U8);
+/// let u8x2 = Element::from(U8.array2());
+/// let u8x3 = Element::from(U8.array3());
+/// let u16 = Element::from(U16);
+///
+/// assert!(u8 < u16, "due to size and alignment");
+/// assert!(u8x2 < u16, "due to its alignment");
+/// assert!(!(u8x3 < u16) && !(u16 < u8x3), "not comparable");
+///
+/// let meet = u8x3.infimum(u16);
+/// assert!(meet <= u8x3);
+/// assert!(meet <= u16);
+/// assert!(meet == u16.packed(1), "We know it precisely here {:?}", meet);
+/// ```
+impl cmp::PartialOrd for Element {
+    fn partial_cmp(&self, other: &Self) -> Option<cmp::Ordering> {
+        if self.size == other.size && self.align == other.align {
+            Some(cmp::Ordering::Equal)
+        } else if self.size <= other.size && self.align <= other.align {
+            Some(cmp::Ordering::Less)
+        } else if self.size >= other.size && self.align >= other.align {
+            Some(cmp::Ordering::Greater)
+        } else {
+            None
         }
     }
 }

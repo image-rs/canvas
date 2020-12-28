@@ -1,3 +1,18 @@
+//! The Linux Direct Rendering Manager layouts.
+//!
+//! Note that while extensive this implementation does not try to be exhaustive. It does by far not
+//! support all format codes and buffer layouts. In particular it makes no attempt at device
+//! specific formats and layouts that have stricter alignment requirements than those given by its
+//! basic channel types.
+//!
+//! The support here is multi-tiered. The module recognized a common set of four character codes.
+//! For most of those it maps to an accompanying info structure [`DrmFormatInfo`] that contains
+//! some basic information on the format's layout. One can try to manually create a descriptor for
+//! such a layout with [`DrmFramebufferCmd`] which may be accepted as supported. For a (almost
+//! complete) subset of codes this can be created automatically from just a width and height of the
+//! pixel matrix. Then some of those formats map cleanly to planes of color information that can be
+//! viewed as a matrix with strides, which finally enables useful operations such as
+//! initialization.
 use crate::{layout, pixel, stride};
 use core::convert::TryFrom;
 use core::fmt;
@@ -66,25 +81,37 @@ struct PlaneInfo {
 /// A descriptor for a single frame buffer.
 ///
 /// In Linux, used to request new buffers or reallocation of buffers. Here, we use it similarly as
-/// the builder type to fallibly construct a `DrmFramebuffer`, a complete layout descriptor for one
+/// the builder type to fallibly construct a `DrmLayout`, a complete layout descriptor for one
 /// sized image.
 ///
 /// See: the Linux kernel header `drm/drm_mode.h`.
 #[derive(Clone, Copy, Debug, Hash)]
 pub struct DrmFramebufferCmd {
+    /// The requested width of the buffer in pixels.
     pub width: u32,
+    /// The requested height of the buffer in pixels.
     pub height: u32,
+    /// The requested format and layout.
     pub fourcc: FourCC,
+    /// Additional flags. This field is reserved and must be 0.
     pub flags: i32,
+    /// The pitches (or the line stride) of each plane.
+    /// This must be filled with proper values and the pitch must be aligned according to the block
+    /// element. (Use the format codes' `block_element` method to retrieve one block's layout).
     pub pitches: [u32; 4],
+    /// Offsets of the different planes.
+    /// This must be filled with strictly increasing offsets such that no two planes overlap in
+    /// memory.
     pub offsets: [u32; 4],
+    /// Modifiers for each plane. This field is reserved and must be 0.
     pub modifier: [u64; 4],
 }
 
 /// The filled-in info about a frame buffer.
 ///
-/// This is equivalent to `drm_framebuffer`, minus the kernel internal stuff.
-pub(crate) struct DrmFramebuffer {
+/// This is equivalent to `drm_framebuffer`, minus the kernel internal stuff. This does not own any
+/// image data of its own, it's just an internally validated descriptor.
+pub(crate) struct DrmFramebufferInfo {
     pub format: DrmFormatInfo,
     pub pitches: [u32; 4],
     pub offsets: [u32; 4],
@@ -101,7 +128,7 @@ pub(crate) struct DrmFramebuffer {
 /// fresh. It might be relaxed later when we find a strategy to ensure this through other means.
 pub struct DrmLayout {
     /// The frame buffer layout, checked for internal consistency.
-    pub(crate) info: DrmFramebuffer,
+    pub(crate) info: DrmFramebufferInfo,
     pub(crate) total_len: usize,
 }
 
@@ -238,6 +265,10 @@ impl DrmFormatInfo {
     /// If plane is outside the number of planes of this format or if the blocks can not be
     /// described by a single element (e.g. they have extrinsic alignment requirements, their size
     /// is not divisible by their alignment) then None is returned.
+    ///
+    /// Blocks that contain multiple same sized channels in separate bytes are represented arrays
+    /// of that channel type. In contrast, blocks that hold channels as bitfields are represented
+    /// using a large integer, which comes with additional alignment requirements.
     pub fn block_element(self, plane: PlaneIdx) -> Option<layout::Element> {
         if usize::from(self.num_planes) <= plane.to_index() {
             return None;
@@ -310,7 +341,7 @@ impl DrmFormatInfo {
                 if plane == PlaneIdx::First {
                     pixel::constants::U8.into()
                 } else {
-                    pixel::constants::U16.into()
+                    pixel::constants::U8.array2().into()
                 }
             }
             FourCC::YUV410
@@ -331,6 +362,7 @@ impl DrmFormatInfo {
 
 impl PlaneIdx {
     const PLANES: [PlaneIdx; 3] = [PlaneIdx::First, PlaneIdx::Second, PlaneIdx::Third];
+    /// Convert into an index that can be used in array or slice indexing.
     pub fn to_index(self) -> usize {
         self as usize - 1
     }
@@ -430,7 +462,7 @@ impl DrmLayout {
             return Err(BadDrmKind::IllegalVsub.into());
         }
 
-        let descriptor = DrmFramebuffer {
+        let descriptor = DrmFramebufferInfo {
             format: format_info,
             pitches: info.pitches,
             offsets: info.offsets,
@@ -492,13 +524,13 @@ impl DrmLayout {
         })
     }
 
-    /// The apparent width as a usize, as validated in constructor.
-    fn width(&self) -> usize {
+    /// The apparent width as a usize, as validated in the constructor.
+    pub fn width(&self) -> usize {
         self.info.width as usize
     }
 
-    /// The apparent height as a usize, as validated in constructor.
-    fn height(&self) -> usize {
+    /// The apparent height as a usize, as validated in the constructor.
+    pub fn height(&self) -> usize {
         self.info.height as usize
     }
 }
@@ -974,14 +1006,14 @@ fn simple_planes() {
     let first = first.strided().spec();
     assert_eq!(first.width, 900);
     assert_eq!(first.height, 600);
-    assert_eq!(first.element_size, 2);
+    assert_eq!(first.element.size(), 2);
 
     assert_eq!(second.width(), 900);
     assert_eq!(second.height(), 600);
     let second = second.strided().spec();
     assert_eq!(second.width, 900);
     assert_eq!(second.height, 600);
-    assert_eq!(second.element_size, 1);
+    assert_eq!(second.element.size(), 1);
 }
 
 #[test]
@@ -1002,12 +1034,12 @@ fn yuv_planes() {
     let first = first.strided().spec();
     assert_eq!(first.width, 900);
     assert_eq!(first.height, 600);
-    assert_eq!(first.element_size, 1);
+    assert_eq!(first.element.size(), 1);
 
     assert_eq!(second.width(), 450);
     assert_eq!(second.height(), 300);
     let second = second.strided().spec();
     assert_eq!(second.width, 450);
     assert_eq!(second.height, 300);
-    assert_eq!(second.element_size, 2);
+    assert_eq!(second.element.size(), 2);
 }

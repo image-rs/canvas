@@ -172,6 +172,7 @@ impl buf {
     ///
     /// The alignment of `P` is already checked to be smaller than `MAX_ALIGN` through the
     /// constructor of `Pixel`.
+    // FIXME: decide to use naming scheme of `as_bytes_mut` or `as_mut_slice`.
     pub fn as_mut_pixels<P>(&mut self, pixel: Pixel<P>) -> &mut [P] {
         pixel.cast_mut_buf(self)
     }
