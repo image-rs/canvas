@@ -1,6 +1,7 @@
 //! A module for different pixel layouts.
 use crate::pixel::MaxAligned;
 use crate::{AsPixel, Pixel};
+use ::alloc::boxed::Box;
 use core::{alloc, cmp};
 
 /// A byte layout that only describes the user bytes.
@@ -581,6 +582,18 @@ impl<P> From<Pixel<P>> for Element {
             size: pix.size(),
             align: pix.align(),
         }
+    }
+}
+
+impl<L: Layout + ?Sized> Layout for Box<L> {
+    fn byte_len(&self) -> usize {
+        (**self).byte_len()
+    }
+}
+
+impl<L: Layout> Decay<L> for Box<L> {
+    fn decay(from: L) -> Box<L> {
+        Box::new(from)
     }
 }
 
