@@ -5,7 +5,7 @@ use core::{fmt, ops};
 
 use crate::buf::{buf, Buffer, Cog};
 use crate::layout::{Bytes, Coord, Decay, DynLayout, Layout, Mend, SampleSlice, Take, TryMend};
-use crate::{Rec, ReuseError};
+use crate::{Pixel, Rec, ReuseError};
 
 /// A owned canvas, parameterized over the layout.
 ///
@@ -218,6 +218,22 @@ impl<L> Canvas<L> {
         self.inner.as_capacity_bytes_mut()
     }
 
+    /// View this buffer as a slice of pixels.
+    ///
+    /// This reinterprets the bytes of the buffer. It can be used to view the buffer as any kind of
+    /// pixel, regardless of its association with the layout. Use it with care.
+    pub fn as_pixels<P>(&self, pixel: Pixel<P>) -> &[P] {
+        self.inner.buffer.as_pixels(pixel)
+    }
+
+    /// View this buffer as a slice of pixels.
+    ///
+    /// This reinterprets the bytes of the buffer. It can be used to view the buffer as any kind of
+    /// pixel, regardless of its association with the layout. Use it with care.
+    pub fn as_mut_pixels<P>(&mut self, pixel: Pixel<P>) -> &mut [P] {
+        self.inner.buffer.as_mut_pixels(pixel)
+    }
+
     /// Get a reference to the layout.
     pub fn layout(&self) -> &L {
         self.inner.layout()
@@ -229,6 +245,22 @@ impl<L> Canvas<L> {
     /// unsoundness but might lead to panics when calling other methods.
     pub fn layout_mut_unguarded(&mut self) -> &mut L {
         self.inner.layout_mut_unguarded()
+    }
+
+    /// Get a view of this canvas.
+    pub fn as_ref(&self) -> View<'_, L>
+    where
+        L: Clone,
+    {
+        self.inner.borrow().into()
+    }
+
+    /// Get a mutable view of this canvas.
+    pub fn as_mut(&mut self) -> ViewMut<'_, L>
+    where
+        L: Clone,
+    {
+        self.inner.borrow_mut().into()
     }
 }
 
@@ -419,6 +451,17 @@ impl<B: BufferLike, L> RawCanvas<B, L> {
     }
 
     /// Borrow the buffer with the same layout.
+    pub(crate) fn borrow(&self) -> RawCanvas<&'_ buf, L>
+    where
+        L: Clone,
+    {
+        RawCanvas {
+            buffer: &self.buffer,
+            layout: self.layout.clone(),
+        }
+    }
+
+    /// Borrow the buffer mutably with the same layout.
     pub(crate) fn borrow_mut(&mut self) -> RawCanvas<&'_ mut buf, L>
     where
         B: BufferMut,
@@ -599,6 +642,18 @@ impl<B: BufferLike, L: SampleSlice> RawCanvas<B, L> {
 impl<L> From<RawCanvas<Buffer, L>> for Canvas<L> {
     fn from(canvas: RawCanvas<Buffer, L>) -> Self {
         Canvas { inner: canvas }
+    }
+}
+
+impl<'lt, L> From<RawCanvas<&'lt buf, L>> for View<'lt, L> {
+    fn from(canvas: RawCanvas<&'lt buf, L>) -> Self {
+        View { inner: canvas }
+    }
+}
+
+impl<'lt, L> From<RawCanvas<&'lt mut buf, L>> for ViewMut<'lt, L> {
+    fn from(canvas: RawCanvas<&'lt mut buf, L>) -> Self {
+        ViewMut { inner: canvas }
     }
 }
 
