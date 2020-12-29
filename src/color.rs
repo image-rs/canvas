@@ -83,37 +83,170 @@ pub enum ColorSpace {
     Ncs,
 }
 
-pub struct Input<'buf> {
-    inner: InputKind<'buf>,
+/// Next, define the various input kinds we support. The concern is the data layout, not the color
+/// space interpretation. In short we don't want to have any generic type parameters as that does
+/// not help code generation (except if we had full specialization but I'm convinced the actual
+/// benefit is marginal). Instead, the conversion interface needs to be just generic enough such
+/// that other kinds can be defined. Support for an `f32` channel type should be sufficient as the
+/// accuracy suffices for all relevant physical cases.
+///
+/// We do this as a macro to handle the input/output const/mut case and the constructors.
+macro_rules! color_layouts {
+    ($($($ul:ty),+ as $ref_name:ident, mut $mut_name:ident, enum $kind_name:ident => {
+        $($color_name:ident = $const_name:ident),* $(,)?
+    }),*$(,)?) => {
+        enum InputKind<'buf> {
+            $($ref_name($ref_name <'buf>)),*
+        }
+
+        enum OutputKind<'buf> {
+            $($ref_name($mut_name <'buf>)),*
+        }
+
+        $(
+            color_layouts!(@impl $($ul),* as $ref_name,$mut_name,$kind_name => {
+                $($color_name = $const_name),*
+            });
+        )*
+    };
+    // Terminal rule, one value type.
+    (@impl $ul:ty as $ref_name:ident,$mut_name:ident,$kind_name:ident => {
+        $($color_name:ident = $const_name:ident),*
+    }) => {
+        $(
+            impl<'buf> Input<'buf> {
+                pub fn $const_name (buffer: &'buf [$ul]) -> Self {
+                    Input {
+                        inner: InputKind::$ref_name($ref_name {
+                            buffer,
+                            kind: $kind_name :: $color_name,
+                        })
+                    }
+                }
+            }
+        )*
+
+        struct $ref_name <'buf> {
+            buffer: &'buf [$ul],
+            kind: $kind_name,
+        }
+
+        struct $mut_name <'buf> {
+            buffer: &'buf mut [$ul],
+            kind: $kind_name,
+        }
+
+        enum $kind_name {
+            $($color_name),*
+        }
+    };
+    // Terminal rule for two planes.
+    (@impl $p0:ty, $p1:ty as $ref_name:ident,$mut_name:ident,$kind_name:ident => {
+        $($color_name:ident),*
+    }) => {
+        struct $ref_name <'buf> {
+            plane0: &'buf [$p0],
+            plane1: &'buf [$p1],
+            kind: $kind_name,
+        }
+
+        struct $mut_name <'buf> {
+            plane0: &'buf mut [$p0],
+            plane1: &'buf mut [$p1],
+            kind: $kind_name,
+        }
+
+        enum $kind_name {
+            $($color_name),*
+        }
+    };
+    // Terminal rule for three planes.
+    (@impl $p0:ty, $p1:ty, $p2:ty as $ref_name:ident,$mut_name:ident,$kind_name:ident => {
+        $($color_name:ident),*
+    }) => {
+        struct $ref_name <'buf> {
+            plane0: &'buf [$p0],
+            plane1: &'buf [$p1],
+            plane2: &'buf [$p2],
+            kind: $kind_name,
+        }
+
+        struct $mut_name <'buf> {
+            plane0: &'buf mut [$p0],
+            plane1: &'buf mut [$p1],
+            plane2: &'buf mut [$p2],
+            kind: $kind_name,
+        }
+
+        enum $kind_name {
+            $($color_name),*
+        }
+    };
 }
 
-enum InputKind<'buf> {
-    Rgb8 {
-        buffer: &'buf [[u8; 3]],
-        space: RgbSpace,
+color_layouts! {
+    u8 as U8, mut U8Mut, enum U8Kind => {
+        Gray8 = gray8,
+        Rgb332 = rgb332,
+        Bgr332 = bgr332,
+    },
+    u16 as U16, mut U16Mut, enum U16Kind => {
+        Gray16 = gray16,
+        Rgb565 = rgb565,
+        Bgr565 = bgr565,
+    },
+    [u8; 3] as U8x3, mut U8x3Mut, enum U8x3Kind => {
+        Rgb8 = rgb8,
+        Bgr8 = bgr8,
+    },
+    [u8; 4] as U8x4, mut U8x4Mut, enum U8x4Kind => {
+        Xrgb8 = xrgb8,
+        Xbgr8 = xbgr8,
+        Argb8 = argb8,
+        Abgr8 = abgr8,
+    },
+    [u16; 3] as U16x3, mut U16x3Mut, enum U16x3Kind => {
+        Rgb16 = rgb16,
+        Bgr16 = bgr16,
+    },
+    [u16; 4] as U16x4, mut U16x4Mut, enum U16x4Kind => {
+        Xrgb16 = xrgb16,
+        Xbgr16 = xbgr16,
+        Argb16 = argb16,
+        Abgr16 = abgr16,
+        ArgbF16 = argbf16,
+        AbgrF16 = abgrf16,
+    },
+    u32 as U32, mut U32Mut, enum U32Kind => {
+        Gray32 = gray32,
+    },
+    f32 as F32, mut F32Mut, enum F32Kind => {
+        GrayF32 = grayf32,
+    },
+    [f32; 3] as F32x3, mut F32x3Mut, enum F32x3Kind => {
+        RgbF32 = rgbf32,
+        BgrF32 = bgrf32,
+    },
+    [f32; 4] as F32x4, mut F32x4Mut, enum F32x4Kind => {
+        ArgbF32 = argbf32,
+        AbgrF32 = abgrf32,
+    },
+    u8,u8 as U8pU8, mut U8pU8Mut, enum U8pU8Kind => {
+    },
+    u16,u8 as U16pU8, mut U16pU8Mut, enum U16pU8Kind => {
+    },
+    u8,u16 as U8pU16, mut U8pU16Mut, enum U8pU16Kind => {
+    },
+    u8,u8,u8 as U8pU8pU8, mut U8pU8pU8Mut, enum U8pU8pU8Kind => {
     },
 }
 
-enum RgbSpace {
-    Srgb,
-    Rec709,
-    //
+pub struct Input<'buf> {
+    inner: InputKind<'buf>,
 }
 
 pub struct Output<'buf> {
     inner: OutputKind<'buf>,
 }
-
-enum OutputKind<'buf> {
-    Rgb8(&'buf [[u8; 3]]),
-}
-
-impl<'buf> Input<'buf> {
-    pub fn rgb8(_: &'buf [[u8; 3]]) -> Self {
-        todo!()
-    }
-}
-
-impl<'buf> Output<'buf> {}
 
 impl ColorSpace {}
