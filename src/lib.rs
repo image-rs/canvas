@@ -37,6 +37,7 @@ extern crate alloc;
 
 mod buf;
 mod canvas;
+pub mod color;
 pub mod drm;
 pub mod layout;
 mod matrix;

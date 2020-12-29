@@ -87,7 +87,7 @@ pub trait Layout {
 /// > However, the following impls would not be considered a breaking change: [...]
 /// > * `impl<T> OldTrait<T> for NewType`
 ///
-/// Let's say we want to introduce a new desciptor trait for matrix-like layouts. Then we can ship
+/// Let's say we want to introduce a new descriptor trait for matrix-like layouts. Then we can ship
 /// a new type representing the canonical form of this matrix trait and in the same revision define
 /// a blanket impl that allows other layouts to decay to it. This wouldn't be possible if the
 /// parameters were swapped. We can then let this specific type (it may contain covered type
@@ -95,7 +95,6 @@ pub trait Layout {
 /// code.
 ///
 /// [RFC2451]: https://rust-lang.github.io/rfcs/2451-re-rebalancing-coherence.html
-///
 pub trait Decay<T>: Layout {
     fn decay(from: T) -> Self;
 }
