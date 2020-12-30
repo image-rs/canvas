@@ -423,11 +423,7 @@ impl InputKind<'_> {
                 }),
                 ColorSpace::Srgb,
             ) => Box::new(buffer.iter().map(|&[r, g, b]| {
-                let (r, g, b) = (
-                    f32::from(r) / 255.0,
-                    f32::from(g) / 255.0,
-                    f32::from(b) / 255.0,
-                );
+                let (r, g, b) = scale_u8x3_to_f32([r, g, b]);
                 let srgb = Srgb::new(r, g, b);
                 Xyza {
                     color: Xyz::from(srgb),
@@ -443,11 +439,7 @@ impl InputKind<'_> {
             ) => {
                 Box::new(buffer.iter().map(|&[r, g, b]| {
                     // Default parameters are for srgb.
-                    let (r, g, b) = (
-                        f32::from(r) / 255.0,
-                        f32::from(g) / 255.0,
-                        f32::from(b) / 255.0,
-                    );
+                    let (r, g, b) = scale_u8x3_to_f32([r, g, b]);
                     Xyza {
                         color: Xyz::new(r, g, b),
                         alpha: 1.0,
@@ -461,11 +453,7 @@ impl InputKind<'_> {
                 }),
                 ColorSpace::Srgb,
             ) => Box::new(buffer.iter().map(|&[b, g, r]| {
-                let (r, g, b) = (
-                    f32::from(r) / 255.0,
-                    f32::from(g) / 255.0,
-                    f32::from(b) / 255.0,
-                );
+                let (r, g, b) = scale_u8x3_to_f32([r, g, b]);
                 let srgb = Srgb::new(r, g, b);
                 Xyza {
                     color: Xyz::from(srgb),
@@ -481,11 +469,7 @@ impl InputKind<'_> {
             ) => {
                 Box::new(buffer.iter().map(|&[b, g, r]| {
                     // Default parameters are for srgb.
-                    let (r, g, b) = (
-                        f32::from(r) / 255.0,
-                        f32::from(g) / 255.0,
-                        f32::from(b) / 255.0,
-                    );
+                    let (r, g, b) = scale_u8x3_to_f32([r, g, b]);
                     Xyza {
                         color: Xyz::new(r, g, b),
                         alpha: 1.0,
@@ -545,8 +529,8 @@ impl OutputKind<'_> {
                 ColorSpace::Srgb,
             ) => {
                 for (into, from) in buffer.iter_mut().zip(from) {
-                    let (r, g, b) = Srgb::from_xyz(from.color).into_components();
-                    let (r, g, b) = ((r * 255.0) as u8, (g * 255.0) as u8, (b * 255.0) as u8);
+                    let rgb = Srgb::from_xyz(from.color).into_components();
+                    let [r, g, b] = scale_u8x3_from_f32(rgb);
                     *into = [r, g, b];
                 }
             }
@@ -558,8 +542,8 @@ impl OutputKind<'_> {
                 ColorSpace::Xyz,
             ) => {
                 for (into, from) in buffer.iter_mut().zip(from) {
-                    let (r, g, b) = from.color.into_components();
-                    let (r, g, b) = ((r * 255.0) as u8, (g * 255.0) as u8, (b * 255.0) as u8);
+                    let rgb = from.color.into_components();
+                    let [r, g, b] = scale_u8x3_from_f32(rgb);
                     *into = [r, g, b];
                 }
             }
@@ -571,8 +555,8 @@ impl OutputKind<'_> {
                 ColorSpace::Srgb,
             ) => {
                 for (into, from) in buffer.iter_mut().zip(from) {
-                    let (r, g, b) = Srgb::from_xyz(from.color).into_components();
-                    let (r, g, b) = ((r * 255.0) as u8, (g * 255.0) as u8, (b * 255.0) as u8);
+                    let rgb = Srgb::from_xyz(from.color).into_components();
+                    let [r, g, b] = scale_u8x3_from_f32(rgb);
                     *into = [b, g, r];
                 }
             }
@@ -584,14 +568,26 @@ impl OutputKind<'_> {
                 ColorSpace::Xyz,
             ) => {
                 for (into, from) in buffer.iter_mut().zip(from) {
-                    let (r, g, b) = from.color.into_components();
-                    let (r, g, b) = ((r * 255.0) as u8, (g * 255.0) as u8, (b * 255.0) as u8);
+                    let rgb = from.color.into_components();
+                    let [r, g, b] = scale_u8x3_from_f32(rgb);
                     *into = [b, g, r];
                 }
             }
             _ => {}
         }
     }
+}
+
+fn scale_u8x3_to_f32([r, g, b]: [u8; 3]) -> (f32, f32, f32) {
+    (
+        f32::from(r) / 255.0,
+        f32::from(g) / 255.0,
+        f32::from(b) / 255.0,
+    )
+}
+
+fn scale_u8x3_from_f32((r, g, b): (f32, f32, f32)) -> [u8; 3] {
+    [(r * 255.0) as u8, (g * 255.0) as u8, (b * 255.0) as u8]
 }
 
 #[test]
