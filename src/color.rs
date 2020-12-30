@@ -1,6 +1,8 @@
 // Distributed under The MIT License (MIT)
 //
 // Copyright (c) 2020, 2021 The `image-rs` developers
+use alloc::boxed::Box;
+use palette::{luma::Luma, FromColor, Srgb, Xyz, Xyza};
 
 /// A color space of a specific color model.
 ///
@@ -37,9 +39,14 @@
 /// perceive that additional dimension, no RGB image can accurately express the full reality of an
 /// image. At least an additional yellow light source/color signal would be required.
 #[non_exhaustive]
+#[derive(Clone, Copy)]
 pub enum ColorSpace {
     /// Linear RGB, aka. CIE XYZ.
+    ///
+    /// In standard notation: xYz, that is red activation, luminance, blue activation.
     /// Directly models the stimuli of the three common receptors of the human eye.
+    /// This can also be used for gray scale colors where it is interpreted as using the white
+    /// point D65 with a linear transfer function.
     Xyz,
     /// The common sRGB primaries and gamma correction.
     Srgb,
@@ -103,6 +110,26 @@ macro_rules! color_layouts {
             $($ref_name($mut_name <'buf>)),*
         }
 
+        impl InputKind<'_> {
+            fn pixels(&self) -> usize {
+                match self {
+                    $(
+                        InputKind::$ref_name(kind) => kind.pixels(),
+                    )*
+                }
+            }
+        }
+
+        impl OutputKind<'_> {
+            fn pixels(&self) -> usize {
+                match self {
+                    $(
+                        OutputKind::$ref_name(kind) => kind.pixels(),
+                    )*
+                }
+            }
+        }
+
         $(
             color_layouts!(@impl $($ul),* as $ref_name,$mut_name,$kind_name => {
                 $($color_name = $const_name),*
@@ -124,6 +151,17 @@ macro_rules! color_layouts {
                     }
                 }
             }
+
+            impl<'buf> Output<'buf> {
+                pub fn $const_name (buffer: &'buf mut [$ul]) -> Self {
+                    Output {
+                        inner: OutputKind::$ref_name($mut_name {
+                            buffer,
+                            kind: $kind_name :: $color_name,
+                        })
+                    }
+                }
+            }
         )*
 
         struct $ref_name <'buf> {
@@ -134,6 +172,18 @@ macro_rules! color_layouts {
         struct $mut_name <'buf> {
             buffer: &'buf mut [$ul],
             kind: $kind_name,
+        }
+
+        impl $ref_name<'_> {
+            fn pixels(&self) -> usize {
+                self.buffer.len()
+            }
+        }
+
+        impl $mut_name<'_> {
+            fn pixels(&self) -> usize {
+                self.buffer.len()
+            }
         }
 
         enum $kind_name {
@@ -156,6 +206,18 @@ macro_rules! color_layouts {
             kind: $kind_name,
         }
 
+        impl $ref_name<'_> {
+            fn pixels(&self) -> usize {
+                self.plane0.len()
+            }
+        }
+
+        impl $mut_name<'_> {
+            fn pixels(&self) -> usize {
+                self.plane0.len()
+            }
+        }
+
         enum $kind_name {
             $($color_name),*
         }
@@ -176,6 +238,18 @@ macro_rules! color_layouts {
             plane1: &'buf mut [$p1],
             plane2: &'buf mut [$p2],
             kind: $kind_name,
+        }
+
+        impl $ref_name<'_> {
+            fn pixels(&self) -> usize {
+                self.plane0.len()
+            }
+        }
+
+        impl $mut_name<'_> {
+            fn pixels(&self) -> usize {
+                self.plane0.len()
+            }
         }
 
         enum $kind_name {
@@ -249,4 +323,288 @@ pub struct Output<'buf> {
     inner: OutputKind<'buf>,
 }
 
+/// Describes one conversion between color spaces.
+///
+/// Constructing this does not yet execute the conversion. Use the `run` method to execute it in
+/// a single work thread.
+pub struct Convert<'buf> {
+    input: InputKind<'buf>,
+    in_space: ColorSpace,
+    output: OutputKind<'buf>,
+    out_space: ColorSpace,
+}
+
+impl<'buf> Convert<'buf> {
+    /// Prepare a conversion between two buffers.
+    pub fn new(
+        input: Input<'buf>,
+        in_space: ColorSpace,
+        output: Output<'buf>,
+        out_space: ColorSpace,
+    ) -> Option<Self> {
+        if input.inner.pixels() != output.inner.pixels() {
+            return None;
+        }
+
+        // TODO: What other checks are required?
+
+        Some(Convert {
+            input: input.inner,
+            in_space,
+            output: output.inner,
+            out_space,
+        })
+    }
+
+    /// Return the number of involved pixels.
+    pub fn num_pixels(&self) -> usize {
+        todo!()
+    }
+
+    /// Write the converted pixels into the output buffer.
+    pub fn run(mut self) {
+        if let Some(fallback_xyz) = self.input.iter_xyz(self.in_space) {
+            self.output.write_xyz(self.out_space, fallback_xyz);
+        }
+    }
+}
+
 impl ColorSpace {}
+
+type XyzTransfer = palette::encoding::linear::Linear<palette::white_point::D65>;
+
+impl InputKind<'_> {
+    fn iter_xyz(&mut self, color: ColorSpace) -> Option<Box<dyn Iterator<Item = Xyza> + '_>> {
+        Some(match (self, color) {
+            (
+                InputKind::U8(U8 {
+                    buffer,
+                    kind: U8Kind::Gray8,
+                }),
+                ColorSpace::Xyz,
+            ) => Box::new(buffer.iter().map(|&ch| {
+                let luma = Luma::<XyzTransfer, f32>::new(f32::from(ch) / 255.0);
+                Xyza {
+                    color: Xyz::from_luma(luma),
+                    alpha: 1.0,
+                }
+            })),
+            (
+                InputKind::U8(U8 {
+                    buffer,
+                    kind: U8Kind::Gray8,
+                }),
+                ColorSpace::Srgb,
+            ) => {
+                Box::new(buffer.iter().map(|&ch| {
+                    // Default parameters are for srgb.
+                    let luma = Luma::new(f32::from(ch));
+                    Xyza {
+                        color: Xyz::from_luma(luma),
+                        alpha: 1.0,
+                    }
+                }))
+            }
+            (
+                InputKind::U8(U8 {
+                    buffer,
+                    kind: U8Kind::Rgb332,
+                }),
+                ColorSpace::Xyz,
+            ) => Box::new(buffer.iter().map(|&ch| {
+                let (r, g, b) = (ch >> 5, (ch >> 2) & 0x7, ch & 0x3);
+                let color = Xyz::new(f32::from(r) / 7.0, f32::from(g) / 7.0, f32::from(b) / 3.0);
+                Xyza { color, alpha: 1.0 }
+            })),
+            (
+                InputKind::U8x3(U8x3 {
+                    buffer,
+                    kind: U8x3Kind::Rgb8,
+                }),
+                ColorSpace::Srgb,
+            ) => Box::new(buffer.iter().map(|&[r, g, b]| {
+                let (r, g, b) = (
+                    f32::from(r) / 255.0,
+                    f32::from(g) / 255.0,
+                    f32::from(b) / 255.0,
+                );
+                let srgb = Srgb::new(r, g, b);
+                Xyza {
+                    color: Xyz::from(srgb),
+                    alpha: 1.0,
+                }
+            })),
+            (
+                InputKind::U8x3(U8x3 {
+                    buffer,
+                    kind: U8x3Kind::Rgb8,
+                }),
+                ColorSpace::Xyz,
+            ) => {
+                Box::new(buffer.iter().map(|&[r, g, b]| {
+                    // Default parameters are for srgb.
+                    let (r, g, b) = (
+                        f32::from(r) / 255.0,
+                        f32::from(g) / 255.0,
+                        f32::from(b) / 255.0,
+                    );
+                    Xyza {
+                        color: Xyz::new(r, g, b),
+                        alpha: 1.0,
+                    }
+                }))
+            }
+            (
+                InputKind::U8x3(U8x3 {
+                    buffer,
+                    kind: U8x3Kind::Bgr8,
+                }),
+                ColorSpace::Srgb,
+            ) => Box::new(buffer.iter().map(|&[b, g, r]| {
+                let (r, g, b) = (
+                    f32::from(r) / 255.0,
+                    f32::from(g) / 255.0,
+                    f32::from(b) / 255.0,
+                );
+                let srgb = Srgb::new(r, g, b);
+                Xyza {
+                    color: Xyz::from(srgb),
+                    alpha: 1.0,
+                }
+            })),
+            (
+                InputKind::U8x3(U8x3 {
+                    buffer,
+                    kind: U8x3Kind::Bgr8,
+                }),
+                ColorSpace::Xyz,
+            ) => {
+                Box::new(buffer.iter().map(|&[b, g, r]| {
+                    // Default parameters are for srgb.
+                    let (r, g, b) = (
+                        f32::from(r) / 255.0,
+                        f32::from(g) / 255.0,
+                        f32::from(b) / 255.0,
+                    );
+                    Xyza {
+                        color: Xyz::new(r, g, b),
+                        alpha: 1.0,
+                    }
+                }))
+            }
+            _ => return None,
+        })
+    }
+}
+
+impl OutputKind<'_> {
+    fn write_xyz(&mut self, color: ColorSpace, from: Box<dyn Iterator<Item = Xyza> + '_>) {
+        match (self, color) {
+            (
+                OutputKind::U8(U8Mut {
+                    buffer,
+                    kind: U8Kind::Gray8,
+                }),
+                ColorSpace::Xyz,
+            ) => {
+                for (into, from) in buffer.iter_mut().zip(from) {
+                    let luma = Luma::<XyzTransfer, f32>::from_xyz(from.color);
+                    *into = (luma.luma * 255.0) as u8;
+                }
+            }
+            (
+                OutputKind::U8(U8Mut {
+                    buffer,
+                    kind: U8Kind::Gray8,
+                }),
+                ColorSpace::Srgb,
+            ) => {
+                for (into, from) in buffer.iter_mut().zip(from) {
+                    let luma: Luma = Luma::from_xyz(from.color);
+                    *into = (luma.luma * 255.0) as u8;
+                }
+            }
+            (
+                OutputKind::U8(U8Mut {
+                    buffer,
+                    kind: U8Kind::Rgb332,
+                }),
+                ColorSpace::Xyz,
+            ) => {
+                for (into, from) in buffer.iter_mut().zip(from) {
+                    let (r, g, b) = from.color.into_components();
+                    let (r, g, b) = ((r * 7.0) as u8, (g * 7.0) as u8, (b * 3.0) as u8);
+                    *into = r << 5 | g << 2 | b;
+                }
+            }
+            (
+                OutputKind::U8x3(U8x3Mut {
+                    buffer,
+                    kind: U8x3Kind::Rgb8,
+                }),
+                ColorSpace::Srgb,
+            ) => {
+                for (into, from) in buffer.iter_mut().zip(from) {
+                    let (r, g, b) = Srgb::from_xyz(from.color).into_components();
+                    let (r, g, b) = ((r * 255.0) as u8, (g * 255.0) as u8, (b * 255.0) as u8);
+                    *into = [r, g, b];
+                }
+            }
+            (
+                OutputKind::U8x3(U8x3Mut {
+                    buffer,
+                    kind: U8x3Kind::Rgb8,
+                }),
+                ColorSpace::Xyz,
+            ) => {
+                for (into, from) in buffer.iter_mut().zip(from) {
+                    let (r, g, b) = from.color.into_components();
+                    let (r, g, b) = ((r * 255.0) as u8, (g * 255.0) as u8, (b * 255.0) as u8);
+                    *into = [r, g, b];
+                }
+            }
+            (
+                OutputKind::U8x3(U8x3Mut {
+                    buffer,
+                    kind: U8x3Kind::Bgr8,
+                }),
+                ColorSpace::Srgb,
+            ) => {
+                for (into, from) in buffer.iter_mut().zip(from) {
+                    let (r, g, b) = Srgb::from_xyz(from.color).into_components();
+                    let (r, g, b) = ((r * 255.0) as u8, (g * 255.0) as u8, (b * 255.0) as u8);
+                    *into = [b, g, r];
+                }
+            }
+            (
+                OutputKind::U8x3(U8x3Mut {
+                    buffer,
+                    kind: U8x3Kind::Bgr8,
+                }),
+                ColorSpace::Xyz,
+            ) => {
+                for (into, from) in buffer.iter_mut().zip(from) {
+                    let (r, g, b) = from.color.into_components();
+                    let (r, g, b) = ((r * 255.0) as u8, (g * 255.0) as u8, (b * 255.0) as u8);
+                    *into = [b, g, r];
+                }
+            }
+            _ => {}
+        }
+    }
+}
+
+#[test]
+fn transpose() {
+    let inarr = [[0u8, 1u8, 2u8]];
+    let mut outarr = [[0xffu8; 3]];
+
+    let input = Input::rgb8(&inarr);
+    let output = Output::bgr8(&mut outarr);
+
+    let convert = Convert::new(input, ColorSpace::Xyz, output, ColorSpace::Xyz)
+        .expect("Valid and possible conversion");
+    convert.run();
+
+    assert_eq!(outarr[0], [2u8, 1u8, 0u8]);
+}
