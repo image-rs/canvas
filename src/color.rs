@@ -476,6 +476,66 @@ impl InputKind<'_> {
                     }
                 }))
             }
+            (
+                InputKind::U8x4(U8x4 {
+                    buffer,
+                    kind: U8x4Kind::Argb8,
+                }),
+                ColorSpace::Srgb,
+            ) => Box::new(buffer.iter().map(|&[alpha, r, g, b]| {
+                let (r, g, b) = scale_u8x3_to_f32([r, g, b]);
+                let srgb = Srgb::new(r, g, b);
+                Xyza {
+                    color: Xyz::from(srgb),
+                    alpha: scale_u8_to_f32(alpha),
+                }
+            })),
+            (
+                InputKind::U8x4(U8x4 {
+                    buffer,
+                    kind: U8x4Kind::Argb8,
+                }),
+                ColorSpace::Xyz,
+            ) => {
+                Box::new(buffer.iter().map(|&[alpha, r, g, b]| {
+                    // Default parameters are for srgb.
+                    let (r, g, b) = scale_u8x3_to_f32([r, g, b]);
+                    Xyza {
+                        color: Xyz::new(r, g, b),
+                        alpha: scale_u8_to_f32(alpha),
+                    }
+                }))
+            }
+            (
+                InputKind::U8x4(U8x4 {
+                    buffer,
+                    kind: U8x4Kind::Abgr8,
+                }),
+                ColorSpace::Srgb,
+            ) => Box::new(buffer.iter().map(|&[alpha, b, g, r]| {
+                let (r, g, b) = scale_u8x3_to_f32([r, g, b]);
+                let srgb = Srgb::new(r, g, b);
+                Xyza {
+                    color: Xyz::from(srgb),
+                    alpha: scale_u8_to_f32(alpha),
+                }
+            })),
+            (
+                InputKind::U8x4(U8x4 {
+                    buffer,
+                    kind: U8x4Kind::Abgr8,
+                }),
+                ColorSpace::Xyz,
+            ) => {
+                Box::new(buffer.iter().map(|&[alpha, b, g, r]| {
+                    // Default parameters are for srgb.
+                    let (r, g, b) = scale_u8x3_to_f32([r, g, b]);
+                    Xyza {
+                        color: Xyz::new(r, g, b),
+                        alpha: scale_u8_to_f32(alpha),
+                    }
+                }))
+            }
             _ => return None,
         })
     }
@@ -573,9 +633,65 @@ impl OutputKind<'_> {
                     *into = [b, g, r];
                 }
             }
+            (
+                OutputKind::U8x4(U8x4Mut {
+                    buffer,
+                    kind: U8x4Kind::Argb8,
+                }),
+                ColorSpace::Srgb,
+            ) => {
+                for (into, from) in buffer.iter_mut().zip(from) {
+                    let rgb = Srgb::from_xyz(from.color).into_components();
+                    let [r, g, b] = scale_u8x3_from_f32(rgb);
+                    *into = [scale_u8_from_f32(from.alpha), r, g, b];
+                }
+            }
+            (
+                OutputKind::U8x4(U8x4Mut {
+                    buffer,
+                    kind: U8x4Kind::Argb8,
+                }),
+                ColorSpace::Xyz,
+            ) => {
+                for (into, from) in buffer.iter_mut().zip(from) {
+                    let rgb = from.color.into_components();
+                    let [r, g, b] = scale_u8x3_from_f32(rgb);
+                    *into = [scale_u8_from_f32(from.alpha), r, g, b];
+                }
+            }
+            (
+                OutputKind::U8x4(U8x4Mut {
+                    buffer,
+                    kind: U8x4Kind::Abgr8,
+                }),
+                ColorSpace::Srgb,
+            ) => {
+                for (into, from) in buffer.iter_mut().zip(from) {
+                    let rgb = Srgb::from_xyz(from.color).into_components();
+                    let [r, g, b] = scale_u8x3_from_f32(rgb);
+                    *into = [scale_u8_from_f32(from.alpha), b, g, r];
+                }
+            }
+            (
+                OutputKind::U8x4(U8x4Mut {
+                    buffer,
+                    kind: U8x4Kind::Abgr8,
+                }),
+                ColorSpace::Xyz,
+            ) => {
+                for (into, from) in buffer.iter_mut().zip(from) {
+                    let rgb = from.color.into_components();
+                    let [r, g, b] = scale_u8x3_from_f32(rgb);
+                    *into = [scale_u8_from_f32(from.alpha), b, g, r];
+                }
+            }
             _ => {}
         }
     }
+}
+
+fn scale_u8_to_f32(alpha: u8) -> f32 {
+    f32::from(alpha) / 255.0
 }
 
 fn scale_u8x3_to_f32([r, g, b]: [u8; 3]) -> (f32, f32, f32) {
@@ -584,6 +700,10 @@ fn scale_u8x3_to_f32([r, g, b]: [u8; 3]) -> (f32, f32, f32) {
         f32::from(g) / 255.0,
         f32::from(b) / 255.0,
     )
+}
+
+fn scale_u8_from_f32(alpha: f32) -> u8 {
+    (alpha * 255.0) as u8
 }
 
 fn scale_u8x3_from_f32((r, g, b): (f32, f32, f32)) -> [u8; 3] {
@@ -603,4 +723,19 @@ fn transpose() {
     convert.run();
 
     assert_eq!(outarr[0], [2u8, 1u8, 0u8]);
+}
+
+#[test]
+fn with_alpha() {
+    let inarr = [[0xff, 0u8, 1u8, 2u8]];
+    let mut outarr = [[0xff; 4]];
+
+    let input = Input::argb8(&inarr);
+    let output = Output::abgr8(&mut outarr);
+
+    let convert = Convert::new(input, ColorSpace::Xyz, output, ColorSpace::Xyz)
+        .expect("Valid and possible conversion");
+    convert.run();
+
+    assert_eq!(outarr[0], [0xff, 2u8, 1u8, 0u8]);
 }
