@@ -427,6 +427,38 @@ impl InputKind<'_> {
                 let (r, g, b) = (f32::from(r) / 7.0, f32::from(g) / 7.0, f32::from(b) / 3.0);
                 rgba([r, g, b, 1.0])
             })),
+            InputKind::U8(U8 {
+                buffer,
+                kind: U8Kind::Bgr332,
+            }) => Box::new(buffer.iter().map(move |&ch| {
+                let (b, g, r) = (ch >> 6, (ch >> 3) & 0x7, ch & 0x7);
+                let (r, g, b) = (f32::from(r) / 7.0, f32::from(g) / 7.0, f32::from(b) / 3.0);
+                rgba([r, g, b, 1.0])
+            })),
+            InputKind::U16(U16 {
+                buffer,
+                kind: U16Kind::Rgb565,
+            }) => Box::new(buffer.iter().map(move |&ch| {
+                let (r, g, b) = (ch >> 11, (ch >> 5) & 0x3f, ch & 0x1f);
+                let (r, g, b) = (
+                    f32::from(r) / 31.0,
+                    f32::from(g) / 63.0,
+                    f32::from(b) / 31.0,
+                );
+                rgba([r, g, b, 1.0])
+            })),
+            InputKind::U16(U16 {
+                buffer,
+                kind: U16Kind::Bgr565,
+            }) => Box::new(buffer.iter().map(move |&ch| {
+                let (b, g, r) = (ch >> 11, (ch >> 5) & 0x3f, ch & 0x1f);
+                let (r, g, b) = (
+                    f32::from(r) / 31.0,
+                    f32::from(g) / 63.0,
+                    f32::from(b) / 31.0,
+                );
+                rgba([r, g, b, 1.0])
+            })),
             InputKind::U8x3(U8x3 {
                 buffer,
                 kind: U8x3Kind::Rgb8,
@@ -512,6 +544,36 @@ impl OutputKind<'_> {
                     *into = r << 5 | g << 2 | b;
                 }
             }
+            OutputKind::U8(U8Mut {
+                buffer,
+                kind: U8Kind::Bgr332,
+            }) => {
+                for (into, from) in buffer.iter_mut().zip(from) {
+                    let [r, g, b, _] = rgba(from);
+                    let (r, g, b) = ((r * 7.0) as u8, (g * 7.0) as u8, (b * 3.0) as u8);
+                    *into = b << 6 | g << 3 | r;
+                }
+            }
+            OutputKind::U16(U16Mut {
+                buffer,
+                kind: U16Kind::Rgb565,
+            }) => {
+                for (into, from) in buffer.iter_mut().zip(from) {
+                    let [r, g, b, _] = rgba(from);
+                    let (r, g, b) = ((r * 31.0) as u16, (g * 63.0) as u16, (b * 31.0) as u16);
+                    *into = r << 11 | g << 5 | b;
+                }
+            }
+            OutputKind::U16(U16Mut {
+                buffer,
+                kind: U16Kind::Bgr565,
+            }) => {
+                for (into, from) in buffer.iter_mut().zip(from) {
+                    let [r, g, b, _] = rgba(from);
+                    let (r, g, b) = ((r * 31.0) as u16, (g * 63.0) as u16, (b * 31.0) as u16);
+                    *into = b << 11 | g << 5 | r;
+                }
+            }
             OutputKind::U8x3(U8x3Mut {
                 buffer,
                 kind: U8x3Kind::Rgb8,
@@ -562,6 +624,7 @@ impl OutputKind<'_> {
 enum RgbaSpace {
     Xyza,
     Srgb,
+    // TODO: remaining color spaces.
 }
 
 impl RgbaSpace {
