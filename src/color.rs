@@ -192,7 +192,7 @@ macro_rules! color_layouts {
     };
     // Terminal rule for two planes.
     (@impl $p0:ty, $p1:ty as $ref_name:ident,$mut_name:ident,$kind_name:ident => {
-        $($color_name:ident),*
+        $($color_name:ident = $const_name:ident),*
     }) => {
         struct $ref_name <'buf> {
             plane0: &'buf [$p0],
@@ -224,8 +224,44 @@ macro_rules! color_layouts {
     };
     // Terminal rule for three planes.
     (@impl $p0:ty, $p1:ty, $p2:ty as $ref_name:ident,$mut_name:ident,$kind_name:ident => {
-        $($color_name:ident),*
+        $($color_name:ident = $const_name:ident),*
     }) => {
+        $(
+            impl<'buf> Input<'buf> {
+                pub fn $const_name (
+                    plane0: &'buf [$p0],
+                    plane1: &'buf [$p1],
+                    plane2: &'buf [$p2],
+                ) -> Self {
+                    Input {
+                        inner: InputKind::$ref_name($ref_name {
+                            plane0,
+                            plane1,
+                            plane2,
+                            kind: $kind_name :: $color_name,
+                        })
+                    }
+                }
+            }
+
+            impl<'buf> Output<'buf> {
+                pub fn $const_name (
+                    plane0: &'buf mut [$p0],
+                    plane1: &'buf mut [$p1],
+                    plane2: &'buf mut [$p2],
+                ) -> Self {
+                    Output {
+                        inner: OutputKind::$ref_name($mut_name {
+                            plane0,
+                            plane1,
+                            plane2,
+                            kind: $kind_name :: $color_name,
+                        })
+                    }
+                }
+            }
+        )*
+
         struct $ref_name <'buf> {
             plane0: &'buf [$p0],
             plane1: &'buf [$p1],
@@ -312,6 +348,7 @@ color_layouts! {
     u8,u16 as U8pU16, mut U8pU16Mut, enum U8pU16Kind => {
     },
     u8,u8,u8 as U8pU8pU8, mut U8pU8pU8Mut, enum U8pU8pU8Kind => {
+        Rgb888 = rgb888,
     },
 }
 
@@ -358,7 +395,7 @@ impl<'buf> Convert<'buf> {
 
     /// Return the number of involved pixels.
     pub fn num_pixels(&self) -> usize {
-        todo!()
+        self.input.pixels()
     }
 
     /// Write the converted pixels into the output buffer.
@@ -368,8 +405,6 @@ impl<'buf> Convert<'buf> {
         }
     }
 }
-
-impl ColorSpace {}
 
 type XyzTransfer = palette::encoding::linear::Linear<palette::white_point::D65>;
 
@@ -487,6 +522,18 @@ impl InputKind<'_> {
                 let (r, g, b) = scale_u8x3_to_f32([r, g, b]);
                 rgba([r, g, b, scale_u8_to_f32(alpha)])
             })),
+            InputKind::U8pU8pU8(U8pU8pU8 {
+                plane0,
+                plane1,
+                plane2,
+                kind: U8pU8pU8Kind::Rgb888,
+            }) => {
+                let planes = plane0.iter().zip(plane1.iter()).zip(plane2.iter());
+                Box::new(planes.map(move |((&r, &g), &b)| {
+                    let (r, g, b) = scale_u8x3_to_f32([r, g, b]);
+                    rgba([r, g, b, 1.0])
+                }))
+            }
             _ => return None,
         })
     }
@@ -614,6 +661,24 @@ impl OutputKind<'_> {
                     *into = [scale_u8_from_f32(alpha), b, g, r];
                 }
             }
+            OutputKind::U8pU8pU8(U8pU8pU8Mut {
+                plane0,
+                plane1,
+                plane2,
+                kind: U8pU8pU8Kind::Rgb888,
+            }) => {
+                let into = plane0
+                    .iter_mut()
+                    .zip(plane1.iter_mut())
+                    .zip(plane2.iter_mut());
+                for (into, from) in into.zip(from) {
+                    let [r, g, b, _] = rgba(from);
+                    let [r, g, b] = scale_u8x3_from_f32((r, g, b));
+                    *into.0 .0 = r;
+                    *into.0 .1 = g;
+                    *into.1 = b;
+                }
+            }
             _ => {}
         }
     }
@@ -725,4 +790,19 @@ fn with_alpha() {
     convert.run();
 
     assert_eq!(outarr[0], [0xff, 2u8, 1u8, 0u8]);
+}
+
+#[test]
+fn planar() {
+    let inarr = [0u8, 1u8, 2u8];
+    let mut outarr = [[0xff; 4]];
+
+    let input = Input::rgb888(&inarr[0..1], &inarr[1..2], &inarr[2..]);
+    let output = Output::argb8(&mut outarr);
+
+    let convert = Convert::new(input, ColorSpace::Xyz, output, ColorSpace::Xyz)
+        .expect("Valid and possible conversion");
+    convert.run();
+
+    assert_eq!(outarr[0], [0xff, 0u8, 1u8, 2u8]);
 }
