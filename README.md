@@ -1,4 +1,4 @@
-# Canvas [![docs.rs: image-canvas](https://docs.rs/image-canvas/badge.svg)](https://docs.rs/image-canvas) [![Build Status](https://travis-ci.org/image-rs/canvas.svg?branch=master)](https://travis-ci.org/image-rs/canvas) 
+# Canvas [![docs.rs: image-canvas](https://docs.rs/image-canvas/badge.svg)](https://docs.rs/image-canvas) [![Build Status](https://github.com/image-rs/canvas/workflows/Rust%20CI/badge.svg)](https://github.com/image-rs/canvas/actions) 
 
 An allocated buffer suitable for image data. Compared to a `Vec` of all
 samples, it restricts the possible data types but on the other hand focusses on
