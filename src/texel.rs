@@ -9,7 +9,7 @@ use core::{fmt, hash, mem, ptr, slice};
 
 use crate::buf::buf;
 
-/// Marker struct to denote a pixel type.
+/// Marker struct to denote a texel type.
 ///
 /// Can be constructed only for types that have expected alignment and no byte invariants. It
 /// always implements `Copy` and `Clone`, regardless of the underlying type and is zero-sized.
@@ -23,9 +23,9 @@ use crate::buf::buf;
 /// effects:
 /// * Firstly, it makes the interface independent of the chosen transmutation crate. Potentially we
 ///   will have a method to construct the `Texel` via a `core` trait.
-/// * Secondly, it allows creating pixels of third-party types for which the bound can not be
+/// * Secondly, it allows creating texel of third-party types for which the bound can not be
 ///   implemented. Crucially, this includes SIMD representations that would be a burden to support
-///   directly. And conversely you can also deal with arbitrary existing pixels without a bound in
+///   directly. And conversely you can also deal with arbitrary existing texel without a bound in
 ///   your own interfaces!
 pub struct Texel<P: ?Sized>(PhantomData<P>);
 
@@ -39,12 +39,12 @@ pub struct IsTransparentWrapper<P, O>(PhantomData<(P, O)>);
 
 /// Describes a type which can represent a `Texel` and for which this is statically known.
 pub trait AsTexel {
-    /// Get the pixel struct for this type.
+    /// Get the texel struct for this type.
     ///
     /// The naive implementation of merely unwrapping the result of `Texel::for_type` **panics** on
     /// any invalid type. This trait should only be implemented when you know for sure that the
     /// type is correct.
-    fn pixel() -> Texel<Self>;
+    fn texel() -> Texel<Self>;
 }
 
 pub(crate) const MAX_ALIGN: usize = 16;
@@ -63,11 +63,11 @@ unsafe impl bytemuck::Pod for MaxAligned {}
 pub(crate) mod constants {
     use super::{AsTexel, MaxAligned, Texel};
 
-    macro_rules! constant_pixels {
+    macro_rules! constant_texel {
         ($(($name:ident, $type:ty)),*) => {
             $(pub const $name: Texel<$type> = Texel(core::marker::PhantomData) ;
               impl AsTexel for $type {
-                  fn pixel() -> Texel<Self> {
+                  fn texel() -> Texel<Self> {
                       $name
                   }
               }
@@ -75,7 +75,7 @@ pub(crate) mod constants {
         }
     }
 
-    constant_pixels!(
+    constant_texel!(
         (EMPTY, ()),
         (I8, i8),
         (U8, u8),
@@ -143,7 +143,7 @@ impl buf {
 }
 
 impl<P> Texel<P> {
-    /// Create a witness certifying `P` as a pixel without checks.
+    /// Create a witness certifying `P` as a texel without checks.
     ///
     /// # Safety
     ///
@@ -171,7 +171,7 @@ impl<P> Texel<P> {
     // code here to pad our stats but they are not checked by the type system so it's risky. Better
     // explain their safety in the code as comments.
 
-    /// Construct a pixel as an array of no elements.
+    /// Construct a texel as an array of no elements.
     pub const fn array0(self) -> Texel<[P; 0]> {
         // Safety:
         // * has no validity/safety invariants
@@ -179,7 +179,7 @@ impl<P> Texel<P> {
         unsafe { Texel::new_unchecked() }
     }
 
-    /// Construct a pixel as an array of one element.
+    /// Construct a texel as an array of one element.
     pub const fn array1(self) -> Texel<[P; 1]> {
         // Safety:
         // * has validity/safety invariants of P, none
@@ -187,7 +187,7 @@ impl<P> Texel<P> {
         unsafe { Texel::new_unchecked() }
     }
 
-    /// Construct a pixel as an array of two elements.
+    /// Construct a texel as an array of two elements.
     pub const fn array2(self) -> Texel<[P; 2]> {
         // Safety:
         // * has validity/safety invariants of P, none
@@ -195,7 +195,7 @@ impl<P> Texel<P> {
         unsafe { Texel::new_unchecked() }
     }
 
-    /// Construct a pixel as an array of three elements.
+    /// Construct a texel as an array of three elements.
     pub const fn array3(self) -> Texel<[P; 3]> {
         // Safety:
         // * has validity/safety invariants of P, none
@@ -203,7 +203,7 @@ impl<P> Texel<P> {
         unsafe { Texel::new_unchecked() }
     }
 
-    /// Construct a pixel as an array of four elements.
+    /// Construct a texel as an array of four elements.
     pub const fn array4(self) -> Texel<[P; 4]> {
         // Safety:
         // * has validity/safety invariants of P, none
@@ -211,7 +211,7 @@ impl<P> Texel<P> {
         unsafe { Texel::new_unchecked() }
     }
 
-    /// Construct a pixel by wrapping into a transparent wrapper.
+    /// Construct a texel by wrapping into a transparent wrapper.
     ///
     /// TODO: a constructor for Texel<O> based on proof of transmutation from &mut P to &mut O,
     /// based on the standard transmutation RFC. This is more flexible than bytemuck's
@@ -223,7 +223,7 @@ impl<P> Texel<P> {
         unsafe { Texel::new_unchecked() }
     }
 
-    /// Construct a pixel by unwrapping a transparent wrapper.
+    /// Construct a texel by unwrapping a transparent wrapper.
     pub const fn transparent_unwrap<O>(self, _: IsTransparentWrapper<O, P>) -> Texel<O> {
         // Safety:
         // * P and O must have the same invariants, none
@@ -234,7 +234,7 @@ impl<P> Texel<P> {
 
 /// Operations that can be performed based on the evidence of Texel.
 impl<P> Texel<P> {
-    /// Copy a pixel.
+    /// Copy a texel.
     ///
     /// Note that this does not require `Copy` because that requirement was part of the
     /// requirements of constructing this `Texel` witness.
@@ -243,7 +243,7 @@ impl<P> Texel<P> {
         unsafe { ptr::read(val) }
     }
 
-    /// Reinterpret a slice of aligned bytes as a slice of the pixel.
+    /// Reinterpret a slice of aligned bytes as a slice of the texel.
     ///
     /// Note that the size (in bytes) of the slice will be shortened if the size of `P` is not a
     /// divisor of the input slice's size.
@@ -251,7 +251,7 @@ impl<P> Texel<P> {
         self.cast_buf(buf::new(buffer))
     }
 
-    /// Reinterpret a slice of aligned bytes as a mutable slice of the pixel.
+    /// Reinterpret a slice of aligned bytes as a mutable slice of the texel.
     ///
     /// Note that the size (in bytes) of the slice will be shortened if the size of `P` is not a
     /// divisor of the input slice's size.
@@ -259,14 +259,14 @@ impl<P> Texel<P> {
         self.cast_mut_buf(buf::new_mut(buffer))
     }
 
-    /// Reinterpret a slice of pixels as memory.
-    pub fn cast_to_bytes<'buf>(self, pixel: &'buf [P]) -> &'buf [u8] {
-        self.cast_bytes(pixel)
+    /// Reinterpret a slice of texel as memory.
+    pub fn cast_to_bytes<'buf>(self, texel: &'buf [P]) -> &'buf [u8] {
+        self.cast_bytes(texel)
     }
 
-    /// Reinterpret a mutable slice of pixels as memory.
-    pub fn cast_to_mut_bytes<'buf>(self, pixel: &'buf mut [P]) -> &'buf mut [u8] {
-        self.cast_mut_bytes(pixel)
+    /// Reinterpret a mutable slice of texel as memory.
+    pub fn cast_to_mut_bytes<'buf>(self, texel: &'buf mut [P]) -> &'buf mut [u8] {
+        self.cast_mut_bytes(texel)
     }
 
     pub(crate) fn cast_buf<'buf>(self, buffer: &'buf buf) -> &'buf [P] {
@@ -311,20 +311,20 @@ impl<P> Texel<P> {
         }
     }
 
-    pub(crate) fn cast_bytes<'buf>(self, pixel: &'buf [P]) -> &'buf [u8] {
+    pub(crate) fn cast_bytes<'buf>(self, texel: &'buf [P]) -> &'buf [u8] {
         // Safety:
         // * lifetime is not changed
         // * keeps the exact same size
         // * validity for byte reading checked by Texel constructor
-        unsafe { slice::from_raw_parts(pixel.as_ptr() as *const u8, mem::size_of_val(pixel)) }
+        unsafe { slice::from_raw_parts(texel.as_ptr() as *const u8, mem::size_of_val(texel)) }
     }
 
-    pub(crate) fn cast_mut_bytes<'buf>(self, pixel: &'buf mut [P]) -> &'buf mut [u8] {
+    pub(crate) fn cast_mut_bytes<'buf>(self, texel: &'buf mut [P]) -> &'buf mut [u8] {
         // Safety:
         // * lifetime is not changed
         // * keeps the exact same size
         // * validity as bytes checked by Texel constructor
-        unsafe { slice::from_raw_parts_mut(pixel.as_ptr() as *mut u8, mem::size_of_val(pixel)) }
+        unsafe { slice::from_raw_parts_mut(texel.as_ptr() as *mut u8, mem::size_of_val(texel)) }
     }
 }
 

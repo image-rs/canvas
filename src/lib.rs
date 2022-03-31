@@ -30,7 +30,7 @@
 //! ```
 // Be std for doctests, avoids a weird warning about missing allocator.
 #![cfg_attr(not(doctest), no_std)]
-// The only module allowed to be `unsafe` is `pixel`. We need it however, as we have a custom
+// The only module allowed to be `unsafe` is `texel`. We need it however, as we have a custom
 // dynamically sized type with an unsafe alignment invariant.
 #![deny(unsafe_code)]
 extern crate alloc;
@@ -39,18 +39,18 @@ mod buf;
 mod canvas;
 pub mod layout;
 mod matrix;
-mod pixel;
 mod rec;
 pub mod stride;
+mod texel;
 
 pub use self::canvas::Canvas;
 pub use self::matrix::{Layout, Matrix, MatrixReuseError};
-pub use self::pixel::{AsTexel, Texel};
 pub use self::rec::{Rec, ReuseError};
+pub use self::texel::{AsTexel, Texel};
 
-/// Constants for predefined pixel types.
-pub mod pixels {
-    pub use crate::pixel::constants::*;
-    pub use crate::pixel::IsTransparentWrapper;
-    pub use crate::pixel::MaxAligned;
+/// Constants for predefined texel types.
+pub mod texels {
+    pub use crate::texel::constants::*;
+    pub use crate::texel::IsTransparentWrapper;
+    pub use crate::texel::MaxAligned;
 }

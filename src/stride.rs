@@ -15,7 +15,7 @@
 //! strided matrix even when it was not allocated with the special allocator.
 use crate::canvas::Canvas;
 use crate::layout::Layout;
-use crate::pixel::AsTexel;
+use crate::texel::AsTexel;
 use crate::{layout, matrix};
 use core::ops::Range;
 

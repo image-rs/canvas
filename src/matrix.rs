@@ -148,7 +148,7 @@ impl<P> Matrix<P> {
     /// # Panics
     /// When allocation of memory fails.
     pub fn with_layout(layout: Layout<P>) -> Self {
-        let rec = Rec::bytes_for_pixel(layout.pixel, layout.byte_len());
+        let rec = Rec::bytes_for_texel(layout.pixel, layout.byte_len());
         Self::new_raw(rec, layout)
     }
 
@@ -242,7 +242,7 @@ impl<P> Matrix<P> {
     ///
     /// See `transmute_to` for details.
     pub fn transmute<Q: AsTexel>(self) -> Matrix<Q> {
-        self.transmute_to(Q::pixel())
+        self.transmute_to(Q::texel())
     }
 
     /// Reinterpret to another, same size pixel type.
@@ -286,7 +286,7 @@ impl<P> Matrix<P> {
         F: Fn(P) -> Q,
         Q: AsTexel,
     {
-        self.map_to(map, Q::pixel())
+        self.map_to(map, Q::texel())
     }
 
     /// Apply a function to all pixel values.
@@ -317,7 +317,7 @@ impl<P> Matrix<P> {
         F: Fn(P) -> Q,
         Q: AsTexel,
     {
-        self.map_reuse_to(map, Q::pixel())
+        self.map_reuse_to(map, Q::texel())
     }
 
     pub fn map_reuse_to<F, Q>(
@@ -371,7 +371,7 @@ impl<P> Layout<P> {
     where
         P: AsTexel,
     {
-        Self::width_and_height_for_pixel(P::pixel(), width, height)
+        Self::width_and_height_for_pixel(P::texel(), width, height)
     }
 
     /// Get the required bytes for this layout.
@@ -401,7 +401,7 @@ impl<P> Layout<P> {
     ///
     /// See `transmute_to` for details.
     pub fn transmute<Q: AsTexel>(self) -> Layout<Q> {
-        self.transmute_to(Q::pixel())
+        self.transmute_to(Q::texel())
     }
 
     /// Reinterpret to another, same size pixel type.
@@ -420,7 +420,7 @@ impl<P> Layout<P> {
 
     /// Utility method to change the pixel type without changing the dimensions.
     pub fn map<Q: AsTexel>(self) -> Option<Layout<Q>> {
-        self.map_to(Q::pixel())
+        self.map_to(Q::texel())
     }
 
     /// Utility method to change the pixel type without changing the dimensions.
@@ -504,7 +504,7 @@ impl<P: AsTexel> Default for Layout<P> {
         Layout {
             width: 0,
             height: 0,
-            pixel: P::pixel(),
+            pixel: P::texel(),
         }
     }
 }

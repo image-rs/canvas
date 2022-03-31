@@ -1,5 +1,5 @@
 //! A module for different pixel layouts.
-use crate::pixel::MaxAligned;
+use crate::texel::MaxAligned;
 use crate::{AsTexel, Texel};
 use ::alloc::boxed::Box;
 use core::{alloc, cmp};
@@ -284,7 +284,7 @@ impl Bytes {
 impl TexelLayout {
     /// Construct an element from a self-evident pixel.
     pub fn from_pixel<P: AsTexel>() -> Self {
-        let pix = P::pixel();
+        let pix = P::texel();
         TexelLayout {
             size: pix.size(),
             align: pix.align(),
@@ -308,7 +308,7 @@ impl TexelLayout {
     /// skips the check that such a type must not contain any padding and only performs the layout
     /// related checks.
     pub fn with_layout(layout: alloc::Layout) -> Option<Self> {
-        if layout.align() > MaxAligned::pixel().align() {
+        if layout.align() > MaxAligned::texel().align() {
             return None;
         }
 

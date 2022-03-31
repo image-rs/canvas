@@ -71,14 +71,18 @@ pub struct ViewMut<'buf, Layout = Bytes> {
 }
 
 /// A raster layout.
-pub trait Raster<Texel>: Sized {
+///
+/// This is a special form of texels that represent single group of color channels.
+pub trait Raster<Pixel>: Sized {
     fn dimensions(&self) -> Coord;
-    fn get(from: View<Self>, at: Coord) -> Texel;
+    fn get(from: View<Self>, at: Coord) -> Pixel;
 }
 
 /// A raster layout where one can change pixel values independently.
-pub trait RasterMut<Texel>: Raster<Texel> {
-    fn put(into: ViewMut<Self>, at: Coord, val: Texel);
+///
+/// In other words, requires that texels are one-by-one blocks of pixels.
+pub trait RasterMut<Pixel>: Raster<Pixel> {
+    fn put(into: ViewMut<Self>, at: Coord, val: Pixel);
 }
 
 /// Inner buffer implementation.
@@ -222,16 +226,16 @@ impl<L> Canvas<L> {
     ///
     /// This reinterprets the bytes of the buffer. It can be used to view the buffer as any kind of
     /// pixel, regardless of its association with the layout. Use it with care.
-    pub fn as_pixels<P>(&self, pixel: Texel<P>) -> &[P] {
-        self.inner.buffer.as_pixels(pixel)
+    pub fn as_texels<P>(&self, pixel: Texel<P>) -> &[P] {
+        self.inner.buffer.as_texels(pixel)
     }
 
     /// View this buffer as a slice of pixels.
     ///
     /// This reinterprets the bytes of the buffer. It can be used to view the buffer as any kind of
     /// pixel, regardless of its association with the layout. Use it with care.
-    pub fn as_mut_pixels<P>(&mut self, pixel: Texel<P>) -> &mut [P] {
-        self.inner.buffer.as_mut_pixels(pixel)
+    pub fn as_mut_texels<P>(&mut self, pixel: Texel<P>) -> &mut [P] {
+        self.inner.buffer.as_mut_texels(pixel)
     }
 
     /// Get a reference to the layout.
@@ -615,14 +619,14 @@ impl<B: BufferLike, L: SampleSlice> RawCanvas<B, L> {
     }
 
     pub(crate) fn as_slice(&self) -> &[L::Sample] {
-        self.buffer.as_pixels(self.layout.sample())
+        self.buffer.as_texels(self.layout.sample())
     }
 
     pub(crate) fn as_mut_slice(&mut self) -> &mut [L::Sample]
     where
         B: BufferMut,
     {
-        self.buffer.as_mut_pixels(self.layout.sample())
+        self.buffer.as_mut_texels(self.layout.sample())
     }
 
     /// Convert back into an vector-like of sample types.

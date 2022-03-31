@@ -8,14 +8,14 @@ use core::ops::{Deref, DerefMut};
 use crate::buf::{buf, Buffer};
 use crate::{AsTexel, Texel};
 
-/// A **r**einterpretable v**ec**tor for an array of pixels.
+/// A **r**einterpretable v**ec**tor for an array of texels.
 ///
-/// It allows efficient conversion to other pixel representations, that is effective
+/// It allows efficient conversion to other texel representations, that is effective
 /// reinterpretation casts.
 pub struct Rec<P> {
     inner: Buffer,
     length: usize,
-    pixel: Texel<P>,
+    texel: Texel<P>,
 }
 
 /// Error representation for a failed buffer reuse.
@@ -23,7 +23,7 @@ pub struct Rec<P> {
 /// Indicates that the capacity of the underlying buffer is not large enough to perform the
 /// operation without a reallocation. This may be either since the allocation is simply not large
 /// enough or due to the requested length not having any representation in memory for the chosen
-/// pixel type.
+/// texel type.
 ///
 /// ```
 /// # use canvas::Rec;
@@ -45,12 +45,12 @@ pub struct ReuseError {
 }
 
 impl<P> Rec<P> {
-    /// Allocate a pixel buffer by the pixel count.
+    /// Allocate a texel buffer by the texel count.
     ///
     /// # Panics
     ///
     /// This function will panic when the byte-length of the slice with the provided count would
-    /// exceed the possible `usize` values. To avoid this, use `bytes_for_pixel` with manual
+    /// exceed the possible `usize` values. To avoid this, use `bytes_for_texel` with manual
     /// calculation of the byte length instead.
     ///
     /// This function will also panic if the allocation fails.
@@ -58,35 +58,35 @@ impl<P> Rec<P> {
     where
         P: AsTexel,
     {
-        Self::new_for_pixel(P::pixel(), count)
+        Self::new_for_texel(P::texel(), count)
     }
 
-    /// Allocate a pixel buffer by the pixel count.
+    /// Allocate a texel buffer by the texel count.
     ///
-    /// Provides the opportunity to construct the pixel argument via other means than the trait,
+    /// Provides the opportunity to construct the texel argument via other means than the trait,
     /// for example a dynamically checked expression.
     ///
     /// # Panics
     ///
     /// This function will panic when the byte-length of the slice with the provided count would
-    /// exceed the possible `usize` values. To avoid this, use `bytes_for_pixel` with manual
+    /// exceed the possible `usize` values. To avoid this, use `bytes_for_texel` with manual
     /// calculation of the byte length instead.
     ///
     /// This function will also panic if the allocation fails.
-    pub fn new_for_pixel(pixel: Texel<P>, count: usize) -> Self {
-        Self::bytes_for_pixel(pixel, mem_size(pixel, count))
+    pub fn new_for_texel(texel: Texel<P>, count: usize) -> Self {
+        Self::bytes_for_texel(texel, mem_size(texel, count))
     }
 
-    /// Allocate a pixel buffer by providing the byte count you wish to allocate.
+    /// Allocate a texel buffer by providing the byte count you wish to allocate.
     ///
     /// # Panics
     ///
     /// This function will panic if the allocation fails.
-    pub fn bytes_for_pixel(pixel: Texel<P>, mem_size: usize) -> Self {
+    pub fn bytes_for_texel(texel: Texel<P>, mem_size: usize) -> Self {
         Rec {
             inner: Buffer::new(mem_size),
             length: mem_size,
-            pixel,
+            texel,
         }
     }
 
@@ -102,7 +102,7 @@ impl<P> Rec<P> {
     where
         P: AsTexel,
     {
-        Self::with_elements_for_pixel(P::pixel(), elements)
+        Self::with_elements_for_texel(P::texel(), elements)
     }
 
     /// Allocate a buffer with initial contents.
@@ -113,23 +113,23 @@ impl<P> Rec<P> {
     /// # Panics
     ///
     /// This function will panic if the allocation fails.
-    pub fn with_elements_for_pixel(pixel: Texel<P>, elements: &[P]) -> Self {
-        let src = pixel.cast_bytes(elements);
-        let mut buffer = Rec::from_buffer(Buffer::from(src), pixel);
+    pub fn with_elements_for_texel(texel: Texel<P>, elements: &[P]) -> Self {
+        let src = texel.cast_bytes(elements);
+        let mut buffer = Rec::from_buffer(Buffer::from(src), texel);
         // Will be treated as empty, so adjust to be filled up to count.
         buffer.length = src.len();
         buffer
     }
 
-    pub(crate) fn from_buffer(inner: Buffer, pixel: Texel<P>) -> Self {
+    pub(crate) fn from_buffer(inner: Buffer, texel: Texel<P>) -> Self {
         Rec {
             inner,
-            pixel,
+            texel,
             length: 0,
         }
     }
 
-    /// Change the number of pixels.
+    /// Change the number of texel.
     ///
     /// This will always reallocate the buffer if the size exceeds the current capacity.
     ///
@@ -141,7 +141,7 @@ impl<P> Rec<P> {
     ///
     /// This function will also panic if an allocation is necessary but fails.
     pub fn resize(&mut self, count: usize) {
-        self.resize_bytes(mem_size(self.pixel, count))
+        self.resize_bytes(mem_size(self.texel, count))
     }
 
     /// Change the size in bytes.
@@ -159,7 +159,7 @@ impl<P> Rec<P> {
         self.length = bytes;
     }
 
-    /// Change the number of pixels without reallocation.
+    /// Change the number of texel without reallocation.
     ///
     /// Returns `Ok` when the resizing was successfully completed to the requested size and returns
     /// `Err` if this could not have been performed without a reallocation. This function will also
@@ -181,7 +181,7 @@ impl<P> Rec<P> {
     /// ```
     pub fn reuse(&mut self, count: usize) -> Result<(), ReuseError> {
         let bytes = count
-            .checked_mul(self.pixel.size())
+            .checked_mul(self.texel.size())
             .ok_or_else(|| ReuseError {
                 requested: None,
                 capacity: self.byte_capacity(),
@@ -227,18 +227,18 @@ impl<P> Rec<P> {
     ///
     /// This function will panic if the allocation fails.
     pub fn shrink_to_fit(&mut self) {
-        let exact_size = mem_size(self.pixel, self.len());
+        let exact_size = mem_size(self.texel, self.len());
         self.inner.resize_to(exact_size);
         self.length = exact_size;
     }
 
     pub fn as_slice(&self) -> &[P] {
-        self.buf().as_pixels(self.pixel)
+        self.buf().as_texels(self.texel)
     }
 
     pub fn as_mut_slice(&mut self) -> &mut [P] {
-        let pixel = self.pixel;
-        self.buf_mut().as_mut_pixels(pixel)
+        let texel = self.texel;
+        self.buf_mut().as_mut_texels(texel)
     }
 
     /// The number of accessible elements for the current type.
@@ -248,7 +248,7 @@ impl<P> Rec<P> {
 
     /// The number of elements that can fit without reallocation.
     pub fn capacity(&self) -> usize {
-        self.inner.capacity() / self.pixel.size()
+        self.inner.capacity() / self.texel.size()
     }
 
     pub fn as_bytes(&self) -> &[u8] {
@@ -272,27 +272,27 @@ impl<P> Rec<P> {
         self.inner.capacity()
     }
 
-    /// Reinterpret the buffer for a different type of pixel.
+    /// Reinterpret the buffer for a different type of texel.
     ///
     /// See `reinterpret_to` for details.
     pub fn reinterpret<Q>(self) -> Rec<Q>
     where
         Q: AsTexel,
     {
-        self.reinterpret_to(Q::pixel())
+        self.reinterpret_to(Q::texel())
     }
 
-    /// Reinterpret the buffer for a different type of pixel.
+    /// Reinterpret the buffer for a different type of texel.
     ///
-    /// Note that this may leave some of the underlying pixels unaccessible if the new type is
+    /// Note that this may leave some of the underlying texels unaccessible if the new type is
     /// larger than the old one and the allocation was not a multiple of the new size. Conversely,
     /// some new bytes may become accessible if the memory length was not a multiple of the
-    /// previous pixel type's length.
-    pub fn reinterpret_to<Q>(self, pixel: Texel<Q>) -> Rec<Q> {
+    /// previous texel type's length.
+    pub fn reinterpret_to<Q>(self, texel: Texel<Q>) -> Rec<Q> {
         Rec {
             inner: self.inner,
             length: self.length,
-            pixel,
+            texel,
         }
     }
 
@@ -303,28 +303,28 @@ impl<P> Rec<P> {
     where
         Q: AsTexel,
     {
-        self.map_to(f, Q::pixel())
+        self.map_to(f, Q::texel())
     }
 
     /// Map elements to another value.
     ///
-    /// This will keep the logical length of the `Rec` so that the number of pixels stays constant.
+    /// This will keep the logical length of the `Rec` so that the number of texels stays constant.
     /// If necessary, it will grow the internal buffer to achieve this.
     ///
     /// # Panics
     ///
     /// This function will panic if the allocation fails or the necessary allocation exceeds the
     /// value range of `usize`.
-    pub fn map_to<Q>(mut self, f: impl Fn(P) -> Q, pixel: Texel<Q>) -> Rec<Q> {
+    pub fn map_to<Q>(mut self, f: impl Fn(P) -> Q, texel: Texel<Q>) -> Rec<Q> {
         // Ensure we have enough memory for both representations.
         let length = self.as_slice().len();
-        let new_bytes = mem_size(pixel, length);
+        let new_bytes = mem_size(texel, length);
         self.inner.grow_to(new_bytes);
-        self.inner.map_within(..length, 0, f, self.pixel, pixel);
+        self.inner.map_within(..length, 0, f, self.texel, texel);
         Rec {
             inner: self.inner,
             length: new_bytes,
-            pixel,
+            texel,
         }
     }
 
@@ -341,8 +341,8 @@ impl<P> Rec<P> {
     }
 }
 
-fn mem_size<P>(pixel: Texel<P>, count: usize) -> usize {
-    pixel
+fn mem_size<P>(texel: Texel<P>, count: usize) -> usize {
+    texel
         .size()
         .checked_mul(count)
         .unwrap_or_else(|| panic!("Requested count overflows memory size"))
@@ -376,7 +376,7 @@ impl<P: AsTexel> Default for Rec<P> {
         Rec {
             inner: Buffer::default(),
             length: 0,
-            pixel: P::pixel(),
+            texel: P::texel(),
         }
     }
 }
