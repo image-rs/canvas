@@ -13,7 +13,7 @@
 //! pixel matrix. Then some of those formats map cleanly to planes of color information that can be
 //! viewed as a matrix with strides, which finally enables useful operations such as
 //! initialization.
-use crate::{layout, pixel, stride};
+use canvas::{layout, pixels, stride};
 use core::convert::TryFrom;
 use core::fmt;
 use core::ops::Range;
@@ -275,7 +275,7 @@ impl DrmFormatInfo {
         }
 
         Some(match self.format {
-            FourCC::C8 | FourCC::RGB332 | FourCC::BGR332 => pixel::constants::U8.into(),
+            FourCC::C8 | FourCC::RGB332 | FourCC::BGR332 => pixels::U8.into(),
             FourCC::XRGB444
             | FourCC::XBGR444
             | FourCC::RGBX444
@@ -285,8 +285,8 @@ impl DrmFormatInfo {
             | FourCC::ARGB444
             | FourCC::ABGR444
             | FourCC::RGBA444
-            | FourCC::BGRA444 => pixel::constants::U16.into(),
-            FourCC::RGB888 | FourCC::BGR888 => pixel::constants::U8.array3().into(),
+            | FourCC::BGRA444 => pixels::U16.into(),
+            FourCC::RGB888 | FourCC::BGR888 => pixels::U8.array3().into(),
             FourCC::XRGB8888
             | FourCC::XBGR8888
             | FourCC::RGBX8888
@@ -294,7 +294,7 @@ impl DrmFormatInfo {
             | FourCC::ARGB8888
             | FourCC::ABGR8888
             | FourCC::RGBA8888
-            | FourCC::BGRA8888 => pixel::constants::U8.array4().into(),
+            | FourCC::BGRA8888 => pixels::U8.array4().into(),
             FourCC::XRGB2101010
             | FourCC::XBGR2101010
             | FourCC::RGBX1010102
@@ -302,34 +302,34 @@ impl DrmFormatInfo {
             | FourCC::ARGB2101010
             | FourCC::ABGR2101010
             | FourCC::RGBA1010102
-            | FourCC::BGRA1010102 => pixel::constants::U32.into(),
+            | FourCC::BGRA1010102 => pixels::U32.into(),
             FourCC::XRGB16161616F
             | FourCC::XBGR16161616F
             | FourCC::ARGB16161616F
-            | FourCC::ABGR16161616F => pixel::constants::U16.array4().into(),
-            FourCC::YUYV | FourCC::YVYU | FourCC::AYUV => pixel::constants::U8.array4().into(),
-            FourCC::VUY101010 => pixel::constants::U32.into(),
-            FourCC::VUY888 => pixel::constants::U8.array3().into(),
+            | FourCC::ABGR16161616F => pixels::U16.array4().into(),
+            FourCC::YUYV | FourCC::YVYU | FourCC::AYUV => pixels::U8.array4().into(),
+            FourCC::VUY101010 => pixels::U32.into(),
+            FourCC::VUY888 => pixels::U8.array3().into(),
             // Actually planar formats.
             FourCC::XRGB888_A8 | FourCC::XBGR888_A8 => {
                 if plane == PlaneIdx::First {
-                    pixel::constants::U8.array4().into()
+                    pixels::U8.array4().into()
                 } else {
-                    pixel::constants::U8.into()
+                    pixels::U8.into()
                 }
             }
             FourCC::RGB888_A8 | FourCC::BGR888_A8 => {
                 if plane == PlaneIdx::First {
-                    pixel::constants::U8.array3().into()
+                    pixels::U8.array3().into()
                 } else {
-                    pixel::constants::U8.into()
+                    pixels::U8.into()
                 }
             }
             FourCC::RGB565_A8 | FourCC::BGR565_A8 => {
                 if plane == PlaneIdx::First {
-                    pixel::constants::U16.into()
+                    pixels::U16.into()
                 } else {
-                    pixel::constants::U8.into()
+                    pixels::U8.into()
                 }
             }
             FourCC::NV12
@@ -339,9 +339,9 @@ impl DrmFormatInfo {
             | FourCC::NV24
             | FourCC::NV42 => {
                 if plane == PlaneIdx::First {
-                    pixel::constants::U8.into()
+                    pixels::U8.into()
                 } else {
-                    pixel::constants::U8.array2().into()
+                    pixels::U8.array2().into()
                 }
             }
             FourCC::YUV410
@@ -353,7 +353,7 @@ impl DrmFormatInfo {
             | FourCC::YUV422
             | FourCC::YVU422
             | FourCC::YUV444
-            | FourCC::YVU444 => pixel::constants::U8.into(),
+            | FourCC::YVU444 => pixels::U8.into(),
             // No element that fits (or not implemented?).
             _ => return None,
         })
