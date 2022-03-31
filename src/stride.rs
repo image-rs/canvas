@@ -15,7 +15,7 @@
 //! strided matrix even when it was not allocated with the special allocator.
 use crate::canvas::Canvas;
 use crate::layout::Layout;
-use crate::pixel::AsPixel;
+use crate::pixel::AsTexel;
 use crate::{layout, matrix};
 use core::ops::Range;
 
@@ -30,7 +30,7 @@ pub struct StrideSpec {
     ///
     /// If this differs from both `width_stride` and `height_stride` the any copy must loop over
     /// individual pixels. Otherwise, whole rows or columns of contiguous data may be inspected.
-    pub element: layout::Element,
+    pub element: layout::TexelLayout,
     /// The number of bytes to go one pixel along the width.
     pub width_stride: usize,
     /// The number of bytes to go one pixel along the height.
@@ -216,7 +216,7 @@ impl StrideLayout {
     /// Shrink the element's size or alignment.
     ///
     /// This is always valid since the new layout is strictly contained within the old one.
-    pub fn shrink_element(&mut self, new: layout::Element) {
+    pub fn shrink_element(&mut self, new: layout::TexelLayout) {
         self.spec.element = self.spec.element.infimum(new);
     }
 
@@ -267,7 +267,7 @@ impl Strides {
     /// Shrink the element's size or alignment.
     ///
     /// This operation never reallocates the buffer.
-    pub fn shrink_element(&mut self, new: layout::Element) {
+    pub fn shrink_element(&mut self, new: layout::TexelLayout) {
         self.inner.layout_mut_unguarded().shrink_element(new)
     }
 
@@ -309,7 +309,7 @@ impl<'data> ByteCanvasRef<'data> {
     /// Shrink the element's size or alignment.
     ///
     /// This operation never reallocates the buffer.
-    pub fn shrink_element(&mut self, new: layout::Element) {
+    pub fn shrink_element(&mut self, new: layout::TexelLayout) {
         self.layout.shrink_element(new)
     }
 
@@ -333,7 +333,7 @@ impl<'data> ByteCanvasMut<'data> {
     /// Shrink the element's size or alignment.
     ///
     /// This operation never reallocates the buffer.
-    pub fn shrink_element(&mut self, new: layout::Element) {
+    pub fn shrink_element(&mut self, new: layout::TexelLayout) {
         self.layout.shrink_element(new)
     }
 
@@ -407,10 +407,10 @@ impl Strided for StrideLayout {
     }
 }
 
-impl<P: AsPixel> Strided for matrix::Layout<P> {
+impl<P: AsTexel> Strided for matrix::Layout<P> {
     fn strided(&self) -> StrideLayout {
         let matrix = layout::Matrix::from_width_height(
-            layout::Element::from_pixel::<P>(),
+            layout::TexelLayout::from_pixel::<P>(),
             self.width(),
             self.height(),
         );
@@ -428,7 +428,7 @@ impl From<BadStrideKind> for BadStrideError {
 #[test]
 fn align_validation() {
     // Setup a good base specification.
-    let matrix = layout::Matrix::from_width_height(layout::Element::from_pixel::<u16>(), 2, 2)
+    let matrix = layout::Matrix::from_width_height(layout::TexelLayout::from_pixel::<u16>(), 2, 2)
         .expect("Valid matrix");
     let layout = StrideLayout::with_row_major(matrix);
 
@@ -446,7 +446,7 @@ fn align_validation() {
 
 #[test]
 fn canvas_copies() {
-    let matrix = layout::Matrix::from_width_height(layout::Element::from_pixel::<u8>(), 2, 2)
+    let matrix = layout::Matrix::from_width_height(layout::TexelLayout::from_pixel::<u8>(), 2, 2)
         .expect("Valid matrix");
     let row_layout = StrideLayout::with_row_major(matrix);
     let col_layout = StrideLayout::with_column_major(matrix);

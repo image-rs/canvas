@@ -5,7 +5,7 @@ use core::{fmt, ops};
 
 use crate::buf::{buf, Buffer, Cog};
 use crate::layout::{Bytes, Coord, Decay, DynLayout, Layout, Mend, SampleSlice, Take, TryMend};
-use crate::{Pixel, Rec, ReuseError};
+use crate::{Rec, ReuseError, Texel};
 
 /// A owned canvas, parameterized over the layout.
 ///
@@ -71,14 +71,14 @@ pub struct ViewMut<'buf, Layout = Bytes> {
 }
 
 /// A raster layout.
-pub trait Raster<Pixel>: Sized {
+pub trait Raster<Texel>: Sized {
     fn dimensions(&self) -> Coord;
-    fn get(from: View<Self>, at: Coord) -> Pixel;
+    fn get(from: View<Self>, at: Coord) -> Texel;
 }
 
 /// A raster layout where one can change pixel values independently.
-pub trait RasterMut<Pixel>: Raster<Pixel> {
-    fn put(into: ViewMut<Self>, at: Coord, val: Pixel);
+pub trait RasterMut<Texel>: Raster<Texel> {
+    fn put(into: ViewMut<Self>, at: Coord, val: Texel);
 }
 
 /// Inner buffer implementation.
@@ -222,7 +222,7 @@ impl<L> Canvas<L> {
     ///
     /// This reinterprets the bytes of the buffer. It can be used to view the buffer as any kind of
     /// pixel, regardless of its association with the layout. Use it with care.
-    pub fn as_pixels<P>(&self, pixel: Pixel<P>) -> &[P] {
+    pub fn as_pixels<P>(&self, pixel: Texel<P>) -> &[P] {
         self.inner.buffer.as_pixels(pixel)
     }
 
@@ -230,7 +230,7 @@ impl<L> Canvas<L> {
     ///
     /// This reinterprets the bytes of the buffer. It can be used to view the buffer as any kind of
     /// pixel, regardless of its association with the layout. Use it with care.
-    pub fn as_mut_pixels<P>(&mut self, pixel: Pixel<P>) -> &mut [P] {
+    pub fn as_mut_pixels<P>(&mut self, pixel: Texel<P>) -> &mut [P] {
         self.inner.buffer.as_mut_pixels(pixel)
     }
 

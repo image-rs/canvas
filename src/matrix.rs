@@ -6,7 +6,7 @@ use core::{cmp, fmt};
 
 use crate::buf::Buffer;
 use crate::canvas::{Canvas, RawCanvas};
-use crate::{layout, AsPixel, Pixel, Rec, ReuseError};
+use crate::{layout, AsTexel, Rec, ReuseError, Texel};
 
 /// A 2d, width-major matrix of pixels.
 ///
@@ -70,7 +70,7 @@ pub struct Matrix<P> {
 pub struct Layout<P> {
     width: usize,
     height: usize,
-    pixel: Pixel<P>,
+    pixel: Texel<P>,
 }
 
 /// Error representation for a failed buffer reuse for a canvas.
@@ -160,10 +160,10 @@ impl<P> Matrix<P> {
     /// consider using `Layout::from_width_and_height` and `Matrix::with_layout`.
     pub fn with_width_and_height(width: usize, height: usize) -> Self
     where
-        P: AsPixel,
+        P: AsTexel,
     {
         let layout =
-            Layout::width_and_height(width, height).expect("Pixel layout can not fit into memory");
+            Layout::width_and_height(width, height).expect("Texel layout can not fit into memory");
         Self::with_layout(layout)
     }
 
@@ -201,7 +201,7 @@ impl<P> Matrix<P> {
     }
 
     fn new_raw(inner: Rec<P>, layout: Layout<P>) -> Self {
-        assert_eq!(inner.len(), layout.len(), "Pixel count agrees with buffer");
+        assert_eq!(inner.len(), layout.len(), "Texel count agrees with buffer");
         Matrix {
             inner: RawCanvas::from_rec(inner, layout),
         }
@@ -241,7 +241,7 @@ impl<P> Matrix<P> {
     /// Reinterpret to another, same size pixel type.
     ///
     /// See `transmute_to` for details.
-    pub fn transmute<Q: AsPixel>(self) -> Matrix<Q> {
+    pub fn transmute<Q: AsTexel>(self) -> Matrix<Q> {
         self.transmute_to(Q::pixel())
     }
 
@@ -251,7 +251,7 @@ impl<P> Matrix<P> {
     ///
     /// Like `std::mem::transmute`, the size of the two types need to be equal. This ensures that
     /// all indices are valid in both directions.
-    pub fn transmute_to<Q: AsPixel>(self, pixel: Pixel<Q>) -> Matrix<Q> {
+    pub fn transmute_to<Q: AsTexel>(self, pixel: Texel<Q>) -> Matrix<Q> {
         let layout = self.layout().transmute_to(pixel);
         let inner = self.inner.reinterpret_unguarded(layout);
         Matrix { inner }
@@ -284,7 +284,7 @@ impl<P> Matrix<P> {
     pub fn map<F, Q>(self, map: F) -> Matrix<Q>
     where
         F: Fn(P) -> Q,
-        Q: AsPixel,
+        Q: AsTexel,
     {
         self.map_to(map, Q::pixel())
     }
@@ -298,7 +298,7 @@ impl<P> Matrix<P> {
     ///
     /// This function will panic if the new layout would be invalid (because the new pixel type
     /// requires a larger buffer than can be allocate) or if the reallocation fails.
-    pub fn map_to<F, Q>(self, map: F, pixel: Pixel<Q>) -> Matrix<Q>
+    pub fn map_to<F, Q>(self, map: F, pixel: Texel<Q>) -> Matrix<Q>
     where
         F: Fn(P) -> Q,
     {
@@ -306,7 +306,7 @@ impl<P> Matrix<P> {
         let layout = self
             .layout()
             .map_to(pixel)
-            .expect("Pixel layout can not fit into memory");
+            .expect("Texel layout can not fit into memory");
         // .. then do the actual pixel mapping.
         let inner = self.into_rec().map_to(map, pixel);
         Matrix::from_rec(inner, layout)
@@ -315,7 +315,7 @@ impl<P> Matrix<P> {
     pub fn map_reuse<F, Q>(self, map: F) -> Result<Matrix<Q>, MapReuseError<P, Q>>
     where
         F: Fn(P) -> Q,
-        Q: AsPixel,
+        Q: AsTexel,
     {
         self.map_reuse_to(map, Q::pixel())
     }
@@ -323,7 +323,7 @@ impl<P> Matrix<P> {
     pub fn map_reuse_to<F, Q>(
         self,
         map: F,
-        pixel: Pixel<Q>,
+        pixel: Texel<Q>,
     ) -> Result<Matrix<Q>, MapReuseError<P, Q>>
     where
         F: Fn(P) -> Q,
@@ -353,7 +353,7 @@ impl<P> Matrix<P> {
 
 impl<P> Layout<P> {
     pub fn width_and_height_for_pixel(
-        pixel: Pixel<P>,
+        pixel: Texel<P>,
         width: usize,
         height: usize,
     ) -> Option<Self> {
@@ -369,7 +369,7 @@ impl<P> Layout<P> {
 
     pub fn width_and_height(width: usize, height: usize) -> Option<Self>
     where
-        P: AsPixel,
+        P: AsTexel,
     {
         Self::width_and_height_for_pixel(P::pixel(), width, height)
     }
@@ -393,14 +393,14 @@ impl<P> Layout<P> {
         self.height
     }
 
-    pub fn pixel(self) -> Pixel<P> {
+    pub fn pixel(self) -> Texel<P> {
         self.pixel
     }
 
     /// Reinterpret to another, same size pixel type.
     ///
     /// See `transmute_to` for details.
-    pub fn transmute<Q: AsPixel>(self) -> Layout<Q> {
+    pub fn transmute<Q: AsTexel>(self) -> Layout<Q> {
         self.transmute_to(Q::pixel())
     }
 
@@ -409,7 +409,7 @@ impl<P> Layout<P> {
     /// # Panics
     /// Like `std::mem::transmute`, the size of the two types need to be equal. This ensures that
     /// all indices are valid in both directions.
-    pub fn transmute_to<Q>(self, pixel: Pixel<Q>) -> Layout<Q> {
+    pub fn transmute_to<Q>(self, pixel: Texel<Q>) -> Layout<Q> {
         assert!(self.pixel.size() == pixel.size());
         Layout {
             width: self.width,
@@ -419,12 +419,12 @@ impl<P> Layout<P> {
     }
 
     /// Utility method to change the pixel type without changing the dimensions.
-    pub fn map<Q: AsPixel>(self) -> Option<Layout<Q>> {
+    pub fn map<Q: AsTexel>(self) -> Option<Layout<Q>> {
         self.map_to(Q::pixel())
     }
 
     /// Utility method to change the pixel type without changing the dimensions.
-    pub fn map_to<Q>(self, pixel: Pixel<Q>) -> Option<Layout<Q>> {
+    pub fn map_to<Q>(self, pixel: Texel<Q>) -> Option<Layout<Q>> {
         Layout::width_and_height_for_pixel(pixel, self.width, self.height)
     }
 
@@ -484,7 +484,7 @@ impl<P> layout::Layout for Layout<P> {
 impl<P> layout::SampleSlice for Layout<P> {
     type Sample = P;
 
-    fn sample(&self) -> Pixel<P> {
+    fn sample(&self) -> Texel<P> {
         self.pixel
     }
 }
@@ -499,7 +499,7 @@ impl<P> Clone for Layout<P> {
 
 impl<P> Copy for Layout<P> {}
 
-impl<P: AsPixel> Default for Layout<P> {
+impl<P: AsTexel> Default for Layout<P> {
     fn default() -> Self {
         Layout {
             width: 0,
@@ -541,7 +541,7 @@ impl<P> cmp::PartialOrd for Layout<P> {
     }
 }
 
-impl<P: AsPixel> Default for Matrix<P> {
+impl<P: AsTexel> Default for Matrix<P> {
     fn default() -> Self {
         Matrix::from_rec(Rec::default(), Layout::default())
     }

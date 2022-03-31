@@ -18,16 +18,16 @@ use crate::buf::buf;
 /// interface but permits other types with an unsafe interface, and offers the cast operations
 /// without a bound on the `Pod` trait. Note that `Pod` is a pure marker trait; its properties must
 /// hold even if it is not explicitly mentioned. If all constructors (safely or unsafely) ensure
-/// that its properties hold we can use `Pixel` as a witness type for the bound and subsequently
+/// that its properties hold we can use `Texel` as a witness type for the bound and subsequently
 /// write interfaces to take an instance instead of having a static type bound. This achieves two
 /// effects:
 /// * Firstly, it makes the interface independent of the chosen transmutation crate. Potentially we
-///   will have a method to construct the `Pixel` via a `core` trait.
+///   will have a method to construct the `Texel` via a `core` trait.
 /// * Secondly, it allows creating pixels of third-party types for which the bound can not be
 ///   implemented. Crucially, this includes SIMD representations that would be a burden to support
 ///   directly. And conversely you can also deal with arbitrary existing pixels without a bound in
 ///   your own interfaces!
-pub struct Pixel<P: ?Sized>(PhantomData<P>);
+pub struct Texel<P: ?Sized>(PhantomData<P>);
 
 /// Marker struct to denote that P is transparently wrapped in O.
 ///
@@ -37,14 +37,14 @@ pub struct Pixel<P: ?Sized>(PhantomData<P>);
 /// deprecated sooner or later.
 pub struct IsTransparentWrapper<P, O>(PhantomData<(P, O)>);
 
-/// Describes a type which can represent a `Pixel` and for which this is statically known.
-pub trait AsPixel {
+/// Describes a type which can represent a `Texel` and for which this is statically known.
+pub trait AsTexel {
     /// Get the pixel struct for this type.
     ///
-    /// The naive implementation of merely unwrapping the result of `Pixel::for_type` **panics** on
+    /// The naive implementation of merely unwrapping the result of `Texel::for_type` **panics** on
     /// any invalid type. This trait should only be implemented when you know for sure that the
     /// type is correct.
-    fn pixel() -> Pixel<Self>;
+    fn pixel() -> Texel<Self>;
 }
 
 pub(crate) const MAX_ALIGN: usize = 16;
@@ -61,13 +61,13 @@ unsafe impl bytemuck::Zeroable for MaxAligned {}
 unsafe impl bytemuck::Pod for MaxAligned {}
 
 pub(crate) mod constants {
-    use super::{AsPixel, MaxAligned, Pixel};
+    use super::{AsTexel, MaxAligned, Texel};
 
     macro_rules! constant_pixels {
         ($(($name:ident, $type:ty)),*) => {
-            $(pub const $name: Pixel<$type> = Pixel(core::marker::PhantomData) ;
-              impl AsPixel for $type {
-                  fn pixel() -> Pixel<Self> {
+            $(pub const $name: Texel<$type> = Texel(core::marker::PhantomData) ;
+              impl AsTexel for $type {
+                  fn pixel() -> Texel<Self> {
                       $name
                   }
               }
@@ -93,13 +93,13 @@ pub(crate) mod constants {
     );
 }
 
-impl<P: bytemuck::Pod> Pixel<P> {
+impl<P: bytemuck::Pod> Texel<P> {
     /// Try to construct an instance of the marker.
     ///
     /// If successful, you can freely use it to access the image buffers.
     pub fn for_type() -> Option<Self> {
         if mem::align_of::<P>() <= MAX_ALIGN && !mem::needs_drop::<P>() {
-            Some(Pixel(PhantomData))
+            Some(Texel(PhantomData))
         } else {
             None
         }
@@ -142,7 +142,7 @@ impl buf {
     }
 }
 
-impl<P> Pixel<P> {
+impl<P> Texel<P> {
     /// Create a witness certifying `P` as a pixel without checks.
     ///
     /// # Safety
@@ -154,7 +154,7 @@ impl<P> Pixel<P> {
     ///
     /// [`MaxAligned`]: struct.MaxAligned.html
     pub const unsafe fn new_unchecked() -> Self {
-        Pixel(PhantomData)
+        Texel(PhantomData)
     }
 
     /// Proxy of `core::mem::align_of`.
@@ -172,72 +172,72 @@ impl<P> Pixel<P> {
     // explain their safety in the code as comments.
 
     /// Construct a pixel as an array of no elements.
-    pub const fn array0(self) -> Pixel<[P; 0]> {
+    pub const fn array0(self) -> Texel<[P; 0]> {
         // Safety:
         // * has no validity/safety invariants
         // * has the same alignment as P which is not larger then MaxAligned
-        unsafe { Pixel::new_unchecked() }
+        unsafe { Texel::new_unchecked() }
     }
 
     /// Construct a pixel as an array of one element.
-    pub const fn array1(self) -> Pixel<[P; 1]> {
+    pub const fn array1(self) -> Texel<[P; 1]> {
         // Safety:
         // * has validity/safety invariants of P, none
         // * has the same alignment as P which is not larger then MaxAligned
-        unsafe { Pixel::new_unchecked() }
+        unsafe { Texel::new_unchecked() }
     }
 
     /// Construct a pixel as an array of two elements.
-    pub const fn array2(self) -> Pixel<[P; 2]> {
+    pub const fn array2(self) -> Texel<[P; 2]> {
         // Safety:
         // * has validity/safety invariants of P, none
         // * has the same alignment as P which is not larger then MaxAligned
-        unsafe { Pixel::new_unchecked() }
+        unsafe { Texel::new_unchecked() }
     }
 
     /// Construct a pixel as an array of three elements.
-    pub const fn array3(self) -> Pixel<[P; 3]> {
+    pub const fn array3(self) -> Texel<[P; 3]> {
         // Safety:
         // * has validity/safety invariants of P, none
         // * has the same alignment as P which is not larger then MaxAligned
-        unsafe { Pixel::new_unchecked() }
+        unsafe { Texel::new_unchecked() }
     }
 
     /// Construct a pixel as an array of four elements.
-    pub const fn array4(self) -> Pixel<[P; 4]> {
+    pub const fn array4(self) -> Texel<[P; 4]> {
         // Safety:
         // * has validity/safety invariants of P, none
         // * has the same alignment as P which is not larger then MaxAligned
-        unsafe { Pixel::new_unchecked() }
+        unsafe { Texel::new_unchecked() }
     }
 
     /// Construct a pixel by wrapping into a transparent wrapper.
     ///
-    /// TODO: a constructor for Pixel<O> based on proof of transmutation from &mut P to &mut O,
+    /// TODO: a constructor for Texel<O> based on proof of transmutation from &mut P to &mut O,
     /// based on the standard transmutation RFC. This is more flexible than bytemuck's
     /// TransparentWrapper trait.
-    pub const fn transparent_wrap<O>(self, _: IsTransparentWrapper<P, O>) -> Pixel<O> {
+    pub const fn transparent_wrap<O>(self, _: IsTransparentWrapper<P, O>) -> Texel<O> {
         // Safety:
         // * P and O must have the same invariants, none
         // * P and O have the same alignment
-        unsafe { Pixel::new_unchecked() }
+        unsafe { Texel::new_unchecked() }
     }
 
     /// Construct a pixel by unwrapping a transparent wrapper.
-    pub const fn transparent_unwrap<O>(self, _: IsTransparentWrapper<O, P>) -> Pixel<O> {
+    pub const fn transparent_unwrap<O>(self, _: IsTransparentWrapper<O, P>) -> Texel<O> {
         // Safety:
         // * P and O must have the same invariants, none
         // * P and O have the same alignment
-        unsafe { Pixel::new_unchecked() }
+        unsafe { Texel::new_unchecked() }
     }
 }
 
-/// Operations that can be performed based on the evidence of Pixel.
-impl<P> Pixel<P> {
+/// Operations that can be performed based on the evidence of Texel.
+impl<P> Texel<P> {
     /// Copy a pixel.
     ///
     /// Note that this does not require `Copy` because that requirement was part of the
-    /// requirements of constructing this `Pixel` witness.
+    /// requirements of constructing this `Texel` witness.
     pub fn copy_val(self, val: &P) -> P {
         // SAFETY: by the constructor, this type can be copied byte-by-byte.
         unsafe { ptr::read(val) }
@@ -275,8 +275,8 @@ impl<P> Pixel<P> {
         // Safety:
         // * data is valid for reads as memory size is not enlarged
         // * lifetime is not changed
-        // * validity for arbitrary data as required by Pixel constructor
-        // * alignment checked by Pixel constructor
+        // * validity for arbitrary data as required by Texel constructor
+        // * alignment checked by Texel constructor
         // * the size fits in an allocation, see first bullet point.
         unsafe {
             if mem::size_of::<P>() == 0 {
@@ -296,8 +296,8 @@ impl<P> Pixel<P> {
         // Safety:
         // * data is valid for reads and writes as memory size is not enlarged
         // * lifetime is not changed
-        // * validity for arbitrary data as required by Pixel constructor
-        // * alignment checked by Pixel constructor
+        // * validity for arbitrary data as required by Texel constructor
+        // * alignment checked by Texel constructor
         // * the size fits in an allocation, see first bullet point.
         unsafe {
             if mem::size_of::<P>() == 0 {
@@ -315,7 +315,7 @@ impl<P> Pixel<P> {
         // Safety:
         // * lifetime is not changed
         // * keeps the exact same size
-        // * validity for byte reading checked by Pixel constructor
+        // * validity for byte reading checked by Texel constructor
         unsafe { slice::from_raw_parts(pixel.as_ptr() as *const u8, mem::size_of_val(pixel)) }
     }
 
@@ -323,50 +323,50 @@ impl<P> Pixel<P> {
         // Safety:
         // * lifetime is not changed
         // * keeps the exact same size
-        // * validity as bytes checked by Pixel constructor
+        // * validity as bytes checked by Texel constructor
         unsafe { slice::from_raw_parts_mut(pixel.as_ptr() as *mut u8, mem::size_of_val(pixel)) }
     }
 }
 
 /// This is a pure marker type.
-impl<P> Clone for Pixel<P> {
+impl<P> Clone for Texel<P> {
     fn clone(&self) -> Self {
-        Pixel(PhantomData)
+        Texel(PhantomData)
     }
 }
 
-impl<P> PartialEq for Pixel<P> {
+impl<P> PartialEq for Texel<P> {
     fn eq(&self, _: &Self) -> bool {
         true
     }
 }
 
-impl<P> Eq for Pixel<P> {}
+impl<P> Eq for Texel<P> {}
 
-impl<P> PartialOrd for Pixel<P> {
+impl<P> PartialOrd for Texel<P> {
     fn partial_cmp(&self, _: &Self) -> Option<Ordering> {
         Some(Ordering::Equal)
     }
 }
 
-impl<P> Ord for Pixel<P> {
+impl<P> Ord for Texel<P> {
     fn cmp(&self, _: &Self) -> Ordering {
         Ordering::Equal
     }
 }
 
 /// This is a pure marker type.
-impl<P> Copy for Pixel<P> {}
+impl<P> Copy for Texel<P> {}
 
-impl<P> fmt::Debug for Pixel<P> {
+impl<P> fmt::Debug for Texel<P> {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
-        f.debug_struct("Pixel")
+        f.debug_struct("Texel")
             .field("size", &self.size())
             .field("align", &self.align())
             .finish()
     }
 }
 
-impl<P> hash::Hash for Pixel<P> {
+impl<P> hash::Hash for Texel<P> {
     fn hash<H: hash::Hasher>(&self, _: &mut H) {}
 }

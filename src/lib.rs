@@ -45,7 +45,7 @@ pub mod stride;
 
 pub use self::canvas::Canvas;
 pub use self::matrix::{Layout, Matrix, MatrixReuseError};
-pub use self::pixel::{AsPixel, Pixel};
+pub use self::pixel::{AsTexel, Texel};
 pub use self::rec::{Rec, ReuseError};
 
 /// Constants for predefined pixel types.

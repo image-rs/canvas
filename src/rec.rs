@@ -6,7 +6,7 @@ use core::fmt;
 use core::ops::{Deref, DerefMut};
 
 use crate::buf::{buf, Buffer};
-use crate::{AsPixel, Pixel};
+use crate::{AsTexel, Texel};
 
 /// A **r**einterpretable v**ec**tor for an array of pixels.
 ///
@@ -15,7 +15,7 @@ use crate::{AsPixel, Pixel};
 pub struct Rec<P> {
     inner: Buffer,
     length: usize,
-    pixel: Pixel<P>,
+    pixel: Texel<P>,
 }
 
 /// Error representation for a failed buffer reuse.
@@ -56,7 +56,7 @@ impl<P> Rec<P> {
     /// This function will also panic if the allocation fails.
     pub fn new(count: usize) -> Self
     where
-        P: AsPixel,
+        P: AsTexel,
     {
         Self::new_for_pixel(P::pixel(), count)
     }
@@ -73,7 +73,7 @@ impl<P> Rec<P> {
     /// calculation of the byte length instead.
     ///
     /// This function will also panic if the allocation fails.
-    pub fn new_for_pixel(pixel: Pixel<P>, count: usize) -> Self {
+    pub fn new_for_pixel(pixel: Texel<P>, count: usize) -> Self {
         Self::bytes_for_pixel(pixel, mem_size(pixel, count))
     }
 
@@ -82,7 +82,7 @@ impl<P> Rec<P> {
     /// # Panics
     ///
     /// This function will panic if the allocation fails.
-    pub fn bytes_for_pixel(pixel: Pixel<P>, mem_size: usize) -> Self {
+    pub fn bytes_for_pixel(pixel: Texel<P>, mem_size: usize) -> Self {
         Rec {
             inner: Buffer::new(mem_size),
             length: mem_size,
@@ -100,7 +100,7 @@ impl<P> Rec<P> {
     /// This function will panic if the allocation fails.
     pub fn with_elements(elements: &[P]) -> Self
     where
-        P: AsPixel,
+        P: AsTexel,
     {
         Self::with_elements_for_pixel(P::pixel(), elements)
     }
@@ -113,7 +113,7 @@ impl<P> Rec<P> {
     /// # Panics
     ///
     /// This function will panic if the allocation fails.
-    pub fn with_elements_for_pixel(pixel: Pixel<P>, elements: &[P]) -> Self {
+    pub fn with_elements_for_pixel(pixel: Texel<P>, elements: &[P]) -> Self {
         let src = pixel.cast_bytes(elements);
         let mut buffer = Rec::from_buffer(Buffer::from(src), pixel);
         // Will be treated as empty, so adjust to be filled up to count.
@@ -121,7 +121,7 @@ impl<P> Rec<P> {
         buffer
     }
 
-    pub(crate) fn from_buffer(inner: Buffer, pixel: Pixel<P>) -> Self {
+    pub(crate) fn from_buffer(inner: Buffer, pixel: Texel<P>) -> Self {
         Rec {
             inner,
             pixel,
@@ -277,7 +277,7 @@ impl<P> Rec<P> {
     /// See `reinterpret_to` for details.
     pub fn reinterpret<Q>(self) -> Rec<Q>
     where
-        Q: AsPixel,
+        Q: AsTexel,
     {
         self.reinterpret_to(Q::pixel())
     }
@@ -288,7 +288,7 @@ impl<P> Rec<P> {
     /// larger than the old one and the allocation was not a multiple of the new size. Conversely,
     /// some new bytes may become accessible if the memory length was not a multiple of the
     /// previous pixel type's length.
-    pub fn reinterpret_to<Q>(self, pixel: Pixel<Q>) -> Rec<Q> {
+    pub fn reinterpret_to<Q>(self, pixel: Texel<Q>) -> Rec<Q> {
         Rec {
             inner: self.inner,
             length: self.length,
@@ -301,7 +301,7 @@ impl<P> Rec<P> {
     /// See [`map_to`] for details.
     pub fn map<Q>(self, f: impl Fn(P) -> Q) -> Rec<Q>
     where
-        Q: AsPixel,
+        Q: AsTexel,
     {
         self.map_to(f, Q::pixel())
     }
@@ -315,7 +315,7 @@ impl<P> Rec<P> {
     ///
     /// This function will panic if the allocation fails or the necessary allocation exceeds the
     /// value range of `usize`.
-    pub fn map_to<Q>(mut self, f: impl Fn(P) -> Q, pixel: Pixel<Q>) -> Rec<Q> {
+    pub fn map_to<Q>(mut self, f: impl Fn(P) -> Q, pixel: Texel<Q>) -> Rec<Q> {
         // Ensure we have enough memory for both representations.
         let length = self.as_slice().len();
         let new_bytes = mem_size(pixel, length);
@@ -341,7 +341,7 @@ impl<P> Rec<P> {
     }
 }
 
-fn mem_size<P>(pixel: Pixel<P>, count: usize) -> usize {
+fn mem_size<P>(pixel: Texel<P>, count: usize) -> usize {
     pixel
         .size()
         .checked_mul(count)
@@ -371,7 +371,7 @@ impl<P> Clone for Rec<P> {
     }
 }
 
-impl<P: AsPixel> Default for Rec<P> {
+impl<P: AsTexel> Default for Rec<P> {
     fn default() -> Self {
         Rec {
             inner: Buffer::default(),
@@ -381,7 +381,7 @@ impl<P: AsPixel> Default for Rec<P> {
     }
 }
 
-impl<P: AsPixel + Clone> From<&'_ [P]> for Rec<P> {
+impl<P: AsTexel + Clone> From<&'_ [P]> for Rec<P> {
     fn from(elements: &'_ [P]) -> Self {
         Rec::with_elements(elements)
     }

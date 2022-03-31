@@ -1,8 +1,10 @@
 //! A module for different pixel layouts.
 use crate::pixel::MaxAligned;
-use crate::{AsPixel, Pixel};
+use crate::{AsTexel, Texel};
 use ::alloc::boxed::Box;
 use core::{alloc, cmp};
+
+mod matrix;
 
 /// A byte layout that only describes the user bytes.
 ///
@@ -11,9 +13,9 @@ use core::{alloc, cmp};
 /// into this layout.
 pub struct Bytes(pub usize);
 
-/// Describes the byte layout of an element, untyped.
+/// Describes the byte layout of an texture element, untyped.
 ///
-/// This is not so different from `Pixel` and `Layout` but is a combination of both. It has the
+/// This is not so different from `Texel` and `Layout` but is a combination of both. It has the
 /// same invariants on alignment as the former which being untyped like the latter. The alignment
 /// of an element must be at most that of [`MaxAligned`] and the size must be a multiple of its
 /// alignment.
@@ -22,7 +24,7 @@ pub struct Bytes(pub usize);
 /// minimum of size and alignment individually will always form another valid element. This
 /// operation is implemented in the [`infimum`] method.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Ord, Hash)]
-pub struct Element {
+pub struct TexelLayout {
     size: usize,
     align: usize,
 }
@@ -210,7 +212,7 @@ pub trait SampleSlice: Layout {
     type Sample;
 
     /// Get the sample description.
-    fn sample(&self) -> Pixel<Self::Sample>;
+    fn sample(&self) -> Texel<Self::Sample>;
 
     /// The number of samples.
     ///
@@ -239,7 +241,7 @@ pub(crate) enum LayoutRepr {
 /// column major format, in row major format, ordered according to some space filling curve, etc.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub struct Matrix {
-    element: Element,
+    element: TexelLayout,
     first_dim: usize,
     second_dim: usize,
 }
@@ -247,7 +249,7 @@ pub struct Matrix {
 /// Planar chroma 2×2 block-wise sub-sampled image.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub struct Yuv420p {
-    channel: Element,
+    channel: TexelLayout,
     width: u32,
     height: u32,
 }
@@ -257,7 +259,7 @@ pub struct Yuv420p {
 /// This is a strongly-typed equivalent to [`Matrix`]. See it for details.
 #[derive(Debug, PartialEq, Eq, Hash)]
 pub struct TMatrix<P> {
-    pixel: Pixel<P>,
+    pixel: Texel<P>,
     first_dim: usize,
     second_dim: usize,
 }
@@ -279,11 +281,11 @@ impl Bytes {
     }
 }
 
-impl Element {
+impl TexelLayout {
     /// Construct an element from a self-evident pixel.
-    pub fn from_pixel<P: AsPixel>() -> Self {
+    pub fn from_pixel<P: AsTexel>() -> Self {
         let pix = P::pixel();
-        Element {
+        TexelLayout {
             size: pix.size(),
             align: pix.align(),
         }
@@ -294,7 +296,7 @@ impl Element {
     /// This constructor is mainly useful for the purpose of using it as a modifier. When used with
     /// [`infimum`] it will only shrink the alignment and keep the size unchanged.
     pub const MAX_SIZE: Self = {
-        Element {
+        TexelLayout {
             size: isize::MAX as usize,
             align: 1,
         }
@@ -314,7 +316,7 @@ impl Element {
             return None;
         }
 
-        Some(Element {
+        Some(TexelLayout {
             size: layout.size(),
             align: layout.align(),
         })
@@ -322,7 +324,7 @@ impl Element {
 
     /// Convert this into a type layout.
     ///
-    /// This can never fail as `Element` refines the standard library layout type.
+    /// This can never fail as `TexelLayout` refines the standard library layout type.
     pub fn layout(self) -> alloc::Layout {
         alloc::Layout::from_size_align(self.size, self.align).expect("Valid layout")
     }
@@ -335,18 +337,18 @@ impl Element {
     ///
     /// This method panics if `align` is not a valid alignment.
     #[must_use = "This does not modify `self`."]
-    pub fn packed(self, align: usize) -> Element {
+    pub fn packed(self, align: usize) -> TexelLayout {
         assert!(align.is_power_of_two());
         let align = self.align.min(align);
-        Element { align, ..self }
+        TexelLayout { align, ..self }
     }
 
     /// Create an element having the smaller of both sizes and alignments.
     #[must_use = "This does not modify `self`."]
-    pub fn infimum(self, other: Self) -> Element {
+    pub fn infimum(self, other: Self) -> TexelLayout {
         // We still have size divisible by align. Whatever the smaller of both, it's divisible by
         // its align and thus also by the min of both alignments.
-        Element {
+        TexelLayout {
             size: self.size.min(other.size),
             align: self.align.min(other.align),
         }
@@ -373,7 +375,7 @@ impl DynLayout {
 }
 
 impl Matrix {
-    pub fn empty(element: Element) -> Self {
+    pub fn empty(element: TexelLayout) -> Self {
         Matrix {
             element,
             first_dim: 0,
@@ -382,7 +384,7 @@ impl Matrix {
     }
 
     pub fn from_width_height(
-        element: Element,
+        element: TexelLayout,
         first_dim: usize,
         second_dim: usize,
     ) -> Option<Self> {
@@ -397,7 +399,7 @@ impl Matrix {
     }
 
     /// Get the element type of this matrix.
-    pub const fn element(&self) -> Element {
+    pub const fn element(&self) -> TexelLayout {
         self.element
     }
 
@@ -451,7 +453,7 @@ impl Matrix {
 }
 
 impl<P> TMatrix<P> {
-    pub fn empty(pixel: Pixel<P>) -> Self {
+    pub fn empty(pixel: Texel<P>) -> Self {
         TMatrix {
             pixel,
             first_dim: 0,
@@ -459,7 +461,7 @@ impl<P> TMatrix<P> {
         }
     }
 
-    pub fn with_matrix(pixel: Pixel<P>, matrix: Matrix) -> Option<Self> {
+    pub fn with_matrix(pixel: Texel<P>, matrix: Matrix) -> Option<Self> {
         if pixel.size() == matrix.element.size {
             Some(TMatrix {
                 pixel,
@@ -481,7 +483,7 @@ impl<P> TMatrix<P> {
 }
 
 impl Yuv420p {
-    pub fn from_width_height(channel: Element, width: u32, height: u32) -> Option<Self> {
+    pub fn from_width_height(channel: TexelLayout, width: u32, height: u32) -> Option<Self> {
         use core::convert::TryFrom;
         if width % 2 != 0 || height % 2 != 0 {
             return None;
@@ -547,7 +549,7 @@ impl<P> Layout for TMatrix<P> {
 
 impl<P> SampleSlice for TMatrix<P> {
     type Sample = P;
-    fn sample(&self) -> Pixel<P> {
+    fn sample(&self) -> Texel<P> {
         self.pixel
     }
 }
@@ -566,7 +568,7 @@ impl<P> Decay<TMatrix<P>> for Matrix {
 }
 
 /// Try to use the matrix with a specific pixel type.
-impl<P> TryMend<Matrix> for Pixel<P> {
+impl<P> TryMend<Matrix> for Texel<P> {
     type Into = TMatrix<P>;
     type Err = MismatchedPixelError;
 
@@ -576,9 +578,9 @@ impl<P> TryMend<Matrix> for Pixel<P> {
 }
 
 /// Convert a pixel to an element, discarding the exact type information.
-impl<P> From<Pixel<P>> for Element {
-    fn from(pix: Pixel<P>) -> Self {
-        Element {
+impl<P> From<Texel<P>> for TexelLayout {
+    fn from(pix: Texel<P>) -> Self {
+        TexelLayout {
             size: pix.size(),
             align: pix.align(),
         }
@@ -604,11 +606,11 @@ impl<L: Layout> Decay<L> for Box<L> {
 ///
 /// ```
 /// # use canvas::pixels::{U8, U16};
-/// # use canvas::layout::Element;
-/// let u8 = Element::from(U8);
-/// let u8x2 = Element::from(U8.array2());
-/// let u8x3 = Element::from(U8.array3());
-/// let u16 = Element::from(U16);
+/// # use canvas::layout::TexelLayout;
+/// let u8 = TexelLayout::from(U8);
+/// let u8x2 = TexelLayout::from(U8.array2());
+/// let u8x3 = TexelLayout::from(U8.array3());
+/// let u16 = TexelLayout::from(U16);
 ///
 /// assert!(u8 < u16, "due to size and alignment");
 /// assert!(u8x2 < u16, "due to its alignment");
@@ -619,7 +621,7 @@ impl<L: Layout> Decay<L> for Box<L> {
 /// assert!(meet <= u16);
 /// assert!(meet == u16.packed(1), "We know it precisely here {:?}", meet);
 /// ```
-impl cmp::PartialOrd for Element {
+impl cmp::PartialOrd for TexelLayout {
     fn partial_cmp(&self, other: &Self) -> Option<cmp::Ordering> {
         if self.size == other.size && self.align == other.align {
             Some(cmp::Ordering::Equal)

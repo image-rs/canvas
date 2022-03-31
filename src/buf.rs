@@ -6,7 +6,7 @@ use core::{borrow, cmp, mem, ops};
 use alloc::borrow::ToOwned;
 use alloc::vec::Vec;
 
-use crate::pixel::{constants::MAX, MaxAligned, Pixel};
+use crate::pixel::{constants::MAX, MaxAligned, Texel};
 
 /// Allocates and manages raw bytes.
 ///
@@ -162,18 +162,18 @@ impl buf {
     /// Reinterpret the buffer for the specific pixel type.
     ///
     /// The alignment of `P` is already checked to be smaller than `MAX_ALIGN` through the
-    /// constructor of `Pixel`. The slice will have the maximum length possible but may leave
+    /// constructor of `Texel`. The slice will have the maximum length possible but may leave
     /// unused bytes in the end.
-    pub fn as_pixels<P>(&self, pixel: Pixel<P>) -> &[P] {
+    pub fn as_pixels<P>(&self, pixel: Texel<P>) -> &[P] {
         pixel.cast_buf(self)
     }
 
     /// Reinterpret the buffer mutable for the specific pixel type.
     ///
     /// The alignment of `P` is already checked to be smaller than `MAX_ALIGN` through the
-    /// constructor of `Pixel`.
+    /// constructor of `Texel`.
     // FIXME: decide to use naming scheme of `as_bytes_mut` or `as_mut_slice`.
-    pub fn as_mut_pixels<P>(&mut self, pixel: Pixel<P>) -> &mut [P] {
+    pub fn as_mut_pixels<P>(&mut self, pixel: Texel<P>) -> &mut [P] {
         pixel.cast_mut_buf(self)
     }
 
@@ -196,8 +196,8 @@ impl buf {
         src: impl ops::RangeBounds<usize>,
         dest: usize,
         f: impl Fn(P) -> Q,
-        p: Pixel<P>,
-        q: Pixel<Q>,
+        p: Texel<P>,
+        q: Texel<Q>,
     ) {
         // By symmetry, a write sequence that map `src` to `dest` without clobbering any values
         // that need to be read later can be applied in reverse to map `dest` to `src` instead.
@@ -341,8 +341,8 @@ impl buf {
         dest: usize,
         len: usize,
         f: impl Fn(P) -> Q,
-        p: Pixel<P>,
-        q: Pixel<Q>,
+        p: Texel<P>,
+        q: Texel<Q>,
     ) {
         for idx in 0..len {
             let source_idx = idx + src;
@@ -360,8 +360,8 @@ impl buf {
         dest: usize,
         len: usize,
         f: impl Fn(P) -> Q,
-        p: Pixel<P>,
-        q: Pixel<Q>,
+        p: Texel<P>,
+        q: Texel<Q>,
     ) {
         for idx in (0..len).rev() {
             let source_idx = idx + src;
