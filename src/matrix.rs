@@ -374,6 +374,34 @@ impl<P> Layout<P> {
         Self::width_and_height_for_pixel(P::texel(), width, height)
     }
 
+    pub const fn empty(pixel: Texel<P>) -> Self {
+        Layout {
+            pixel,
+            width: 0,
+            height: 0,
+        }
+    }
+
+    pub fn with_matrix(pixel: Texel<P>, matrix: layout::Matrix) -> Option<Self> {
+        if pixel.size() == matrix.element.size() {
+            Some(Layout {
+                pixel,
+                width: matrix.first_dim,
+                height: matrix.second_dim,
+            })
+        } else {
+            None
+        }
+    }
+
+    pub fn into_matrix(self) -> layout::Matrix {
+        layout::Matrix {
+            element: self.pixel.into(),
+            first_dim: self.width,
+            second_dim: self.height,
+        }
+    }
+
     /// Get the required bytes for this layout.
     pub fn byte_len(self) -> usize {
         // Exactly this does not overflow due to construction.
@@ -489,23 +517,15 @@ impl<P> layout::SampleSlice for Layout<P> {
     }
 }
 
-impl<P> Clone for Layout<P> {
-    fn clone(&self) -> Self {
-        Layout {
-            ..*self // This is, apparently, legal.
-        }
+impl<P: AsTexel> Default for Layout<P> {
+    fn default() -> Self {
+        Self::empty(P::texel())
     }
 }
 
-impl<P> Copy for Layout<P> {}
-
-impl<P: AsTexel> Default for Layout<P> {
-    fn default() -> Self {
-        Layout {
-            width: 0,
-            height: 0,
-            pixel: P::texel(),
-        }
+impl<P> layout::Take for Layout<P> {
+    fn take(&mut self) -> Self {
+        core::mem::replace(self, Self::empty(self.pixel))
     }
 }
 
@@ -518,6 +538,14 @@ impl<P> fmt::Debug for Layout<P> {
             .finish()
     }
 }
+
+impl<P> Clone for Layout<P> {
+    fn clone(&self) -> Self {
+        Layout { ..*self }
+    }
+}
+
+impl<P> Copy for Layout<P> {}
 
 impl<P> cmp::PartialEq for Layout<P> {
     fn eq(&self, other: &Self) -> bool {

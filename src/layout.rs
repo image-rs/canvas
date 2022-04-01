@@ -6,6 +6,8 @@ use core::{alloc, cmp};
 
 mod matrix;
 
+pub use crate::matrix::Layout as MatrixTexels;
+
 /// A byte layout that only describes the user bytes.
 ///
 /// This is a minimal implementation of the basic `Layout` trait. It does not provide any
@@ -241,9 +243,9 @@ pub(crate) enum LayoutRepr {
 /// column major format, in row major format, ordered according to some space filling curve, etc.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub struct Matrix {
-    element: TexelLayout,
-    first_dim: usize,
-    second_dim: usize,
+    pub(crate) element: TexelLayout,
+    pub(crate) first_dim: usize,
+    pub(crate) second_dim: usize,
 }
 
 /// Planar chroma 2×2 block-wise sub-sampled image.
@@ -423,63 +425,6 @@ impl Matrix {
     pub const fn len(self) -> usize {
         self.first_dim * self.second_dim
     }
-
-    /* FIXME: These methods would rely on a particular column/row major layout. Move them somewhere
-     * else or make another matrix type.
-        pub fn offset(self, coord1: usize, coord2: usize) -> Option<usize> {
-            if self.first_dim >= coord1 || self.second_dim >= coord2 {
-                None
-            } else {
-                Some(self.offset_unchecked(coord1, coord2))
-            }
-        }
-
-        pub const fn offset_unchecked(self, coord1: usize, coord2: usize) -> usize {
-            coord1 + coord2 * self.first_dim
-        }
-
-        pub fn byte_offset(self, coord1: usize, coord2: usize) -> Option<usize> {
-            if self.first_dim >= coord1 || self.second_dim >= coord2 {
-                None
-            } else {
-                Some(self.byte_offset_unchecked(coord1, coord2))
-            }
-        }
-
-        pub const fn byte_offset_unchecked(self, coord1: usize, coord2: usize) -> usize {
-            (coord1 + coord2 * self.first_dim) * self.element.size
-        }
-    */
-}
-
-impl<P> TMatrix<P> {
-    pub fn empty(pixel: Texel<P>) -> Self {
-        TMatrix {
-            pixel,
-            first_dim: 0,
-            second_dim: 0,
-        }
-    }
-
-    pub fn with_matrix(pixel: Texel<P>, matrix: Matrix) -> Option<Self> {
-        if pixel.size() == matrix.element.size {
-            Some(TMatrix {
-                pixel,
-                first_dim: matrix.first_dim,
-                second_dim: matrix.second_dim,
-            })
-        } else {
-            None
-        }
-    }
-
-    pub fn into_matrix(self) -> Matrix {
-        Matrix {
-            element: self.pixel.into(),
-            first_dim: self.first_dim,
-            second_dim: self.second_dim,
-        }
-    }
 }
 
 impl Yuv420p {
@@ -541,39 +486,20 @@ impl Take for Matrix {
     }
 }
 
-impl<P> Layout for TMatrix<P> {
-    fn byte_len(&self) -> usize {
-        self.into_matrix().byte_len()
-    }
-}
-
-impl<P> SampleSlice for TMatrix<P> {
-    type Sample = P;
-    fn sample(&self) -> Texel<P> {
-        self.pixel
-    }
-}
-
-impl<P> Take for TMatrix<P> {
-    fn take(&mut self) -> Self {
-        core::mem::replace(self, TMatrix::empty(self.pixel))
-    }
-}
-
 /// Remove the strong typing for dynamic channel type information.
-impl<P> Decay<TMatrix<P>> for Matrix {
-    fn decay(from: TMatrix<P>) -> Matrix {
+impl<P> Decay<MatrixTexels<P>> for Matrix {
+    fn decay(from: MatrixTexels<P>) -> Matrix {
         from.into_matrix()
     }
 }
 
 /// Try to use the matrix with a specific pixel type.
 impl<P> TryMend<Matrix> for Texel<P> {
-    type Into = TMatrix<P>;
+    type Into = MatrixTexels<P>;
     type Err = MismatchedPixelError;
 
-    fn try_mend(self, matrix: &Matrix) -> Result<TMatrix<P>, Self::Err> {
-        TMatrix::with_matrix(self, *matrix).ok_or_else(MismatchedPixelError::default)
+    fn try_mend(self, matrix: &Matrix) -> Result<MatrixTexels<P>, Self::Err> {
+        MatrixTexels::with_matrix(self, *matrix).ok_or_else(MismatchedPixelError::default)
     }
 }
 
@@ -654,7 +580,7 @@ macro_rules! bytes_from_layout {
 
 bytes_from_layout!(DynLayout);
 bytes_from_layout!(Matrix);
-bytes_from_layout!(<P> TMatrix);
+bytes_from_layout!(<P> MatrixTexels);
 
 impl From<Matrix> for DynLayout {
     fn from(matrix: Matrix) -> Self {
@@ -672,20 +598,12 @@ impl From<Yuv420p> for DynLayout {
     }
 }
 
-impl<P> From<TMatrix<P>> for Matrix {
-    fn from(mat: TMatrix<P>) -> Self {
+impl<P> From<MatrixTexels<P>> for Matrix {
+    fn from(mat: MatrixTexels<P>) -> Self {
         Matrix {
-            element: mat.pixel.into(),
-            first_dim: mat.first_dim,
-            second_dim: mat.second_dim,
+            element: mat.pixel().into(),
+            first_dim: mat.width(),
+            second_dim: mat.height(),
         }
     }
 }
-
-impl<P> Clone for TMatrix<P> {
-    fn clone(&self) -> Self {
-        TMatrix { ..*self }
-    }
-}
-
-impl<P> Copy for TMatrix<P> {}
