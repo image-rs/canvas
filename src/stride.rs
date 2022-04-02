@@ -14,9 +14,9 @@
 //! canvas. They internally contain a simple byte slice which allows viewing any source buffer as a
 //! strided matrix even when it was not allocated with the special allocator.
 use crate::canvas::Canvas;
+use crate::layout;
 use crate::layout::Layout;
 use crate::texel::AsTexel;
-use crate::{layout, matrix};
 use core::ops::Range;
 
 /// A simple layout describing some pixels as a byte matrix.
@@ -407,14 +407,9 @@ impl Strided for StrideLayout {
     }
 }
 
-impl<P: AsTexel> Strided for matrix::Layout<P> {
+impl<P: AsTexel> Strided for layout::MatrixTexels<P> {
     fn strided(&self) -> StrideLayout {
-        let matrix = layout::Matrix::from_width_height(
-            layout::TexelLayout::from_pixel::<P>(),
-            self.width(),
-            self.height(),
-        );
-        let matrix = matrix.expect("Fits into memory");
+        let matrix: layout::Matrix = self.clone().into();
         StrideLayout::with_row_major(matrix)
     }
 }

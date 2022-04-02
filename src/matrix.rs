@@ -6,6 +6,7 @@ use core::{cmp, fmt};
 
 use crate::buf::Buffer;
 use crate::canvas::{Canvas, RawCanvas};
+use crate::layout::MatrixTexels as Layout;
 use crate::{layout, AsTexel, BufferReuseError, Texel, TexelBuffer};
 
 /// A 2d, width-major matrix of pixels.
@@ -60,17 +61,6 @@ use crate::{layout, AsTexel, BufferReuseError, Texel, TexelBuffer};
 #[derive(Clone, PartialEq, Eq)]
 pub struct Matrix<P> {
     inner: RawCanvas<Buffer, Layout<P>>,
-}
-
-/// Describes the memory region used for the image.
-///
-/// The underlying buffer may have more data allocated than this region and cause the overhead to
-/// be reused when resizing the image. All ways to construct this already check that all pixels
-/// within the resulting image can be addressed via an index.
-pub struct Layout<P> {
-    width: usize,
-    height: usize,
-    pixel: Texel<P>,
 }
 
 /// Error representation for a failed buffer reuse for a canvas.

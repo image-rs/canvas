@@ -151,7 +151,13 @@ impl<P> Texel<P> {
     /// * have any validity invariants, i.e. is mustn't contain any padding.
     /// * have any safety invariants. This implies it can be copied.
     /// * have an alignment larger than [`MaxAligned`].
-    /// * have a non-zero size.
+    /// * be a zero-size type.
+    ///
+    /// Furthermore, tentatively, the type must not have any drop glue. That is its members are all
+    /// simple types without Drop implementations. This requirement exists mainly to avoid code
+    /// accidentally leaking instances, and ensures that copies created from their byte
+    /// representation—which is safe according to the other invairants— do not cause unexpected
+    /// effects.
     ///
     /// [`MaxAligned`]: struct.MaxAligned.html
     pub const unsafe fn new_unchecked() -> Self {

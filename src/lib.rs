@@ -5,6 +5,22 @@
 //!
 //! An image canvas compatible with transmuting its byte content.
 //!
+//! This library is strictly `no_std`, and aims to offer utilities to represent and share image
+//! buffers between platforms, byte representations, and processing methods. It acknowledges that,
+//! in a typical image pipeline, there may exist many valid but competing representations:
+//!
+//! - A reader that decodes pixel representations into bytes (in network endian).
+//! - Some other decoder that returns `Vec<[[u16; 3]]>` of native endian data.
+//! - Some library transformation that consumes `&[Rgb<u16>]`.
+//! - Some SIMD usage that requires data is passed as `&[Simd<u16, 16>]`.
+//! - Some GPU buffer written by a highly-aligned, and line-padded `&[u8]`.
+//! - Some GPU buffer containing texels of 4×2 pixels each.
+//! - A *shared* buffer that represents pixels as `&[[AtomicU8; 4]]`.
+//! - A non-planar layout that splits channels to different pages.
+//!
+//! This crate offers the language to ensure that as many uses cases as possible can share
+//! allocations, or even offer zero-copy conversion.
+//!
 //! ## Usage
 //!
 //! ```

@@ -6,8 +6,6 @@ use core::{alloc, cmp};
 
 mod matrix;
 
-pub use crate::matrix::Layout as MatrixTexels;
-
 /// A byte layout that only describes the user bytes.
 ///
 /// This is a minimal implementation of the basic `Layout` trait. It does not provide any
@@ -248,22 +246,23 @@ pub struct Matrix {
     pub(crate) second_dim: usize,
 }
 
+/// Describes the memory region used for the image.
+///
+/// The underlying buffer may have more data allocated than this region and cause the overhead to
+/// be reused when resizing the image. All ways to construct this already check that all pixels
+/// within the resulting image can be addressed via an index.
+pub struct MatrixTexels<P> {
+    pub(crate) width: usize,
+    pub(crate) height: usize,
+    pub(crate) pixel: Texel<P>,
+}
+
 /// Planar chroma 2×2 block-wise sub-sampled image.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub struct Yuv420p {
     channel: TexelLayout,
     width: u32,
     height: u32,
-}
-
-/// A typed matrix of packed pixels (channel groups).
-///
-/// This is a strongly-typed equivalent to [`Matrix`]. See it for details.
-#[derive(Debug, PartialEq, Eq, Hash)]
-pub struct TMatrix<P> {
-    pixel: Texel<P>,
-    first_dim: usize,
-    second_dim: usize,
 }
 
 /// An error indicating that mending failed due to mismatching pixel attributes.
