@@ -76,7 +76,6 @@ pub(crate) mod constants {
     }
 
     constant_texel!(
-        (EMPTY, ()),
         (I8, i8),
         (U8, u8),
         (I16, i16),
@@ -87,8 +86,6 @@ pub(crate) mod constants {
         (I64, i64),
         (U64, u64),
         (F64, f64),
-        (RGB, [u8; 3]),
-        (RGBA, [u8; 4]),
         (MAX, MaxAligned)
     );
 }
@@ -96,9 +93,12 @@ pub(crate) mod constants {
 impl<P: bytemuck::Pod> Texel<P> {
     /// Try to construct an instance of the marker.
     ///
-    /// If successful, you can freely use it to access the image buffers.
+    /// If successful, you can freely use it to access the image buffers. This requires:
+    /// - The type must have an alignment of *at most* `MAX_ALIGN`.
+    /// - The type must *not* be a ZST.
+    /// - The type must *not* have any Drop-glue (no drop, any contain not part that is Drop).
     pub fn for_type() -> Option<Self> {
-        if mem::align_of::<P>() <= MAX_ALIGN && !mem::needs_drop::<P>() {
+        if mem::align_of::<P>() <= MAX_ALIGN && mem::size_of::<P>() > 0 && !mem::needs_drop::<P>() {
             Some(Texel(PhantomData))
         } else {
             None
@@ -151,6 +151,7 @@ impl<P> Texel<P> {
     /// * have any validity invariants, i.e. is mustn't contain any padding.
     /// * have any safety invariants. This implies it can be copied.
     /// * have an alignment larger than [`MaxAligned`].
+    /// * have a non-zero size.
     ///
     /// [`MaxAligned`]: struct.MaxAligned.html
     pub const unsafe fn new_unchecked() -> Self {
@@ -167,46 +168,30 @@ impl<P> Texel<P> {
         mem::size_of::<P>()
     }
 
+    /// Publicly visible function to use the guarantee of non-ZST.
+    pub const fn size_nz(self) -> core::num::NonZeroUsize {
+        match core::num::NonZeroUsize::new(self.size()) {
+            None => panic!(""),
+            Some(num) => num,
+        }
+    }
+
     // A number of constructors that are technically unsafe. Note that we could write them as safe
     // code here to pad our stats but they are not checked by the type system so it's risky. Better
     // explain their safety in the code as comments.
 
     /// Construct a texel as an array of no elements.
-    pub const fn array0(self) -> Texel<[P; 0]> {
+    ///
+    /// # Panics
+    ///
+    /// This function panics when called with `N` equal to 0.
+    pub const fn array<const N: usize>(self) -> Texel<[P; N]> {
+        if N == 0 {
+            panic!()
+        }
+
         // Safety:
         // * has no validity/safety invariants
-        // * has the same alignment as P which is not larger then MaxAligned
-        unsafe { Texel::new_unchecked() }
-    }
-
-    /// Construct a texel as an array of one element.
-    pub const fn array1(self) -> Texel<[P; 1]> {
-        // Safety:
-        // * has validity/safety invariants of P, none
-        // * has the same alignment as P which is not larger then MaxAligned
-        unsafe { Texel::new_unchecked() }
-    }
-
-    /// Construct a texel as an array of two elements.
-    pub const fn array2(self) -> Texel<[P; 2]> {
-        // Safety:
-        // * has validity/safety invariants of P, none
-        // * has the same alignment as P which is not larger then MaxAligned
-        unsafe { Texel::new_unchecked() }
-    }
-
-    /// Construct a texel as an array of three elements.
-    pub const fn array3(self) -> Texel<[P; 3]> {
-        // Safety:
-        // * has validity/safety invariants of P, none
-        // * has the same alignment as P which is not larger then MaxAligned
-        unsafe { Texel::new_unchecked() }
-    }
-
-    /// Construct a texel as an array of four elements.
-    pub const fn array4(self) -> Texel<[P; 4]> {
-        // Safety:
-        // * has validity/safety invariants of P, none
         // * has the same alignment as P which is not larger then MaxAligned
         unsafe { Texel::new_unchecked() }
     }
@@ -247,7 +232,7 @@ impl<P> Texel<P> {
     ///
     /// Note that the size (in bytes) of the slice will be shortened if the size of `P` is not a
     /// divisor of the input slice's size.
-    pub fn cast_to_slice<'buf>(self, buffer: &'buf [MaxAligned]) -> &'buf [P] {
+    pub fn to_slice<'buf>(self, buffer: &'buf [MaxAligned]) -> &'buf [P] {
         self.cast_buf(buf::new(buffer))
     }
 
@@ -255,17 +240,48 @@ impl<P> Texel<P> {
     ///
     /// Note that the size (in bytes) of the slice will be shortened if the size of `P` is not a
     /// divisor of the input slice's size.
-    pub fn cast_to_mut_slice<'buf>(self, buffer: &'buf mut [MaxAligned]) -> &'buf mut [P] {
+    pub fn to_mut_slice<'buf>(self, buffer: &'buf mut [MaxAligned]) -> &'buf mut [P] {
         self.cast_mut_buf(buf::new_mut(buffer))
     }
 
+    /// Try to reinterpret a slice of bytes as a slice of the texel.
+    ///
+    /// This returns `Some` if the buffer is suitably aligned, and `None` otherwise.
+    pub fn try_to_slice<'buf>(self, bytes: &'buf [u8]) -> Option<&'buf [P]> {
+        if bytes.as_ptr() as usize % mem::align_of::<P>() == 0 {
+            // SAFETY:
+            // - The `pod`-ness is certified by `self`, which makes the bytes a valid
+            //   representation of P.
+            // - The total size is at most `bytes` by construction.
+            let len = bytes.len() / mem::size_of::<P>();
+            Some(unsafe { &*ptr::slice_from_raw_parts(bytes.as_ptr() as *const P, len) })
+        } else {
+            None
+        }
+    }
+
+    /// Try to reinterpret a slice of bytes as a slice of the texel.
+    ///
+    /// This returns `Some` if the buffer is suitably aligned, and `None` otherwise.
+    pub fn try_to_slice_mut<'buf>(self, bytes: &'buf mut [u8]) -> Option<&'buf [P]> {
+        if let Some(slice) = self.try_to_slice(bytes) {
+            // SAFETY:
+            // - The `pod`-ness is certified by `self`, which makes the bytes a valid
+            //   representation of P. Conversely, it makes any P valid as bytes.
+            let len = slice.len();
+            Some(unsafe { &*ptr::slice_from_raw_parts_mut(bytes.as_ptr() as *mut P, len) })
+        } else {
+            None
+        }
+    }
+
     /// Reinterpret a slice of texel as memory.
-    pub fn cast_to_bytes<'buf>(self, texel: &'buf [P]) -> &'buf [u8] {
+    pub fn to_bytes<'buf>(self, texel: &'buf [P]) -> &'buf [u8] {
         self.cast_bytes(texel)
     }
 
     /// Reinterpret a mutable slice of texel as memory.
-    pub fn cast_to_mut_bytes<'buf>(self, texel: &'buf mut [P]) -> &'buf mut [u8] {
+    pub fn to_mut_bytes<'buf>(self, texel: &'buf mut [P]) -> &'buf mut [u8] {
         self.cast_mut_bytes(texel)
     }
 
@@ -279,14 +295,10 @@ impl<P> Texel<P> {
         // * alignment checked by Texel constructor
         // * the size fits in an allocation, see first bullet point.
         unsafe {
-            if mem::size_of::<P>() == 0 {
-                slice::from_raw_parts(buffer.as_ptr() as *const P, usize::MAX)
-            } else {
-                slice::from_raw_parts(
-                    buffer.as_ptr() as *const P,
-                    buffer.len() / mem::size_of::<P>(),
-                )
-            }
+            slice::from_raw_parts(
+                buffer.as_ptr() as *const P,
+                buffer.len() / self.size_nz().get(),
+            )
         }
     }
 
@@ -300,14 +312,10 @@ impl<P> Texel<P> {
         // * alignment checked by Texel constructor
         // * the size fits in an allocation, see first bullet point.
         unsafe {
-            if mem::size_of::<P>() == 0 {
-                slice::from_raw_parts_mut(buffer.as_mut_ptr() as *mut P, usize::MAX)
-            } else {
-                slice::from_raw_parts_mut(
-                    buffer.as_mut_ptr() as *mut P,
-                    buffer.len() / mem::size_of::<P>(),
-                )
-            }
+            slice::from_raw_parts_mut(
+                buffer.as_mut_ptr() as *mut P,
+                buffer.len() / self.size_nz().get(),
+            )
         }
     }
 

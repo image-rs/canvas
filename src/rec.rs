@@ -248,7 +248,7 @@ impl<P> TexelBuffer<P> {
 
     /// The number of elements that can fit without reallocation.
     pub fn capacity(&self) -> usize {
-        self.inner.capacity() / self.texel.size()
+        self.inner.capacity() / self.texel.size_nz().get()
     }
 
     pub fn as_bytes(&self) -> &[u8] {

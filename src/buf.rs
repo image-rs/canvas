@@ -294,6 +294,7 @@ impl buf {
             .and_then(|slice| slice.get(..len))
             .expect("Destination out of bounds");
 
+        // Due to both being Texels.
         assert!(p.size() as isize > 0);
         assert!(q.size() as isize > 0);
 
