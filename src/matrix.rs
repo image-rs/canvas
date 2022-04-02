@@ -6,7 +6,7 @@ use core::{cmp, fmt};
 
 use crate::buf::Buffer;
 use crate::canvas::{Canvas, RawCanvas};
-use crate::{layout, AsTexel, Rec, ReuseError, Texel};
+use crate::{layout, AsTexel, BufferReuseError, Texel, TexelBuffer};
 
 /// A 2d, width-major matrix of pixels.
 ///
@@ -75,33 +75,33 @@ pub struct Layout<P> {
 
 /// Error representation for a failed buffer reuse for a canvas.
 ///
-/// Emitted as a result of [`Matrix::from_rec`] when the buffer capacity is not large enough to
+/// Emitted as a result of [`Matrix::from_buffer`] when the buffer capacity is not large enough to
 /// serve as an image of requested layout with causing a reallocation.
 ///
-/// It is possible to retrieve the buffer that cause the failure with `into_rec`. This allows one
+/// It is possible to retrieve the buffer that cause the failure with `into_buffer`. This allows one
 /// to manually try to correct the error with additional checks, or implement a fallback strategy
 /// which does not require the interpretation as a full image.
 ///
 /// ```
-/// # use canvas::{Matrix, Rec, Layout};
-/// let rec = Rec::<u8>::new(16);
-/// let allocation = rec.as_bytes().as_ptr();
+/// # use canvas::{Matrix, Layout, TexelBuffer};
+/// let buffer = TexelBuffer::<u8>::new(16);
+/// let allocation = buffer.as_bytes().as_ptr();
 ///
-/// let bad_layout = Layout::width_and_height(rec.capacity() + 1, 1).unwrap();
-/// let error = match Matrix::from_reused_rec(rec, bad_layout) {
+/// let bad_layout = Layout::width_and_height(buffer.capacity() + 1, 1).unwrap();
+/// let error = match Matrix::from_reused_buffer(buffer, bad_layout) {
 ///     Ok(_) => unreachable!("The layout requires one too many pixels"),
 ///     Err(error) => error,
 /// };
 ///
 /// // Get back the original buffer.
-/// let rec = error.into_rec();
-/// assert_eq!(rec.as_bytes().as_ptr(), allocation);
+/// let buffer = error.into_buffer();
+/// assert_eq!(buffer.as_bytes().as_ptr(), allocation);
 /// ```
 ///
-/// [`Matrix::from_rec`]: ./struct.Matrix.html#method.from_rec
+/// [`Matrix::from_buffer`]: ./struct.Matrix.html#method.from_buffer
 #[derive(PartialEq, Eq)]
 pub struct MatrixReuseError<P> {
-    buffer: Rec<P>,
+    buffer: TexelBuffer<P>,
     layout: Layout<P>,
 }
 
@@ -148,7 +148,7 @@ impl<P> Matrix<P> {
     /// # Panics
     /// When allocation of memory fails.
     pub fn with_layout(layout: Layout<P>) -> Self {
-        let rec = Rec::bytes_for_texel(layout.pixel, layout.byte_len());
+        let rec = TexelBuffer::bytes_for_texel(layout.pixel, layout.byte_len());
         Self::new_raw(rec, layout)
     }
 
@@ -171,26 +171,26 @@ impl<P> Matrix<P> {
     ///
     /// The data already contained within the buffer is not modified so that prior initialization
     /// can be performed or one array of samples reinterpreted for an image of other sample type.
-    /// However, the `Rec` will be logically resized which will zero-initialize missing elements if
+    /// However, the `TexelBuffer` will be logically resized which will zero-initialize missing elements if
     /// the current buffer is too short.
     ///
     /// # Panics
     ///
     /// This function will panic if resizing causes a reallocation that fails.
-    pub fn from_rec(mut buffer: Rec<P>, layout: Layout<P>) -> Self {
+    pub fn from_buffer(mut buffer: TexelBuffer<P>, layout: Layout<P>) -> Self {
         buffer.resize_bytes(layout.byte_len());
         Self::new_raw(buffer, layout)
     }
 
     /// Reuse an existing buffer for a pixel canvas.
     ///
-    /// Similar to `from_rec` but this function will never reallocate the inner buffer. Instead, it
-    /// will return the `Rec` unmodified if the creation fails. See [`MatrixReuseError`] for
+    /// Similar to `from_buffer` but this function will never reallocate the inner buffer. Instead, it
+    /// will return the `TexelBuffer` unmodified if the creation fails. See [`MatrixReuseError`] for
     /// further information on the error and retrieving the buffer.
     ///
     /// [`MatrixReuseError`]: ./struct.CanvasReuseError.html
-    pub fn from_reused_rec(
-        mut buffer: Rec<P>,
+    pub fn from_reused_buffer(
+        mut buffer: TexelBuffer<P>,
         layout: Layout<P>,
     ) -> Result<Self, MatrixReuseError<P>> {
         match buffer.reuse_bytes(layout.byte_len()) {
@@ -200,10 +200,10 @@ impl<P> Matrix<P> {
         Ok(Self::new_raw(buffer, layout))
     }
 
-    fn new_raw(inner: Rec<P>, layout: Layout<P>) -> Self {
+    fn new_raw(inner: TexelBuffer<P>, layout: Layout<P>) -> Self {
         assert_eq!(inner.len(), layout.len(), "Texel count agrees with buffer");
         Matrix {
-            inner: RawCanvas::from_rec(inner, layout),
+            inner: RawCanvas::from_buffer(inner, layout),
         }
     }
 
@@ -234,7 +234,7 @@ impl<P> Matrix<P> {
     }
 
     /// Reuse the buffer for a new image layout.
-    pub fn reuse(&mut self, layout: Layout<P>) -> Result<(), ReuseError> {
+    pub fn reuse(&mut self, layout: Layout<P>) -> Result<(), BufferReuseError> {
         self.inner.try_reuse(layout)
     }
 
@@ -262,8 +262,8 @@ impl<P> Matrix<P> {
         *self.inner.layout()
     }
 
-    pub fn into_rec(self) -> Rec<P> {
-        self.inner.into_rec()
+    pub fn into_buffer(self) -> TexelBuffer<P> {
+        self.inner.into_buffer()
     }
 
     fn index_of(&self, x: usize, y: usize) -> usize {
@@ -308,8 +308,8 @@ impl<P> Matrix<P> {
             .map_to(pixel)
             .expect("Texel layout can not fit into memory");
         // .. then do the actual pixel mapping.
-        let inner = self.into_rec().map_to(map, pixel);
-        Matrix::from_rec(inner, layout)
+        let inner = self.into_buffer().map_to(map, pixel);
+        Matrix::from_buffer(inner, layout)
     }
 
     pub fn map_reuse<F, Q>(self, map: F) -> Result<Matrix<Q>, MapReuseError<P, Q>>
@@ -345,9 +345,9 @@ impl<P> Matrix<P> {
             });
         }
 
-        let inner = self.into_rec().map_to(map, pixel);
+        let inner = self.into_buffer().map_to(map, pixel);
 
-        Ok(Matrix::from_rec(inner, layout))
+        Ok(Matrix::from_buffer(inner, layout))
     }
 }
 
@@ -467,7 +467,7 @@ impl<P> Layout<P> {
 
 impl<P> MatrixReuseError<P> {
     /// Unwrap the original buffer.
-    pub fn into_rec(self) -> Rec<P> {
+    pub fn into_buffer(self) -> TexelBuffer<P> {
         self.buffer
     }
 }
@@ -490,7 +490,7 @@ impl<P, Q> MapReuseError<P, Q> {
 impl<P> From<Canvas<Layout<P>>> for Matrix<P> {
     fn from(canvas: Canvas<Layout<P>>) -> Self {
         let layout = *canvas.layout();
-        let rec = canvas.into_rec();
+        let rec = canvas.into_buffer();
         Self::new_raw(rec, layout)
     }
 }
@@ -498,8 +498,8 @@ impl<P> From<Canvas<Layout<P>>> for Matrix<P> {
 impl<P> From<Matrix<P>> for Canvas<Layout<P>> {
     fn from(matrix: Matrix<P>) -> Self {
         let layout = matrix.layout();
-        let rec = matrix.into_rec();
-        Canvas::from_rec(rec, layout)
+        let rec = matrix.into_buffer();
+        Canvas::from_buffer(rec, layout)
     }
 }
 
@@ -571,7 +571,7 @@ impl<P> cmp::PartialOrd for Layout<P> {
 
 impl<P: AsTexel> Default for Matrix<P> {
     fn default() -> Self {
-        Matrix::from_rec(Rec::default(), Layout::default())
+        Matrix::from_buffer(TexelBuffer::default(), Layout::default())
     }
 }
 
@@ -630,10 +630,11 @@ mod tests {
 
     #[test]
     fn buffer_reuse() {
-        let rec = Rec::<u8>::new(4);
+        let rec = TexelBuffer::<u8>::new(4);
         assert!(rec.capacity() >= 4);
         let layout = Layout::width_and_height(2, 2).unwrap();
-        let mut canvas = Matrix::from_reused_rec(rec, layout).expect("Rec is surely large enough");
+        let mut canvas =
+            Matrix::from_reused_buffer(rec, layout).expect("Rec is surely large enough");
         canvas
             .reuse(Layout::width_and_height(1, 1).unwrap())
             .expect("Can scale down the image");

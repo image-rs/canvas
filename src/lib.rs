@@ -45,7 +45,7 @@ mod texel;
 
 pub use self::canvas::Canvas;
 pub use self::matrix::{Matrix, MatrixReuseError};
-pub use self::rec::{Rec, ReuseError};
+pub use self::rec::{BufferReuseError, TexelBuffer};
 pub use self::texel::{AsTexel, Texel};
 
 /// Constants for predefined texel types.

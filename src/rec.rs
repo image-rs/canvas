@@ -8,11 +8,11 @@ use core::ops::{Deref, DerefMut};
 use crate::buf::{buf, Buffer};
 use crate::{AsTexel, Texel};
 
-/// A **r**einterpretable v**ec**tor for an array of texels.
+/// A reinterpretable vector for an array of texels.
 ///
 /// It allows efficient conversion to other texel representations, that is effective
 /// reinterpretation casts.
-pub struct Rec<P> {
+pub struct TexelBuffer<P> {
     inner: Buffer,
     length: usize,
     texel: Texel<P>,
@@ -26,25 +26,25 @@ pub struct Rec<P> {
 /// texel type.
 ///
 /// ```
-/// # use canvas::Rec;
-/// let mut rec = Rec::<u16>::new(16);
+/// # use canvas::TexelBuffer;
+/// let mut buffer = TexelBuffer::<u16>::new(16);
 ///
-/// let err = match rec.reuse(rec.capacity() + 1) {
+/// let err = match buffer.reuse(buffer.capacity() + 1) {
 ///     Ok(_) => unreachable!("Increasing capacity would require reallocation"),
 ///     Err(err) => err,
 /// };
 ///
-/// let err = match rec.reuse(usize::max_value()) {
+/// let err = match buffer.reuse(usize::max_value()) {
 ///     Ok(_) => unreachable!("A slice of u16 can never have usize::MAX elements"),
 ///     Err(err) => err,
 /// };
 /// ```
-pub struct ReuseError {
+pub struct BufferReuseError {
     pub(crate) requested: Option<usize>,
     pub(crate) capacity: usize,
 }
 
-impl<P> Rec<P> {
+impl<P> TexelBuffer<P> {
     /// Allocate a texel buffer by the texel count.
     ///
     /// # Panics
@@ -83,7 +83,7 @@ impl<P> Rec<P> {
     ///
     /// This function will panic if the allocation fails.
     pub fn bytes_for_texel(texel: Texel<P>, mem_size: usize) -> Self {
-        Rec {
+        TexelBuffer {
             inner: Buffer::new(mem_size),
             length: mem_size,
             texel,
@@ -92,7 +92,7 @@ impl<P> Rec<P> {
 
     /// Allocate a buffer with initial contents.
     ///
-    /// The `Rec` will have a byte capacity that holds exactly as many elements as the slice
+    /// The `TexelBuffer` will have a byte capacity that holds exactly as many elements as the slice
     /// contains. Note that the elements are copied bytewise.
     ///
     /// # Panics
@@ -107,7 +107,7 @@ impl<P> Rec<P> {
 
     /// Allocate a buffer with initial contents.
     ///
-    /// The `Rec` will have a byte capacity that holds exactly as many elements as the slice
+    /// The `TexelBuffer` will have a byte capacity that holds exactly as many elements as the slice
     /// contains. Note that the elements are copied bytewise.
     ///
     /// # Panics
@@ -115,14 +115,14 @@ impl<P> Rec<P> {
     /// This function will panic if the allocation fails.
     pub fn with_elements_for_texel(texel: Texel<P>, elements: &[P]) -> Self {
         let src = texel.cast_bytes(elements);
-        let mut buffer = Rec::from_buffer(Buffer::from(src), texel);
+        let mut buffer = TexelBuffer::from_buffer(Buffer::from(src), texel);
         // Will be treated as empty, so adjust to be filled up to count.
         buffer.length = src.len();
         buffer
     }
 
     pub(crate) fn from_buffer(inner: Buffer, texel: Texel<P>) -> Self {
-        Rec {
+        TexelBuffer {
             inner,
             texel,
             length: 0,
@@ -166,9 +166,9 @@ impl<P> Rec<P> {
     /// never deallocate memory.
     ///
     /// ```
-    /// # use canvas::Rec;
+    /// # use canvas::TexelBuffer;
     /// // Initial allocation may panic due to allocation error for now.
-    /// let mut buffer: Rec<u16> = Rec::new(100);
+    /// let mut buffer: TexelBuffer<u16> = TexelBuffer::new(100);
     /// buffer.reuse(0)
     ///     .expect("Requested size smaller than allocation");
     /// buffer.reuse(100)
@@ -179,10 +179,10 @@ impl<P> Rec<P> {
     /// buffer.reuse(capacity)
     ///     .expect("Set to full underlying allocation size.");
     /// ```
-    pub fn reuse(&mut self, count: usize) -> Result<(), ReuseError> {
+    pub fn reuse(&mut self, count: usize) -> Result<(), BufferReuseError> {
         let bytes = count
             .checked_mul(self.texel.size())
-            .ok_or_else(|| ReuseError {
+            .ok_or_else(|| BufferReuseError {
                 requested: None,
                 capacity: self.byte_capacity(),
             })?;
@@ -193,9 +193,9 @@ impl<P> Rec<P> {
     ///
     /// Returns `Ok` when the resizing was successfully completed to the requested size and returns
     /// `Err` with the new byte size otherwise.
-    pub fn reuse_bytes(&mut self, bytes: usize) -> Result<(), ReuseError> {
+    pub fn reuse_bytes(&mut self, bytes: usize) -> Result<(), BufferReuseError> {
         if bytes > self.byte_capacity() {
-            return Err(ReuseError {
+            return Err(BufferReuseError {
                 requested: Some(bytes),
                 capacity: self.capacity(),
             });
@@ -211,16 +211,16 @@ impl<P> Rec<P> {
     /// interpreted as a different type may change.
     ///
     /// ```
-    /// # use canvas::Rec;
-    /// let rec_u8 = Rec::<u8>::new(7);
-    /// assert_eq!(rec_u8.len(), 7);
+    /// # use canvas::TexelBuffer;
+    /// let buf_u8 = TexelBuffer::<u8>::new(7);
+    /// assert_eq!(buf_u8.len(), 7);
     ///
-    /// let mut rec_u32 = rec_u8.reinterpret::<u32>();
-    /// assert_eq!(rec_u32.len(), 1);
-    /// rec_u32.shrink_to_fit();
+    /// let mut buf_u32 = buf_u8.reinterpret::<u32>();
+    /// assert_eq!(buf_u32.len(), 1);
+    /// buf_u32.shrink_to_fit();
     ///
-    /// let rec_u8 = rec_u32.reinterpret::<u8>();
-    /// assert_eq!(rec_u8.len(), 4);
+    /// let buf_u8 = buf_u32.reinterpret::<u8>();
+    /// assert_eq!(buf_u8.len(), 4);
     /// ```
     ///
     /// # Panics
@@ -275,7 +275,7 @@ impl<P> Rec<P> {
     /// Reinterpret the buffer for a different type of texel.
     ///
     /// See `reinterpret_to` for details.
-    pub fn reinterpret<Q>(self) -> Rec<Q>
+    pub fn reinterpret<Q>(self) -> TexelBuffer<Q>
     where
         Q: AsTexel,
     {
@@ -288,8 +288,8 @@ impl<P> Rec<P> {
     /// larger than the old one and the allocation was not a multiple of the new size. Conversely,
     /// some new bytes may become accessible if the memory length was not a multiple of the
     /// previous texel type's length.
-    pub fn reinterpret_to<Q>(self, texel: Texel<Q>) -> Rec<Q> {
-        Rec {
+    pub fn reinterpret_to<Q>(self, texel: Texel<Q>) -> TexelBuffer<Q> {
+        TexelBuffer {
             inner: self.inner,
             length: self.length,
             texel,
@@ -299,7 +299,7 @@ impl<P> Rec<P> {
     /// Map all elements to another value.
     ///
     /// See [`map_to`] for details.
-    pub fn map<Q>(self, f: impl Fn(P) -> Q) -> Rec<Q>
+    pub fn map<Q>(self, f: impl Fn(P) -> Q) -> TexelBuffer<Q>
     where
         Q: AsTexel,
     {
@@ -308,20 +308,20 @@ impl<P> Rec<P> {
 
     /// Map elements to another value.
     ///
-    /// This will keep the logical length of the `Rec` so that the number of texels stays constant.
+    /// This will keep the logical length of the `TexelBuffer` so that the number of texels stays constant.
     /// If necessary, it will grow the internal buffer to achieve this.
     ///
     /// # Panics
     ///
     /// This function will panic if the allocation fails or the necessary allocation exceeds the
     /// value range of `usize`.
-    pub fn map_to<Q>(mut self, f: impl Fn(P) -> Q, texel: Texel<Q>) -> Rec<Q> {
+    pub fn map_to<Q>(mut self, f: impl Fn(P) -> Q, texel: Texel<Q>) -> TexelBuffer<Q> {
         // Ensure we have enough memory for both representations.
         let length = self.as_slice().len();
         let new_bytes = mem_size(texel, length);
         self.inner.grow_to(new_bytes);
         self.inner.map_within(..length, 0, f, self.texel, texel);
-        Rec {
+        TexelBuffer {
             inner: self.inner,
             length: new_bytes,
             texel,
@@ -348,7 +348,7 @@ fn mem_size<P>(texel: Texel<P>, count: usize) -> usize {
         .unwrap_or_else(|| panic!("Requested count overflows memory size"))
 }
 
-impl<P> Deref for Rec<P> {
+impl<P> Deref for TexelBuffer<P> {
     type Target = [P];
 
     fn deref(&self) -> &[P] {
@@ -356,24 +356,24 @@ impl<P> Deref for Rec<P> {
     }
 }
 
-impl<P> DerefMut for Rec<P> {
+impl<P> DerefMut for TexelBuffer<P> {
     fn deref_mut(&mut self) -> &mut [P] {
         self.as_mut_slice()
     }
 }
 
-impl<P> Clone for Rec<P> {
+impl<P> Clone for TexelBuffer<P> {
     fn clone(&self) -> Self {
-        Rec {
+        TexelBuffer {
             inner: self.inner.clone(),
             ..*self
         }
     }
 }
 
-impl<P: AsTexel> Default for Rec<P> {
+impl<P: AsTexel> Default for TexelBuffer<P> {
     fn default() -> Self {
-        Rec {
+        TexelBuffer {
             inner: Buffer::default(),
             length: 0,
             texel: P::texel(),
@@ -381,39 +381,39 @@ impl<P: AsTexel> Default for Rec<P> {
     }
 }
 
-impl<P: AsTexel + Clone> From<&'_ [P]> for Rec<P> {
+impl<P: AsTexel + Clone> From<&'_ [P]> for TexelBuffer<P> {
     fn from(elements: &'_ [P]) -> Self {
-        Rec::with_elements(elements)
+        TexelBuffer::with_elements(elements)
     }
 }
 
-impl<P: cmp::PartialEq> cmp::PartialEq for Rec<P> {
+impl<P: cmp::PartialEq> cmp::PartialEq for TexelBuffer<P> {
     fn eq(&self, other: &Self) -> bool {
         self.as_slice().eq(other.as_slice())
     }
 }
 
-impl<P: cmp::Eq> cmp::Eq for Rec<P> {}
+impl<P: cmp::Eq> cmp::Eq for TexelBuffer<P> {}
 
-impl<P: cmp::PartialOrd> cmp::PartialOrd for Rec<P> {
+impl<P: cmp::PartialOrd> cmp::PartialOrd for TexelBuffer<P> {
     fn partial_cmp(&self, other: &Self) -> Option<cmp::Ordering> {
         self.as_slice().partial_cmp(other.as_slice())
     }
 }
 
-impl<P: cmp::Ord> cmp::Ord for Rec<P> {
+impl<P: cmp::Ord> cmp::Ord for TexelBuffer<P> {
     fn cmp(&self, other: &Self) -> cmp::Ordering {
         self.as_slice().cmp(other.as_slice())
     }
 }
 
-impl<P: fmt::Debug> fmt::Debug for Rec<P> {
+impl<P: fmt::Debug> fmt::Debug for TexelBuffer<P> {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
         f.debug_list().entries(self.as_slice().iter()).finish()
     }
 }
 
-impl fmt::Debug for ReuseError {
+impl fmt::Debug for BufferReuseError {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
         match self.requested {
             None => write!(f, "Buffer reuse failed: Bytes count can not be expressed"),
@@ -432,7 +432,7 @@ mod tests {
 
     #[test]
     fn resize() {
-        let mut buffer: Rec<u8> = Rec::new(0);
+        let mut buffer: TexelBuffer<u8> = TexelBuffer::new(0);
         assert_eq!(buffer.capacity(), 0);
         assert_eq!(buffer.len(), 0);
         buffer.resize(4);
@@ -449,7 +449,7 @@ mod tests {
 
     #[test]
     fn map() {
-        let mut buffer: Rec<u8> = Rec::new(8);
+        let mut buffer: TexelBuffer<u8> = TexelBuffer::new(8);
         assert_eq!(buffer.len(), 8);
         buffer.copy_from_slice(&[0, 1, 2, 3, 4, 5, 6, 7]);
 
@@ -465,11 +465,11 @@ mod tests {
     #[test]
     fn with_elements() {
         const HELLO_WORLD: &[u8] = b"Hello, World!";
-        let buffer = Rec::with_elements(HELLO_WORLD);
+        let buffer = TexelBuffer::with_elements(HELLO_WORLD);
         assert_eq!(buffer.as_slice(), HELLO_WORLD);
         assert_eq!(buffer.byte_len(), HELLO_WORLD.len());
 
-        let from_buffer = Rec::from(HELLO_WORLD);
+        let from_buffer = TexelBuffer::from(HELLO_WORLD);
         assert_eq!(buffer, from_buffer);
     }
 }

@@ -5,7 +5,7 @@ use core::{fmt, ops};
 
 use crate::buf::{buf, Buffer, Cog};
 use crate::layout::{Bytes, Coord, Decay, DynLayout, Layout, Mend, SampleSlice, Take, TryMend};
-use crate::{Rec, ReuseError, Texel};
+use crate::{BufferReuseError, Texel, TexelBuffer};
 
 /// A owned canvas, parameterized over the layout.
 ///
@@ -279,9 +279,9 @@ impl<L: SampleSlice> Canvas<L> {
     /// # Panics
     ///
     /// This function will panic if the buffer is shorter than the layout.
-    pub fn from_rec(buffer: Rec<L::Sample>, layout: L) -> Self {
+    pub fn from_buffer(buffer: TexelBuffer<L::Sample>, layout: L) -> Self {
         assert!(buffer.byte_len() >= layout.byte_len());
-        RawCanvas::from_rec(buffer, layout).into()
+        RawCanvas::from_buffer(buffer, layout).into()
     }
 
     /// Get a slice of the individual samples in the layout.
@@ -295,8 +295,8 @@ impl<L: SampleSlice> Canvas<L> {
     }
 
     /// Convert into an vector-like of sample types.
-    pub fn into_rec(self) -> Rec<L::Sample> {
-        self.inner.into_rec()
+    pub fn into_buffer(self) -> TexelBuffer<L::Sample> {
+        self.inner.into_buffer()
     }
 }
 
@@ -556,12 +556,12 @@ impl<B: BufferLike, L: Layout> RawCanvas<B, L> {
     }
 
     /// Reuse the buffer for a new image layout of the same type.
-    pub(crate) fn try_reuse(&mut self, layout: L) -> Result<(), ReuseError> {
+    pub(crate) fn try_reuse(&mut self, layout: L) -> Result<(), BufferReuseError> {
         if self.as_capacity_bytes().len() >= layout.byte_len() {
             self.layout = layout;
             Ok(())
         } else {
-            Err(ReuseError {
+            Err(BufferReuseError {
                 capacity: self.as_capacity_bytes().len(),
                 requested: Some(layout.byte_len()),
             })
@@ -600,13 +600,13 @@ impl<B: BufferLike, L: SampleSlice> RawCanvas<B, L> {
     ///
     /// The data already contained within the buffer is not modified so that prior initialization
     /// can be performed or one array of samples reinterpreted for an image of other sample type.
-    /// However, the `Rec` will be logically resized which will zero-initialize missing elements if
+    /// However, the `TexelBuffer` will be logically resized which will zero-initialize missing elements if
     /// the current buffer is too short.
     ///
     /// # Panics
     ///
     /// This function will panic if resizing causes a reallocation that fails.
-    pub(crate) fn from_rec(buffer: Rec<L::Sample>, layout: L) -> Self
+    pub(crate) fn from_buffer(buffer: TexelBuffer<L::Sample>, layout: L) -> Self
     where
         B: From<Buffer>,
     {
@@ -630,13 +630,13 @@ impl<B: BufferLike, L: SampleSlice> RawCanvas<B, L> {
     }
 
     /// Convert back into an vector-like of sample types.
-    pub(crate) fn into_rec(self) -> Rec<L::Sample> {
+    pub(crate) fn into_buffer(self) -> TexelBuffer<L::Sample> {
         let sample = self.layout.sample();
         // Avoid calling any method of `Layout` after this. Not relevant for safety but might be in
         // the future, if we want to avoid the extra check in `resize`.
         let count = self.as_slice().len();
         let buffer = self.buffer.into_owned();
-        let mut rec = Rec::from_buffer(buffer, sample);
+        let mut rec = TexelBuffer::from_buffer(buffer, sample);
         // This should never reallocate at this point but we don't really know or care.
         rec.resize(count);
         rec
