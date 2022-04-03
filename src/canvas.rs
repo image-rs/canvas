@@ -4,8 +4,8 @@
 use core::{fmt, ops};
 
 use crate::buf::{buf, Buffer, Cog};
-use crate::layout::{Bytes, Coord, Decay, DynLayout, Layout, Mend, SampleSlice, Take, TryMend};
-use crate::{Pixel, Rec, ReuseError};
+use crate::layout::{Bytes, Decay, DynLayout, Layout, Mend, SampleSlice, Take, TryMend};
+use crate::{BufferReuseError, Texel, TexelBuffer};
 
 /// A owned canvas, parameterized over the layout.
 ///
@@ -59,26 +59,55 @@ pub struct CopyOnGrow<'buf, Layout = Bytes> {
 }
 
 /// A read-only view of a canvas.
+///
+/// Note that this requires its underlying buffer to be highly aligned! For that reason it is not
+/// possible to take a reference at an arbitrary number of bytes.
 #[derive(Clone, PartialEq, Eq)]
-pub struct View<'buf, Layout = Bytes> {
+pub struct CanvasRef<'buf, Layout = &'buf Bytes> {
     inner: RawCanvas<&'buf buf, Layout>,
 }
 
-/// A writeable reference to a canvas.
+/// A writeable reference to a canvas buffer.
 #[derive(PartialEq, Eq)]
-pub struct ViewMut<'buf, Layout = Bytes> {
+pub struct CanvasMut<'buf, Layout = &'buf mut Bytes> {
     inner: RawCanvas<&'buf mut buf, Layout>,
 }
 
+/// Describes an image coordinate.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct Coord(pub u32, pub u32);
+
+impl Coord {
+    pub fn x(self) -> u32 {
+        self.0
+    }
+
+    pub fn y(self) -> u32 {
+        self.1
+    }
+
+    pub fn yx(self) -> (u32, u32) {
+        (self.1, self.0)
+    }
+
+    pub fn xy(self) -> (u32, u32) {
+        (self.0, self.1)
+    }
+}
+
 /// A raster layout.
+///
+/// This is a special form of texels that represent single group of color channels.
 pub trait Raster<Pixel>: Sized {
     fn dimensions(&self) -> Coord;
-    fn get(from: View<Self>, at: Coord) -> Pixel;
+    fn get(from: CanvasRef<&Self>, at: Coord) -> Pixel;
 }
 
 /// A raster layout where one can change pixel values independently.
+///
+/// In other words, requires that texels are one-by-one blocks of pixels.
 pub trait RasterMut<Pixel>: Raster<Pixel> {
-    fn put(into: ViewMut<Self>, at: Coord, val: Pixel);
+    fn put(into: CanvasMut<&mut Self>, at: Coord, val: Pixel);
 }
 
 /// Inner buffer implementation.
@@ -137,9 +166,48 @@ impl<L: Layout> Canvas<L> {
         self.inner.mutate_layout(|_| ());
     }
 
+    /// Change the layer of the canvas.
+    ///
+    /// Reallocates the buffer when growing a layout. Call [`fits`] to check this property.
+    pub fn with_layout<M>(self, layout: M) -> Canvas<M>
+    where
+        M: Layout,
+    {
+        self.inner.with_layout(layout).into()
+    }
+
     /// Decay into a canvas with less specific layout.
     ///
     /// See the [`Decay`] trait for an explanation of this operation.
+    ///
+    /// # Example
+    ///
+    /// The common layouts define ways to decay into a dynamically typed variant.
+    ///
+    /// ```
+    /// # use canvas::{Canvas, Matrix, layout};
+    /// let matrix = Matrix::<u8>::with_width_and_height(400, 400);
+    /// let canvas: Canvas<layout::MatrixTexels<u8>> = Canvas::from(matrix);
+    ///
+    /// // to turn hide the `u8` type but keep width, height, texel layout
+    /// let canvas: Canvas<layout::Matrix> = canvas.decay();
+    /// assert_eq!(canvas.layout().width(), 400);
+    /// assert_eq!(canvas.layout().height(), 400);
+    /// ```
+    ///
+    /// See also [`mend`] and [`try_mend`] for operations that reverse the effects.
+    ///
+    /// Can also be used to forget specifics of the layout, turning the canvas into a more general
+    /// container type. For example, to use a uniform type as an allocated buffer waiting on reuse.
+    ///
+    /// ```
+    /// # use canvas::{Canvas, Matrix, layout};
+    /// let matrix = Matrix::<u8>::with_width_and_height(400, 400);
+    ///
+    /// // Can always decay to a byte buffer.
+    /// let bytes: Canvas = Canvas::from(matrix).decay();
+    /// let _: &layout::Bytes = bytes.layout();
+    /// ```
     ///
     /// [`Decay`]: ../layout/trait.Decay.html
     pub fn decay<M>(self) -> Canvas<M>
@@ -163,7 +231,7 @@ impl<L: Layout> Canvas<L> {
     /// See the [`Mend`] trait for an explanation of this operation.
     ///
     /// [`Mend`]: ../layout/trait.Mend.html
-    pub fn mended<Item>(self, mend: Item) -> Canvas<Item::Into>
+    pub fn mend<Item>(self, mend: Item) -> Canvas<Item::Into>
     where
         Item: Mend<L>,
         L: Take,
@@ -195,7 +263,7 @@ impl<L: Layout> Canvas<L> {
 impl<L> Canvas<L> {
     /// Check if the buffer could accommodate another layout without reallocating.
     pub fn fits(&self, other: &impl Layout) -> bool {
-        other.byte_len() <= self.as_capacity_bytes().len()
+        self.inner.fits(other)
     }
 
     /// Get a reference to the unstructured bytes of the canvas.
@@ -222,16 +290,16 @@ impl<L> Canvas<L> {
     ///
     /// This reinterprets the bytes of the buffer. It can be used to view the buffer as any kind of
     /// pixel, regardless of its association with the layout. Use it with care.
-    pub fn as_pixels<P>(&self, pixel: Pixel<P>) -> &[P] {
-        self.inner.buffer.as_pixels(pixel)
+    pub fn as_texels<P>(&self, pixel: Texel<P>) -> &[P] {
+        self.inner.buffer.as_texels(pixel)
     }
 
     /// View this buffer as a slice of pixels.
     ///
     /// This reinterprets the bytes of the buffer. It can be used to view the buffer as any kind of
     /// pixel, regardless of its association with the layout. Use it with care.
-    pub fn as_mut_pixels<P>(&mut self, pixel: Pixel<P>) -> &mut [P] {
-        self.inner.buffer.as_mut_pixels(pixel)
+    pub fn as_mut_texels<P>(&mut self, pixel: Texel<P>) -> &mut [P] {
+        self.inner.buffer.as_mut_texels(pixel)
     }
 
     /// Get a reference to the layout.
@@ -248,19 +316,28 @@ impl<L> Canvas<L> {
     }
 
     /// Get a view of this canvas.
-    pub fn as_ref(&self) -> View<'_, L>
-    where
-        L: Clone,
-    {
+    pub fn as_ref(&self) -> CanvasRef<'_, &'_ L> {
         self.inner.borrow().into()
     }
 
+    /// Get a view of this canvas, if the alternate layout fits.
+    pub fn try_to_ref<M: Layout>(&self, layout: M) -> Option<CanvasRef<'_, M>> {
+        self.as_ref().with_layout(layout)
+    }
+
     /// Get a mutable view of this canvas.
-    pub fn as_mut(&mut self) -> ViewMut<'_, L>
-    where
-        L: Clone,
-    {
+    pub fn as_mut(&mut self) -> CanvasMut<'_, &'_ mut L> {
         self.inner.borrow_mut().into()
+    }
+
+    /// Get a mutable view under an alternate layout.
+    pub fn to_mut<M: Layout>(&mut self, layout: M) -> CanvasMut<'_, M> {
+        self.inner.as_reinterpreted(layout).into()
+    }
+
+    /// Get a mutable view of this canvas, if the alternate layout fits.
+    pub fn try_to_mut<M: Layout>(&mut self, layout: M) -> Option<CanvasMut<'_, M>> {
+        self.as_mut().with_layout(layout)
     }
 }
 
@@ -275,9 +352,9 @@ impl<L: SampleSlice> Canvas<L> {
     /// # Panics
     ///
     /// This function will panic if the buffer is shorter than the layout.
-    pub fn from_rec(buffer: Rec<L::Sample>, layout: L) -> Self {
+    pub fn from_buffer(buffer: TexelBuffer<L::Sample>, layout: L) -> Self {
         assert!(buffer.byte_len() >= layout.byte_len());
-        RawCanvas::from_rec(buffer, layout).into()
+        RawCanvas::from_buffer(buffer, layout).into()
     }
 
     /// Get a slice of the individual samples in the layout.
@@ -291,8 +368,174 @@ impl<L: SampleSlice> Canvas<L> {
     }
 
     /// Convert into an vector-like of sample types.
-    pub fn into_rec(self) -> Rec<L::Sample> {
-        self.inner.into_rec()
+    pub fn into_buffer(self) -> TexelBuffer<L::Sample> {
+        self.inner.into_buffer()
+    }
+}
+
+impl<'data, L> CanvasRef<'data, L> {
+    /// Get a reference to those bytes used by the layout.
+    pub fn as_bytes(&self) -> &[u8]
+    where
+        L: Layout,
+    {
+        self.inner.as_bytes()
+    }
+
+    pub fn layout(&self) -> &L {
+        &self.inner.layout
+    }
+
+    /// Get a view of this canvas.
+    pub fn as_ref(&self) -> CanvasRef<'_, &'_ L> {
+        self.inner.borrow().into()
+    }
+
+    /// Check if a call to [`with_layout`] would succeed.
+    pub fn fits(&self, other: &impl Layout) -> bool {
+        self.inner.fits(other)
+    }
+
+    /// Change this view to a different layout.
+    ///
+    /// This returns `Some` if the layout fits the underlying data, and `None` otherwise. Use
+    /// [`fits`] to check this property in a separate call. Note that the new layout need not be
+    /// related to the old layout in any other way.
+    pub fn with_layout<M>(self, layout: M) -> Option<CanvasRef<'data, M>>
+    where
+        M: Layout,
+    {
+        let canvas = self.inner.try_reinterpret(layout).ok()?;
+        Some(canvas.into())
+    }
+
+    /// Decay into a canvas with less specific layout.
+    ///
+    /// See [`Canvas::decay`].
+    pub fn decay<M>(self) -> Option<CanvasRef<'data, M>>
+    where
+        M: Decay<L>,
+        M: Layout,
+    {
+        let layout = M::decay(self.inner.layout);
+        let canvas = RawCanvas {
+            layout,
+            buffer: self.inner.buffer,
+        };
+        if canvas.fits(&canvas.layout) {
+            Some(canvas.into())
+        } else {
+            None
+        }
+    }
+
+    /// Copy all bytes to a newly allocated canvas.
+    pub fn to_owned(&self) -> Canvas<L>
+    where
+        L: Layout + Clone,
+    {
+        Canvas::with_bytes(self.inner.layout.clone(), self.inner.as_bytes())
+    }
+
+    /// Get a slice of the individual samples in the layout.
+    pub fn as_slice(&self) -> &[L::Sample]
+    where
+        L: SampleSlice,
+    {
+        self.inner.as_slice()
+    }
+}
+
+impl<'data, L> CanvasMut<'data, L> {
+    /// Get a reference to those bytes used by the layout.
+    pub fn as_bytes(&self) -> &[u8]
+    where
+        L: Layout,
+    {
+        self.inner.as_bytes()
+    }
+
+    /// Get a mutable reference to those bytes used by the layout.
+    pub fn as_bytes_mut(&mut self) -> &mut [u8]
+    where
+        L: Layout,
+    {
+        self.inner.as_bytes_mut()
+    }
+
+    pub fn layout(&self) -> &L {
+        &self.inner.layout
+    }
+
+    /// Get a view of this canvas.
+    pub fn as_ref(&self) -> CanvasRef<'_, &'_ L> {
+        self.inner.borrow().into()
+    }
+
+    /// Get a mutable view of this canvas.
+    pub fn as_mut(&mut self) -> CanvasMut<'_, &'_ mut L> {
+        self.inner.borrow_mut().into()
+    }
+
+    /// Check if a call to [`with_layout`] would succeed, without consuming this reference.
+    pub fn fits(&self, other: &impl Layout) -> bool {
+        self.inner.fits(other)
+    }
+
+    /// Change this view to a different layout.
+    ///
+    /// This returns `Some` if the layout fits the underlying data, and `None` otherwise. Use
+    /// [`fits`] to check this property in a separate call. Note that the new layout need not be
+    /// related to the old layout in any other way.
+    pub fn with_layout<M>(self, layout: M) -> Option<CanvasMut<'data, M>>
+    where
+        M: Layout,
+    {
+        let canvas = self.inner.try_reinterpret(layout).ok()?;
+        Some(canvas.into())
+    }
+
+    /// Decay into a canvas with less specific layout.
+    ///
+    /// See [`Canvas::decay`].
+    pub fn decay<M>(self) -> Option<CanvasMut<'data, M>>
+    where
+        M: Decay<L>,
+        M: Layout,
+    {
+        let layout = M::decay(self.inner.layout);
+        let canvas = RawCanvas {
+            layout,
+            buffer: self.inner.buffer,
+        };
+        if canvas.fits(&canvas.layout) {
+            Some(canvas.into())
+        } else {
+            None
+        }
+    }
+
+    pub fn to_owned(&self) -> Canvas<L>
+    where
+        L: Layout + Clone,
+    {
+        Canvas::with_bytes(self.inner.layout.clone(), self.inner.as_bytes())
+    }
+
+    /// Get a slice of the individual samples in the layout.
+    pub fn as_slice(&self) -> &[L::Sample]
+    where
+        L: SampleSlice,
+    {
+        self.inner.as_slice()
+    }
+
+    /// Get a mutable slice of the individual samples in the layout.
+    pub fn as_mut_slice(&mut self) -> &mut [L::Sample]
+    where
+        L: SampleSlice,
+    {
+        self.inner.as_mut_slice()
     }
 }
 
@@ -345,10 +588,7 @@ impl<B: Growable, L> RawCanvas<B, L> {
     ///
     /// # Panics
     /// This method panics if the new layout requires more bytes and allocation fails.
-    pub(crate) fn into_reinterpreted<Other: Layout>(
-        mut self,
-        layout: Other,
-    ) -> RawCanvas<B, Other> {
+    pub(crate) fn with_layout<Other: Layout>(mut self, layout: Other) -> RawCanvas<B, Other> {
         Growable::grow_to(&mut self.buffer, layout.byte_len());
         RawCanvas {
             buffer: self.buffer,
@@ -390,16 +630,6 @@ impl<B: Growable, L> RawCanvas<B, L> {
 
 /// Layout oblivious methods, these also never allocate or panic.
 impl<B: BufferLike, L> RawCanvas<B, L> {
-    /// Get a reference to the unstructured bytes of the canvas.
-    ///
-    /// Note that this may return more bytes than required for the specific layout for various
-    /// reasons. See also [`as_layout_bytes`].
-    ///
-    /// [`as_layout_bytes`]: #method.as_layout_bytes
-    pub(crate) fn as_capacity_bytes(&self) -> &[u8] {
-        self.buffer.as_bytes()
-    }
-
     /// Get a mutable reference to the unstructured bytes of the canvas.
     ///
     /// Note that this may return more bytes than required for the specific layout for various
@@ -411,66 +641,6 @@ impl<B: BufferLike, L> RawCanvas<B, L> {
         B: BufferMut,
     {
         self.buffer.as_bytes_mut()
-    }
-
-    /// Get a reference to the layout.
-    pub(crate) fn layout(&self) -> &L {
-        &self.layout
-    }
-
-    /// Get a mutable reference to the layout.
-    ///
-    /// Be mindful not to modify the layout to exceed the allocated size.
-    pub(crate) fn layout_mut_unguarded(&mut self) -> &mut L {
-        &mut self.layout
-    }
-
-    /// Reinterpret the bits in another layout.
-    ///
-    /// This method fails if the layout requires more bytes than are currently allocated.
-    pub(crate) fn try_reinterpret<Other>(self, layout: Other) -> Result<RawCanvas<B, Other>, Self>
-    where
-        Other: Layout,
-    {
-        if self.buffer.len() > layout.byte_len() {
-            Err(self)
-        } else {
-            Ok(RawCanvas {
-                buffer: self.buffer,
-                layout,
-            })
-        }
-    }
-
-    /// Change the layout without checking the buffer.
-    pub(crate) fn reinterpret_unguarded<Other: Layout>(self, layout: Other) -> RawCanvas<B, Other> {
-        RawCanvas {
-            buffer: self.buffer,
-            layout,
-        }
-    }
-
-    /// Borrow the buffer with the same layout.
-    pub(crate) fn borrow(&self) -> RawCanvas<&'_ buf, L>
-    where
-        L: Clone,
-    {
-        RawCanvas {
-            buffer: &self.buffer,
-            layout: self.layout.clone(),
-        }
-    }
-
-    /// Borrow the buffer mutably with the same layout.
-    pub(crate) fn borrow_mut(&mut self) -> RawCanvas<&'_ mut buf, L>
-    where
-        B: BufferMut,
-        L: Clone,
-    {
-        RawCanvas {
-            buffer: &mut self.buffer,
-            layout: self.layout.clone(),
-        }
     }
 
     /// Take ownership of the image's bytes.
@@ -503,11 +673,11 @@ impl<B> RawCanvas<B, DynLayout> {
     }
 }
 
-/// Methods for all `Layouts` (the trait).
-impl<B: BufferLike, L: Layout> RawCanvas<B, L> {
+impl<B, L> RawCanvas<B, L> {
     /// Allocate a buffer for a particular layout.
     pub(crate) fn new(layout: L) -> Self
     where
+        L: Layout,
         B: From<Buffer>,
     {
         let bytes = layout.byte_len();
@@ -517,30 +687,12 @@ impl<B: BufferLike, L: Layout> RawCanvas<B, L> {
         }
     }
 
-    pub(crate) fn with_buffer(layout: L, buffer: B) -> Self {
-        assert!(buffer.as_ref().len() <= layout.byte_len());
-        RawCanvas { buffer, layout }
-    }
-
-    /// Get a reference to those bytes used by the layout.
-    pub(crate) fn as_bytes(&self) -> &[u8] {
-        &self.as_capacity_bytes()[..self.layout.byte_len()]
-    }
-
-    /// Get a mutable reference to those bytes used by the layout.
-    pub(crate) fn as_bytes_mut(&mut self) -> &mut [u8]
-    where
-        B: BufferMut,
-    {
-        let len = self.layout.byte_len();
-        &mut self.as_capacity_bytes_mut()[..len]
-    }
-
     /// Create a canvas from a byte slice specifying the contents.
     ///
     /// If the layout requires more bytes then the remaining bytes are zero initialized.
     pub(crate) fn with_contents(buffer: &[u8], layout: L) -> Self
     where
+        L: Layout,
         B: From<Buffer>,
     {
         let mut buffer = Buffer::from(buffer);
@@ -551,13 +703,131 @@ impl<B: BufferLike, L: Layout> RawCanvas<B, L> {
         }
     }
 
+    pub(crate) fn with_buffer(layout: L, buffer: B) -> Self
+    where
+        B: ops::Deref<Target = buf>,
+        L: Layout,
+    {
+        assert!(buffer.as_ref().len() <= layout.byte_len());
+        RawCanvas { buffer, layout }
+    }
+
+    /// Get a reference to the layout.
+    pub(crate) fn layout(&self) -> &L {
+        &self.layout
+    }
+
+    /// Get a mutable reference to the layout.
+    ///
+    /// Be mindful not to modify the layout to exceed the allocated size.
+    pub(crate) fn layout_mut_unguarded(&mut self) -> &mut L {
+        &mut self.layout
+    }
+
+    /// Get a reference to the unstructured bytes of the canvas.
+    ///
+    /// Note that this may return more bytes than required for the specific layout for various
+    /// reasons. See also [`as_layout_bytes`].
+    ///
+    /// [`as_layout_bytes`]: #method.as_layout_bytes
+    pub(crate) fn as_capacity_bytes(&self) -> &[u8]
+    where
+        B: ops::Deref<Target = buf>,
+    {
+        self.buffer.as_bytes()
+    }
+
+    /// Get a reference to those bytes used by the layout.
+    pub(crate) fn as_bytes(&self) -> &[u8]
+    where
+        B: ops::Deref<Target = buf>,
+        L: Layout,
+    {
+        &self.as_capacity_bytes()[..self.layout.byte_len()]
+    }
+
+    pub(crate) fn as_slice(&self) -> &[L::Sample]
+    where
+        B: ops::Deref<Target = buf>,
+        L: SampleSlice,
+    {
+        self.buffer.as_texels(self.layout.sample())
+    }
+
+    /// Borrow the buffer with the same layout.
+    pub(crate) fn borrow(&self) -> RawCanvas<&'_ buf, &'_ L>
+    where
+        B: ops::Deref<Target = buf>,
+    {
+        RawCanvas {
+            buffer: &self.buffer,
+            layout: &self.layout,
+        }
+    }
+
+    /// Borrow the buffer mutably with the same layout.
+    pub(crate) fn borrow_mut(&mut self) -> RawCanvas<&'_ mut buf, &'_ mut L>
+    where
+        B: ops::DerefMut<Target = buf>,
+    {
+        RawCanvas {
+            buffer: &mut self.buffer,
+            layout: &mut self.layout,
+        }
+    }
+
+    pub(crate) fn fits(&self, other: &impl Layout) -> bool
+    where
+        B: ops::Deref<Target = buf>,
+    {
+        other.byte_len() <= self.as_capacity_bytes().len()
+    }
+
+    /// Change the layout without checking the buffer.
+    pub(crate) fn reinterpret_unguarded<Other: Layout>(self, layout: Other) -> RawCanvas<B, Other> {
+        RawCanvas {
+            buffer: self.buffer,
+            layout,
+        }
+    }
+
+    /// Reinterpret the bits in another layout.
+    ///
+    /// This method fails if the layout requires more bytes than are currently allocated.
+    pub(crate) fn try_reinterpret<Other>(self, layout: Other) -> Result<RawCanvas<B, Other>, Self>
+    where
+        B: ops::Deref<Target = buf>,
+        Other: Layout,
+    {
+        if self.buffer.len() > layout.byte_len() {
+            Err(self)
+        } else {
+            Ok(RawCanvas {
+                buffer: self.buffer,
+                layout,
+            })
+        }
+    }
+}
+
+/// Methods for all `Layouts` (the trait).
+impl<B: BufferLike, L: Layout> RawCanvas<B, L> {
+    /// Get a mutable reference to those bytes used by the layout.
+    pub(crate) fn as_bytes_mut(&mut self) -> &mut [u8]
+    where
+        B: BufferMut,
+    {
+        let len = self.layout.byte_len();
+        &mut self.as_capacity_bytes_mut()[..len]
+    }
+
     /// Reuse the buffer for a new image layout of the same type.
-    pub(crate) fn try_reuse(&mut self, layout: L) -> Result<(), ReuseError> {
+    pub(crate) fn try_reuse(&mut self, layout: L) -> Result<(), BufferReuseError> {
         if self.as_capacity_bytes().len() >= layout.byte_len() {
             self.layout = layout;
             Ok(())
         } else {
-            Err(ReuseError {
+            Err(BufferReuseError {
                 capacity: self.as_capacity_bytes().len(),
                 requested: Some(layout.byte_len()),
             })
@@ -596,13 +866,13 @@ impl<B: BufferLike, L: SampleSlice> RawCanvas<B, L> {
     ///
     /// The data already contained within the buffer is not modified so that prior initialization
     /// can be performed or one array of samples reinterpreted for an image of other sample type.
-    /// However, the `Rec` will be logically resized which will zero-initialize missing elements if
+    /// However, the `TexelBuffer` will be logically resized which will zero-initialize missing elements if
     /// the current buffer is too short.
     ///
     /// # Panics
     ///
     /// This function will panic if resizing causes a reallocation that fails.
-    pub(crate) fn from_rec(buffer: Rec<L::Sample>, layout: L) -> Self
+    pub(crate) fn from_buffer(buffer: TexelBuffer<L::Sample>, layout: L) -> Self
     where
         B: From<Buffer>,
     {
@@ -614,28 +884,90 @@ impl<B: BufferLike, L: SampleSlice> RawCanvas<B, L> {
         }
     }
 
-    pub(crate) fn as_slice(&self) -> &[L::Sample] {
-        self.buffer.as_pixels(self.layout.sample())
-    }
-
     pub(crate) fn as_mut_slice(&mut self) -> &mut [L::Sample]
     where
         B: BufferMut,
     {
-        self.buffer.as_mut_pixels(self.layout.sample())
+        self.buffer.as_mut_texels(self.layout.sample())
     }
 
     /// Convert back into an vector-like of sample types.
-    pub(crate) fn into_rec(self) -> Rec<L::Sample> {
+    pub(crate) fn into_buffer(self) -> TexelBuffer<L::Sample> {
         let sample = self.layout.sample();
         // Avoid calling any method of `Layout` after this. Not relevant for safety but might be in
         // the future, if we want to avoid the extra check in `resize`.
         let count = self.as_slice().len();
         let buffer = self.buffer.into_owned();
-        let mut rec = Rec::from_buffer(buffer, sample);
+        let mut rec = TexelBuffer::from_buffer(buffer, sample);
         // This should never reallocate at this point but we don't really know or care.
         rec.resize(count);
         rec
+    }
+}
+
+impl<'lt, L: Layout + Clone> From<Canvas<&'lt L>> for Canvas<L> {
+    fn from(canvas: Canvas<&'lt L>) -> Self {
+        let layout: L = (*canvas.layout()).clone();
+        RawCanvas::with_buffer(layout, canvas.inner.buffer).into()
+    }
+}
+
+impl<'lt, L: Layout + Clone> From<Canvas<&'lt mut L>> for Canvas<L> {
+    fn from(canvas: Canvas<&'lt mut L>) -> Self {
+        let layout: L = (*canvas.layout()).clone();
+        RawCanvas::with_buffer(layout, canvas.inner.buffer).into()
+    }
+}
+
+impl<'lt, L> From<&'lt Canvas<L>> for CanvasRef<'lt, &'lt L> {
+    fn from(canvas: &'lt Canvas<L>) -> Self {
+        canvas.as_ref()
+    }
+}
+
+impl<'lt, L> From<&'lt mut Canvas<L>> for CanvasMut<'lt, &'lt mut L> {
+    fn from(canvas: &'lt mut Canvas<L>) -> Self {
+        canvas.as_mut()
+    }
+}
+
+impl<'lt, L: Layout + Clone> From<&'lt Canvas<L>> for CanvasRef<'lt, L> {
+    fn from(canvas: &'lt Canvas<L>) -> Self {
+        canvas.as_ref().into()
+    }
+}
+
+impl<'lt, L: Layout + Clone> From<&'lt mut Canvas<L>> for CanvasMut<'lt, L> {
+    fn from(canvas: &'lt mut Canvas<L>) -> Self {
+        canvas.as_mut().into()
+    }
+}
+
+impl<'lt, L: Layout + Clone> From<CanvasRef<'lt, &'_ L>> for CanvasRef<'lt, L> {
+    fn from(canvas: CanvasRef<'lt, &'_ L>) -> Self {
+        let layout: L = (*canvas.layout()).clone();
+        RawCanvas::with_buffer(layout, canvas.inner.buffer).into()
+    }
+}
+
+impl<'lt, L: Layout + Clone> From<CanvasRef<'lt, &'_ mut L>> for CanvasRef<'lt, L> {
+    fn from(canvas: CanvasRef<'lt, &'_ mut L>) -> Self {
+        let layout: L = (*canvas.layout()).clone();
+        RawCanvas::with_buffer(layout, canvas.inner.buffer).into()
+    }
+}
+
+impl<'lt, L: Layout + Clone> From<CanvasMut<'lt, &'_ L>> for CanvasMut<'lt, L> {
+    fn from(canvas: CanvasMut<'lt, &'_ L>) -> Self {
+        let layout: L = (*canvas.layout()).clone();
+        RawCanvas::with_buffer(layout, canvas.inner.buffer).into()
+    }
+}
+
+impl<'lt, L: Layout + Clone> From<CanvasMut<'lt, &'_ mut L>> for CanvasMut<'lt, L> {
+    fn from(canvas: CanvasMut<'lt, &'_ mut L>) -> Self {
+        let layout: L = (*canvas.layout()).clone();
+        RawCanvas::with_buffer(layout, canvas.inner.buffer).into()
     }
 }
 
@@ -645,15 +977,15 @@ impl<L> From<RawCanvas<Buffer, L>> for Canvas<L> {
     }
 }
 
-impl<'lt, L> From<RawCanvas<&'lt buf, L>> for View<'lt, L> {
+impl<'lt, L> From<RawCanvas<&'lt buf, L>> for CanvasRef<'lt, L> {
     fn from(canvas: RawCanvas<&'lt buf, L>) -> Self {
-        View { inner: canvas }
+        CanvasRef { inner: canvas }
     }
 }
 
-impl<'lt, L> From<RawCanvas<&'lt mut buf, L>> for ViewMut<'lt, L> {
+impl<'lt, L> From<RawCanvas<&'lt mut buf, L>> for CanvasMut<'lt, L> {
     fn from(canvas: RawCanvas<&'lt mut buf, L>) -> Self {
-        ViewMut { inner: canvas }
+        CanvasMut { inner: canvas }
     }
 }
 

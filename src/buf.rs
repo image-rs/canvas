@@ -6,7 +6,7 @@ use core::{borrow, cmp, mem, ops};
 use alloc::borrow::ToOwned;
 use alloc::vec::Vec;
 
-use crate::pixel::{constants::MAX, MaxAligned, Pixel};
+use crate::texel::{constants::MAX, MaxAligned, Texel};
 
 /// Allocates and manages raw bytes.
 ///
@@ -159,21 +159,21 @@ impl buf {
         &mut self.0
     }
 
-    /// Reinterpret the buffer for the specific pixel type.
+    /// Reinterpret the buffer for the specific texel type.
     ///
     /// The alignment of `P` is already checked to be smaller than `MAX_ALIGN` through the
-    /// constructor of `Pixel`. The slice will have the maximum length possible but may leave
+    /// constructor of `Texel`. The slice will have the maximum length possible but may leave
     /// unused bytes in the end.
-    pub fn as_pixels<P>(&self, pixel: Pixel<P>) -> &[P] {
+    pub fn as_texels<P>(&self, pixel: Texel<P>) -> &[P] {
         pixel.cast_buf(self)
     }
 
-    /// Reinterpret the buffer mutable for the specific pixel type.
+    /// Reinterpret the buffer mutable for the specific texel type.
     ///
     /// The alignment of `P` is already checked to be smaller than `MAX_ALIGN` through the
-    /// constructor of `Pixel`.
+    /// constructor of `Texel`.
     // FIXME: decide to use naming scheme of `as_bytes_mut` or `as_mut_slice`.
-    pub fn as_mut_pixels<P>(&mut self, pixel: Pixel<P>) -> &mut [P] {
+    pub fn as_mut_texels<P>(&mut self, pixel: Texel<P>) -> &mut [P] {
         pixel.cast_mut_buf(self)
     }
 
@@ -196,8 +196,8 @@ impl buf {
         src: impl ops::RangeBounds<usize>,
         dest: usize,
         f: impl Fn(P) -> Q,
-        p: Pixel<P>,
-        q: Pixel<Q>,
+        p: Texel<P>,
+        q: Texel<Q>,
     ) {
         // By symmetry, a write sequence that map `src` to `dest` without clobbering any values
         // that need to be read later can be applied in reverse to map `dest` to `src` instead.
@@ -275,7 +275,7 @@ impl buf {
             ops::Bound::Included(&bound) => bound
                 .checked_add(1)
                 .expect("Range does not specify a valid bound end"),
-            ops::Bound::Unbounded => self.as_pixels(p).len(),
+            ops::Bound::Unbounded => self.as_texels(p).len(),
         };
 
         let len = p_end.checked_sub(p_start).expect("Bound violates order");
@@ -283,17 +283,18 @@ impl buf {
         let q_start = dest;
 
         let _ = self
-            .as_pixels(p)
+            .as_texels(p)
             .get(p_start..)
             .and_then(|slice| slice.get(..len))
             .expect("Source out of bounds");
 
         let _ = self
-            .as_pixels(q)
+            .as_texels(q)
             .get(q_start..)
             .and_then(|slice| slice.get(..len))
             .expect("Destination out of bounds");
 
+        // Due to both being Texels.
         assert!(p.size() as isize > 0);
         assert!(q.size() as isize > 0);
 
@@ -341,15 +342,15 @@ impl buf {
         dest: usize,
         len: usize,
         f: impl Fn(P) -> Q,
-        p: Pixel<P>,
-        q: Pixel<Q>,
+        p: Texel<P>,
+        q: Texel<Q>,
     ) {
         for idx in 0..len {
             let source_idx = idx + src;
             let target_idx = idx + dest;
-            let source = p.copy_val(&self.as_pixels(p)[source_idx]);
+            let source = p.copy_val(&self.as_texels(p)[source_idx]);
             let target = f(source);
-            self.as_mut_pixels(q)[target_idx] = target;
+            self.as_mut_texels(q)[target_idx] = target;
         }
     }
 
@@ -360,15 +361,15 @@ impl buf {
         dest: usize,
         len: usize,
         f: impl Fn(P) -> Q,
-        p: Pixel<P>,
-        q: Pixel<Q>,
+        p: Texel<P>,
+        q: Texel<Q>,
     ) {
         for idx in (0..len).rev() {
             let source_idx = idx + src;
             let target_idx = idx + dest;
-            let source = p.copy_val(&self.as_pixels(p)[source_idx]);
+            let source = p.copy_val(&self.as_texels(p)[source_idx]);
             let target = f(source);
-            self.as_mut_pixels(q)[target_idx] = target;
+            self.as_mut_texels(q)[target_idx] = target;
         }
     }
 }
@@ -547,12 +548,12 @@ impl ops::IndexMut<ops::RangeTo<usize>> for buf {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::pixels::{MAX, U16, U32, U8};
+    use crate::texels::{MAX, U16, U32, U8};
 
     #[test]
     fn single_max_element() {
         let mut buffer = Buffer::new(mem::size_of::<MaxAligned>());
-        let slice = buffer.as_mut_pixels(MAX);
+        let slice = buffer.as_mut_texels(MAX);
         assert!(slice.len() == 1);
     }
 
@@ -574,26 +575,26 @@ mod tests {
     #[test]
     fn reinterpret() {
         let mut buffer = Buffer::new(mem::size_of::<u32>());
-        assert!(buffer.as_mut_pixels(U32).len() >= 1);
+        assert!(buffer.as_mut_texels(U32).len() >= 1);
         buffer
-            .as_mut_pixels(U16)
+            .as_mut_texels(U16)
             .iter_mut()
             .for_each(|p| *p = 0x0f0f);
         buffer
-            .as_pixels(U32)
+            .as_texels(U32)
             .iter()
             .for_each(|p| assert_eq!(*p, 0x0f0f0f0f));
         buffer
-            .as_pixels(U8)
+            .as_texels(U8)
             .iter()
             .for_each(|p| assert_eq!(*p, 0x0f));
 
         buffer
-            .as_mut_pixels(U8)
+            .as_mut_texels(U8)
             .iter_mut()
             .enumerate()
             .for_each(|(idx, p)| *p = idx as u8);
-        assert_eq!(u32::from_be(buffer.as_pixels(U32)[0]), 0x00010203);
+        assert_eq!(u32::from_be(buffer.as_texels(U32)[0]), 0x00010203);
     }
 
     #[test]
@@ -601,7 +602,7 @@ mod tests {
         const LEN: usize = 10;
         let mut buffer = Buffer::new(LEN * mem::size_of::<u32>());
         buffer
-            .as_mut_pixels(U32)
+            .as_mut_texels(U32)
             .iter_mut()
             .enumerate()
             .for_each(|(idx, p)| *p = idx as u32);
@@ -612,7 +613,7 @@ mod tests {
 
         // Back to where we started.
         assert_eq!(
-            buffer.as_pixels(U32)[..LEN].to_vec(),
+            buffer.as_texels(U32)[..LEN].to_vec(),
             (0..LEN as u32).collect::<Vec<_>>()
         );
 
@@ -621,7 +622,7 @@ mod tests {
         buffer.map_within(3 * LEN..4 * LEN, 0, |n: u8| n as u32, U8, U32);
 
         assert_eq!(
-            buffer.as_pixels(U32)[..LEN].to_vec(),
+            buffer.as_texels(U32)[..LEN].to_vec(),
             (0..LEN as u32).collect::<Vec<_>>()
         );
     }

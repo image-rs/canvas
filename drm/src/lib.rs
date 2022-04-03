@@ -13,7 +13,7 @@
 //! pixel matrix. Then some of those formats map cleanly to planes of color information that can be
 //! viewed as a matrix with strides, which finally enables useful operations such as
 //! initialization.
-use crate::{layout, pixel, stride};
+use canvas::{layout, pixels, stride};
 use core::convert::TryFrom;
 use core::fmt;
 use core::ops::Range;
@@ -144,7 +144,7 @@ pub enum PlaneIdx {
 /// The layout of one plane of a DRM buffer.
 pub struct PlaneLayout {
     format: PlaneInfo,
-    element: layout::Element,
+    texel: layout::TexelLayout,
     pitch: u32,
     offset: u32,
     width: u32,
@@ -161,7 +161,7 @@ enum BadDrmKind {
     ZeroBlockWidth,
     ZeroBlockHeight,
     OverlappingPlanes,
-    UndescribableElement,
+    UndescribableTexelLayout,
     IllegalPlaneWidth,
     IllegalPlaneHeight,
     LineSize,
@@ -260,22 +260,22 @@ impl DrmFormatInfo {
         Some(height)
     }
 
-    /// The element describing each block (atomic unit) of the described layout.
+    /// The texel describing each block (atomic unit) of the described layout.
     ///
     /// If plane is outside the number of planes of this format or if the blocks can not be
-    /// described by a single element (e.g. they have extrinsic alignment requirements, their size
+    /// described by a single texel (e.g. they have extrinsic alignment requirements, their size
     /// is not divisible by their alignment) then None is returned.
     ///
     /// Blocks that contain multiple same sized channels in separate bytes are represented arrays
     /// of that channel type. In contrast, blocks that hold channels as bitfields are represented
     /// using a large integer, which comes with additional alignment requirements.
-    pub fn block_element(self, plane: PlaneIdx) -> Option<layout::Element> {
+    pub fn block_element(self, plane: PlaneIdx) -> Option<layout::TexelLayout> {
         if usize::from(self.num_planes) <= plane.to_index() {
             return None;
         }
 
         Some(match self.format {
-            FourCC::C8 | FourCC::RGB332 | FourCC::BGR332 => pixel::constants::U8.into(),
+            FourCC::C8 | FourCC::RGB332 | FourCC::BGR332 => pixels::U8.into(),
             FourCC::XRGB444
             | FourCC::XBGR444
             | FourCC::RGBX444
@@ -285,8 +285,8 @@ impl DrmFormatInfo {
             | FourCC::ARGB444
             | FourCC::ABGR444
             | FourCC::RGBA444
-            | FourCC::BGRA444 => pixel::constants::U16.into(),
-            FourCC::RGB888 | FourCC::BGR888 => pixel::constants::U8.array3().into(),
+            | FourCC::BGRA444 => pixels::U16.into(),
+            FourCC::RGB888 | FourCC::BGR888 => pixels::U8.array3().into(),
             FourCC::XRGB8888
             | FourCC::XBGR8888
             | FourCC::RGBX8888
@@ -294,7 +294,7 @@ impl DrmFormatInfo {
             | FourCC::ARGB8888
             | FourCC::ABGR8888
             | FourCC::RGBA8888
-            | FourCC::BGRA8888 => pixel::constants::U8.array4().into(),
+            | FourCC::BGRA8888 => pixels::U8.array4().into(),
             FourCC::XRGB2101010
             | FourCC::XBGR2101010
             | FourCC::RGBX1010102
@@ -302,34 +302,34 @@ impl DrmFormatInfo {
             | FourCC::ARGB2101010
             | FourCC::ABGR2101010
             | FourCC::RGBA1010102
-            | FourCC::BGRA1010102 => pixel::constants::U32.into(),
+            | FourCC::BGRA1010102 => pixels::U32.into(),
             FourCC::XRGB16161616F
             | FourCC::XBGR16161616F
             | FourCC::ARGB16161616F
-            | FourCC::ABGR16161616F => pixel::constants::U16.array4().into(),
-            FourCC::YUYV | FourCC::YVYU | FourCC::AYUV => pixel::constants::U8.array4().into(),
-            FourCC::VUY101010 => pixel::constants::U32.into(),
-            FourCC::VUY888 => pixel::constants::U8.array3().into(),
+            | FourCC::ABGR16161616F => pixels::U16.array4().into(),
+            FourCC::YUYV | FourCC::YVYU | FourCC::AYUV => pixels::U8.array4().into(),
+            FourCC::VUY101010 => pixels::U32.into(),
+            FourCC::VUY888 => pixels::U8.array3().into(),
             // Actually planar formats.
             FourCC::XRGB888_A8 | FourCC::XBGR888_A8 => {
                 if plane == PlaneIdx::First {
-                    pixel::constants::U8.array4().into()
+                    pixels::U8.array4().into()
                 } else {
-                    pixel::constants::U8.into()
+                    pixels::U8.into()
                 }
             }
             FourCC::RGB888_A8 | FourCC::BGR888_A8 => {
                 if plane == PlaneIdx::First {
-                    pixel::constants::U8.array3().into()
+                    pixels::U8.array3().into()
                 } else {
-                    pixel::constants::U8.into()
+                    pixels::U8.into()
                 }
             }
             FourCC::RGB565_A8 | FourCC::BGR565_A8 => {
                 if plane == PlaneIdx::First {
-                    pixel::constants::U16.into()
+                    pixels::U16.into()
                 } else {
-                    pixel::constants::U8.into()
+                    pixels::U8.into()
                 }
             }
             FourCC::NV12
@@ -339,9 +339,9 @@ impl DrmFormatInfo {
             | FourCC::NV24
             | FourCC::NV42 => {
                 if plane == PlaneIdx::First {
-                    pixel::constants::U8.into()
+                    pixels::U8.into()
                 } else {
-                    pixel::constants::U8.array2().into()
+                    pixels::U8.array2().into()
                 }
             }
             FourCC::YUV410
@@ -353,7 +353,7 @@ impl DrmFormatInfo {
             | FourCC::YUV422
             | FourCC::YVU422
             | FourCC::YUV444
-            | FourCC::YVU444 => pixel::constants::U8.into(),
+            | FourCC::YVU444 => pixels::U8.into(),
             // No element that fits (or not implemented?).
             _ => return None,
         })
@@ -547,7 +547,7 @@ impl PlaneLayout {
         start..start + len
     }
 
-    fn element(&self) -> layout::Element {
+    fn texel(&self) -> layout::TexelLayout {
         self.element
     }
 
@@ -946,10 +946,10 @@ impl layout::Layout for PlaneLayout {
 
 impl stride::Strided for PlaneLayout {
     fn strided(&self) -> stride::StrideLayout {
-        let element = self.element();
+        let texel = self.texel();
         let width = self.width();
         let height = self.height();
-        let matrix = layout::Matrix::from_width_height(element, width, height)
+        let matrix = layout::Matrix::from_width_height(texel, width, height)
             .expect("Fits in memory because the plane does");
         stride::StrideLayout::with_row_major(matrix)
     }
@@ -1006,14 +1006,14 @@ fn simple_planes() {
     let first = first.strided().spec();
     assert_eq!(first.width, 900);
     assert_eq!(first.height, 600);
-    assert_eq!(first.element.size(), 2);
+    assert_eq!(first.texel.size(), 2);
 
     assert_eq!(second.width(), 900);
     assert_eq!(second.height(), 600);
     let second = second.strided().spec();
     assert_eq!(second.width, 900);
     assert_eq!(second.height, 600);
-    assert_eq!(second.element.size(), 1);
+    assert_eq!(second.texel.size(), 1);
 }
 
 #[test]
@@ -1034,12 +1034,12 @@ fn yuv_planes() {
     let first = first.strided().spec();
     assert_eq!(first.width, 900);
     assert_eq!(first.height, 600);
-    assert_eq!(first.element.size(), 1);
+    assert_eq!(first.texel.size(), 1);
 
     assert_eq!(second.width(), 450);
     assert_eq!(second.height(), 300);
     let second = second.strided().spec();
     assert_eq!(second.width, 450);
     assert_eq!(second.height, 300);
-    assert_eq!(second.element.size(), 2);
+    assert_eq!(second.texel.size(), 2);
 }

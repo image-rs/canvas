@@ -6,7 +6,8 @@ use core::{cmp, fmt};
 
 use crate::buf::Buffer;
 use crate::canvas::{Canvas, RawCanvas};
-use crate::{layout, AsPixel, Pixel, Rec, ReuseError};
+use crate::layout::MatrixTexels as Layout;
+use crate::{layout, AsTexel, BufferReuseError, Texel, TexelBuffer};
 
 /// A 2d, width-major matrix of pixels.
 ///
@@ -62,46 +63,35 @@ pub struct Matrix<P> {
     inner: RawCanvas<Buffer, Layout<P>>,
 }
 
-/// Describes the memory region used for the image.
-///
-/// The underlying buffer may have more data allocated than this region and cause the overhead to
-/// be reused when resizing the image. All ways to construct this already check that all pixels
-/// within the resulting image can be addressed via an index.
-pub struct Layout<P> {
-    width: usize,
-    height: usize,
-    pixel: Pixel<P>,
-}
-
 /// Error representation for a failed buffer reuse for a canvas.
 ///
-/// Emitted as a result of [`Matrix::from_rec`] when the buffer capacity is not large enough to
+/// Emitted as a result of [`Matrix::from_buffer`] when the buffer capacity is not large enough to
 /// serve as an image of requested layout with causing a reallocation.
 ///
-/// It is possible to retrieve the buffer that cause the failure with `into_rec`. This allows one
+/// It is possible to retrieve the buffer that cause the failure with `into_buffer`. This allows one
 /// to manually try to correct the error with additional checks, or implement a fallback strategy
 /// which does not require the interpretation as a full image.
 ///
 /// ```
-/// # use canvas::{Matrix, Rec, Layout};
-/// let rec = Rec::<u8>::new(16);
-/// let allocation = rec.as_bytes().as_ptr();
+/// # use canvas::{Matrix, layout::MatrixTexels, TexelBuffer};
+/// let buffer = TexelBuffer::<u8>::new(16);
+/// let allocation = buffer.as_bytes().as_ptr();
 ///
-/// let bad_layout = Layout::width_and_height(rec.capacity() + 1, 1).unwrap();
-/// let error = match Matrix::from_reused_rec(rec, bad_layout) {
+/// let bad_layout = MatrixTexels::width_and_height(buffer.capacity() + 1, 1).unwrap();
+/// let error = match Matrix::from_reused_buffer(buffer, bad_layout) {
 ///     Ok(_) => unreachable!("The layout requires one too many pixels"),
 ///     Err(error) => error,
 /// };
 ///
 /// // Get back the original buffer.
-/// let rec = error.into_rec();
-/// assert_eq!(rec.as_bytes().as_ptr(), allocation);
+/// let buffer = error.into_buffer();
+/// assert_eq!(buffer.as_bytes().as_ptr(), allocation);
 /// ```
 ///
-/// [`Matrix::from_rec`]: ./struct.Matrix.html#method.from_rec
+/// [`Matrix::from_buffer`]: ./struct.Matrix.html#method.from_buffer
 #[derive(PartialEq, Eq)]
 pub struct MatrixReuseError<P> {
-    buffer: Rec<P>,
+    buffer: TexelBuffer<P>,
     layout: Layout<P>,
 }
 
@@ -148,7 +138,7 @@ impl<P> Matrix<P> {
     /// # Panics
     /// When allocation of memory fails.
     pub fn with_layout(layout: Layout<P>) -> Self {
-        let rec = Rec::bytes_for_pixel(layout.pixel, layout.byte_len());
+        let rec = TexelBuffer::bytes_for_texel(layout.pixel, layout.byte_len());
         Self::new_raw(rec, layout)
     }
 
@@ -160,10 +150,10 @@ impl<P> Matrix<P> {
     /// consider using `Layout::from_width_and_height` and `Matrix::with_layout`.
     pub fn with_width_and_height(width: usize, height: usize) -> Self
     where
-        P: AsPixel,
+        P: AsTexel,
     {
         let layout =
-            Layout::width_and_height(width, height).expect("Pixel layout can not fit into memory");
+            Layout::width_and_height(width, height).expect("Texel layout can not fit into memory");
         Self::with_layout(layout)
     }
 
@@ -171,26 +161,26 @@ impl<P> Matrix<P> {
     ///
     /// The data already contained within the buffer is not modified so that prior initialization
     /// can be performed or one array of samples reinterpreted for an image of other sample type.
-    /// However, the `Rec` will be logically resized which will zero-initialize missing elements if
+    /// However, the `TexelBuffer` will be logically resized which will zero-initialize missing elements if
     /// the current buffer is too short.
     ///
     /// # Panics
     ///
     /// This function will panic if resizing causes a reallocation that fails.
-    pub fn from_rec(mut buffer: Rec<P>, layout: Layout<P>) -> Self {
+    pub fn from_buffer(mut buffer: TexelBuffer<P>, layout: Layout<P>) -> Self {
         buffer.resize_bytes(layout.byte_len());
         Self::new_raw(buffer, layout)
     }
 
     /// Reuse an existing buffer for a pixel canvas.
     ///
-    /// Similar to `from_rec` but this function will never reallocate the inner buffer. Instead, it
-    /// will return the `Rec` unmodified if the creation fails. See [`MatrixReuseError`] for
+    /// Similar to `from_buffer` but this function will never reallocate the inner buffer. Instead, it
+    /// will return the `TexelBuffer` unmodified if the creation fails. See [`MatrixReuseError`] for
     /// further information on the error and retrieving the buffer.
     ///
     /// [`MatrixReuseError`]: ./struct.CanvasReuseError.html
-    pub fn from_reused_rec(
-        mut buffer: Rec<P>,
+    pub fn from_reused_buffer(
+        mut buffer: TexelBuffer<P>,
         layout: Layout<P>,
     ) -> Result<Self, MatrixReuseError<P>> {
         match buffer.reuse_bytes(layout.byte_len()) {
@@ -200,10 +190,10 @@ impl<P> Matrix<P> {
         Ok(Self::new_raw(buffer, layout))
     }
 
-    fn new_raw(inner: Rec<P>, layout: Layout<P>) -> Self {
-        assert_eq!(inner.len(), layout.len(), "Pixel count agrees with buffer");
+    fn new_raw(inner: TexelBuffer<P>, layout: Layout<P>) -> Self {
+        assert_eq!(inner.len(), layout.len(), "Texel count agrees with buffer");
         Matrix {
-            inner: RawCanvas::from_rec(inner, layout),
+            inner: RawCanvas::from_buffer(inner, layout),
         }
     }
 
@@ -234,15 +224,15 @@ impl<P> Matrix<P> {
     }
 
     /// Reuse the buffer for a new image layout.
-    pub fn reuse(&mut self, layout: Layout<P>) -> Result<(), ReuseError> {
+    pub fn reuse(&mut self, layout: Layout<P>) -> Result<(), BufferReuseError> {
         self.inner.try_reuse(layout)
     }
 
     /// Reinterpret to another, same size pixel type.
     ///
     /// See `transmute_to` for details.
-    pub fn transmute<Q: AsPixel>(self) -> Matrix<Q> {
-        self.transmute_to(Q::pixel())
+    pub fn transmute<Q: AsTexel>(self) -> Matrix<Q> {
+        self.transmute_to(Q::texel())
     }
 
     /// Reinterpret to another, same size pixel type.
@@ -251,7 +241,7 @@ impl<P> Matrix<P> {
     ///
     /// Like `std::mem::transmute`, the size of the two types need to be equal. This ensures that
     /// all indices are valid in both directions.
-    pub fn transmute_to<Q: AsPixel>(self, pixel: Pixel<Q>) -> Matrix<Q> {
+    pub fn transmute_to<Q: AsTexel>(self, pixel: Texel<Q>) -> Matrix<Q> {
         let layout = self.layout().transmute_to(pixel);
         let inner = self.inner.reinterpret_unguarded(layout);
         Matrix { inner }
@@ -262,8 +252,8 @@ impl<P> Matrix<P> {
         *self.inner.layout()
     }
 
-    pub fn into_rec(self) -> Rec<P> {
-        self.inner.into_rec()
+    pub fn into_buffer(self) -> TexelBuffer<P> {
+        self.inner.into_buffer()
     }
 
     fn index_of(&self, x: usize, y: usize) -> usize {
@@ -284,9 +274,9 @@ impl<P> Matrix<P> {
     pub fn map<F, Q>(self, map: F) -> Matrix<Q>
     where
         F: Fn(P) -> Q,
-        Q: AsPixel,
+        Q: AsTexel,
     {
-        self.map_to(map, Q::pixel())
+        self.map_to(map, Q::texel())
     }
 
     /// Apply a function to all pixel values.
@@ -298,7 +288,7 @@ impl<P> Matrix<P> {
     ///
     /// This function will panic if the new layout would be invalid (because the new pixel type
     /// requires a larger buffer than can be allocate) or if the reallocation fails.
-    pub fn map_to<F, Q>(self, map: F, pixel: Pixel<Q>) -> Matrix<Q>
+    pub fn map_to<F, Q>(self, map: F, pixel: Texel<Q>) -> Matrix<Q>
     where
         F: Fn(P) -> Q,
     {
@@ -306,24 +296,24 @@ impl<P> Matrix<P> {
         let layout = self
             .layout()
             .map_to(pixel)
-            .expect("Pixel layout can not fit into memory");
+            .expect("Texel layout can not fit into memory");
         // .. then do the actual pixel mapping.
-        let inner = self.into_rec().map_to(map, pixel);
-        Matrix::from_rec(inner, layout)
+        let inner = self.into_buffer().map_to(map, pixel);
+        Matrix::from_buffer(inner, layout)
     }
 
     pub fn map_reuse<F, Q>(self, map: F) -> Result<Matrix<Q>, MapReuseError<P, Q>>
     where
         F: Fn(P) -> Q,
-        Q: AsPixel,
+        Q: AsTexel,
     {
-        self.map_reuse_to(map, Q::pixel())
+        self.map_reuse_to(map, Q::texel())
     }
 
     pub fn map_reuse_to<F, Q>(
         self,
         map: F,
-        pixel: Pixel<Q>,
+        pixel: Texel<Q>,
     ) -> Result<Matrix<Q>, MapReuseError<P, Q>>
     where
         F: Fn(P) -> Q,
@@ -345,15 +335,15 @@ impl<P> Matrix<P> {
             });
         }
 
-        let inner = self.into_rec().map_to(map, pixel);
+        let inner = self.into_buffer().map_to(map, pixel);
 
-        Ok(Matrix::from_rec(inner, layout))
+        Ok(Matrix::from_buffer(inner, layout))
     }
 }
 
 impl<P> Layout<P> {
     pub fn width_and_height_for_pixel(
-        pixel: Pixel<P>,
+        pixel: Texel<P>,
         width: usize,
         height: usize,
     ) -> Option<Self> {
@@ -369,9 +359,37 @@ impl<P> Layout<P> {
 
     pub fn width_and_height(width: usize, height: usize) -> Option<Self>
     where
-        P: AsPixel,
+        P: AsTexel,
     {
-        Self::width_and_height_for_pixel(P::pixel(), width, height)
+        Self::width_and_height_for_pixel(P::texel(), width, height)
+    }
+
+    pub const fn empty(pixel: Texel<P>) -> Self {
+        Layout {
+            pixel,
+            width: 0,
+            height: 0,
+        }
+    }
+
+    pub fn with_matrix(pixel: Texel<P>, matrix: layout::Matrix) -> Option<Self> {
+        if pixel.size() == matrix.element.size() {
+            Some(Layout {
+                pixel,
+                width: matrix.first_dim,
+                height: matrix.second_dim,
+            })
+        } else {
+            None
+        }
+    }
+
+    pub fn into_matrix(self) -> layout::Matrix {
+        layout::Matrix {
+            element: self.pixel.into(),
+            first_dim: self.width,
+            second_dim: self.height,
+        }
     }
 
     /// Get the required bytes for this layout.
@@ -393,15 +411,15 @@ impl<P> Layout<P> {
         self.height
     }
 
-    pub fn pixel(self) -> Pixel<P> {
+    pub fn pixel(self) -> Texel<P> {
         self.pixel
     }
 
     /// Reinterpret to another, same size pixel type.
     ///
     /// See `transmute_to` for details.
-    pub fn transmute<Q: AsPixel>(self) -> Layout<Q> {
-        self.transmute_to(Q::pixel())
+    pub fn transmute<Q: AsTexel>(self) -> Layout<Q> {
+        self.transmute_to(Q::texel())
     }
 
     /// Reinterpret to another, same size pixel type.
@@ -409,8 +427,13 @@ impl<P> Layout<P> {
     /// # Panics
     /// Like `std::mem::transmute`, the size of the two types need to be equal. This ensures that
     /// all indices are valid in both directions.
-    pub fn transmute_to<Q>(self, pixel: Pixel<Q>) -> Layout<Q> {
-        assert!(self.pixel.size() == pixel.size());
+    pub fn transmute_to<Q>(self, pixel: Texel<Q>) -> Layout<Q> {
+        assert!(
+            self.pixel.size() == pixel.size(),
+            "{} vs {}",
+            self.pixel.size(),
+            pixel.size()
+        );
         Layout {
             width: self.width,
             height: self.height,
@@ -419,12 +442,12 @@ impl<P> Layout<P> {
     }
 
     /// Utility method to change the pixel type without changing the dimensions.
-    pub fn map<Q: AsPixel>(self) -> Option<Layout<Q>> {
-        self.map_to(Q::pixel())
+    pub fn map<Q: AsTexel>(self) -> Option<Layout<Q>> {
+        self.map_to(Q::texel())
     }
 
     /// Utility method to change the pixel type without changing the dimensions.
-    pub fn map_to<Q>(self, pixel: Pixel<Q>) -> Option<Layout<Q>> {
+    pub fn map_to<Q>(self, pixel: Texel<Q>) -> Option<Layout<Q>> {
         Layout::width_and_height_for_pixel(pixel, self.width, self.height)
     }
 
@@ -439,7 +462,7 @@ impl<P> Layout<P> {
 
 impl<P> MatrixReuseError<P> {
     /// Unwrap the original buffer.
-    pub fn into_rec(self) -> Rec<P> {
+    pub fn into_buffer(self) -> TexelBuffer<P> {
         self.buffer
     }
 }
@@ -462,7 +485,7 @@ impl<P, Q> MapReuseError<P, Q> {
 impl<P> From<Canvas<Layout<P>>> for Matrix<P> {
     fn from(canvas: Canvas<Layout<P>>) -> Self {
         let layout = *canvas.layout();
-        let rec = canvas.into_rec();
+        let rec = canvas.into_buffer();
         Self::new_raw(rec, layout)
     }
 }
@@ -470,8 +493,8 @@ impl<P> From<Canvas<Layout<P>>> for Matrix<P> {
 impl<P> From<Matrix<P>> for Canvas<Layout<P>> {
     fn from(matrix: Matrix<P>) -> Self {
         let layout = matrix.layout();
-        let rec = matrix.into_rec();
-        Canvas::from_rec(rec, layout)
+        let rec = matrix.into_buffer();
+        Canvas::from_buffer(rec, layout)
     }
 }
 
@@ -484,28 +507,20 @@ impl<P> layout::Layout for Layout<P> {
 impl<P> layout::SampleSlice for Layout<P> {
     type Sample = P;
 
-    fn sample(&self) -> Pixel<P> {
+    fn sample(&self) -> Texel<P> {
         self.pixel
     }
 }
 
-impl<P> Clone for Layout<P> {
-    fn clone(&self) -> Self {
-        Layout {
-            ..*self // This is, apparently, legal.
-        }
+impl<P: AsTexel> Default for Layout<P> {
+    fn default() -> Self {
+        Self::empty(P::texel())
     }
 }
 
-impl<P> Copy for Layout<P> {}
-
-impl<P: AsPixel> Default for Layout<P> {
-    fn default() -> Self {
-        Layout {
-            width: 0,
-            height: 0,
-            pixel: P::pixel(),
-        }
+impl<P> layout::Take for Layout<P> {
+    fn take(&mut self) -> Self {
+        core::mem::replace(self, Self::empty(self.pixel))
     }
 }
 
@@ -518,6 +533,14 @@ impl<P> fmt::Debug for Layout<P> {
             .finish()
     }
 }
+
+impl<P> Clone for Layout<P> {
+    fn clone(&self) -> Self {
+        Layout { ..*self }
+    }
+}
+
+impl<P> Copy for Layout<P> {}
 
 impl<P> cmp::PartialEq for Layout<P> {
     fn eq(&self, other: &Self) -> bool {
@@ -541,9 +564,9 @@ impl<P> cmp::PartialOrd for Layout<P> {
     }
 }
 
-impl<P: AsPixel> Default for Matrix<P> {
+impl<P: AsTexel> Default for Matrix<P> {
     fn default() -> Self {
-        Matrix::from_rec(Rec::default(), Layout::default())
+        Matrix::from_buffer(TexelBuffer::default(), Layout::default())
     }
 }
 
@@ -602,10 +625,11 @@ mod tests {
 
     #[test]
     fn buffer_reuse() {
-        let rec = Rec::<u8>::new(4);
+        let rec = TexelBuffer::<u8>::new(4);
         assert!(rec.capacity() >= 4);
         let layout = Layout::width_and_height(2, 2).unwrap();
-        let mut canvas = Matrix::from_reused_rec(rec, layout).expect("Rec is surely large enough");
+        let mut canvas =
+            Matrix::from_reused_buffer(rec, layout).expect("Rec is surely large enough");
         canvas
             .reuse(Layout::width_and_height(1, 1).unwrap())
             .expect("Can scale down the image");
