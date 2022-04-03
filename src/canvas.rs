@@ -4,7 +4,7 @@
 use core::{fmt, ops};
 
 use crate::buf::{buf, Buffer, Cog};
-use crate::layout::{Bytes, Coord, Decay, DynLayout, Layout, Mend, SampleSlice, Take, TryMend};
+use crate::layout::{Bytes, Decay, DynLayout, Layout, Mend, SampleSlice, Take, TryMend};
 use crate::{BufferReuseError, Texel, TexelBuffer};
 
 /// A owned canvas, parameterized over the layout.
@@ -63,14 +63,36 @@ pub struct CopyOnGrow<'buf, Layout = Bytes> {
 /// Note that this requires its underlying buffer to be highly aligned! For that reason it is not
 /// possible to take a reference at an arbitrary number of bytes.
 #[derive(Clone, PartialEq, Eq)]
-pub struct CanvasRef<'buf, Layout = Bytes> {
+pub struct CanvasRef<'buf, Layout = &'buf Bytes> {
     inner: RawCanvas<&'buf buf, Layout>,
 }
 
-/// A writeable reference to a canvas.
+/// A writeable reference to a canvas buffer.
 #[derive(PartialEq, Eq)]
-pub struct CanvasMut<'buf, Layout = Bytes> {
+pub struct CanvasMut<'buf, Layout = &'buf mut Bytes> {
     inner: RawCanvas<&'buf mut buf, Layout>,
+}
+
+/// Describes an image coordinate.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct Coord(pub u32, pub u32);
+
+impl Coord {
+    pub fn x(self) -> u32 {
+        self.0
+    }
+
+    pub fn y(self) -> u32 {
+        self.1
+    }
+
+    pub fn yx(self) -> (u32, u32) {
+        (self.1, self.0)
+    }
+
+    pub fn xy(self) -> (u32, u32) {
+        (self.0, self.1)
+    }
 }
 
 /// A raster layout.
@@ -78,14 +100,14 @@ pub struct CanvasMut<'buf, Layout = Bytes> {
 /// This is a special form of texels that represent single group of color channels.
 pub trait Raster<Pixel>: Sized {
     fn dimensions(&self) -> Coord;
-    fn get(from: CanvasRef<Self>, at: Coord) -> Pixel;
+    fn get(from: CanvasRef<&Self>, at: Coord) -> Pixel;
 }
 
 /// A raster layout where one can change pixel values independently.
 ///
 /// In other words, requires that texels are one-by-one blocks of pixels.
 pub trait RasterMut<Pixel>: Raster<Pixel> {
-    fn put(into: CanvasMut<Self>, at: Coord, val: Pixel);
+    fn put(into: CanvasMut<&mut Self>, at: Coord, val: Pixel);
 }
 
 /// Inner buffer implementation.
@@ -284,18 +306,12 @@ impl<L> Canvas<L> {
     }
 
     /// Get a view of this canvas.
-    pub fn as_ref(&self) -> CanvasRef<'_, L>
-    where
-        L: Clone,
-    {
+    pub fn as_ref(&self) -> CanvasRef<'_, &'_ L> {
         self.inner.borrow().into()
     }
 
     /// Get a mutable view of this canvas.
-    pub fn as_mut(&mut self) -> CanvasMut<'_, L>
-    where
-        L: Clone,
-    {
+    pub fn as_mut(&mut self) -> CanvasMut<'_, &'_ mut L> {
         self.inner.borrow_mut().into()
     }
 }
@@ -332,19 +348,42 @@ impl<L: SampleSlice> Canvas<L> {
     }
 }
 
-impl<L: Layout> CanvasRef<'_, L> {
+impl<L> CanvasRef<'_, L> {
+    pub fn layout(&self) -> &L {
+        &self.inner.layout
+    }
+
+    /// Get a view of this canvas.
+    pub fn as_ref(&self) -> CanvasRef<'_, &'_ L> {
+        self.inner.borrow().into()
+    }
+
     pub fn to_owned(&self) -> Canvas<L>
     where
-        L: Clone,
+        L: Layout + Clone,
     {
         Canvas::with_bytes(self.inner.layout.clone(), self.inner.as_bytes())
     }
 }
 
-impl<L: Layout> CanvasMut<'_, L> {
+impl<L> CanvasMut<'_, L> {
+    pub fn layout(&self) -> &L {
+        &self.inner.layout
+    }
+
+    /// Get a view of this canvas.
+    pub fn as_ref(&self) -> CanvasRef<'_, &'_ L> {
+        self.inner.borrow().into()
+    }
+
+    /// Get a mutable view of this canvas.
+    pub fn as_mut(&mut self) -> CanvasMut<'_, &'_ mut L> {
+        self.inner.borrow_mut().into()
+    }
+
     pub fn to_owned(&self) -> Canvas<L>
     where
-        L: Clone,
+        L: Layout + Clone,
     {
         Canvas::with_bytes(self.inner.layout.clone(), self.inner.as_bytes())
     }
@@ -482,29 +521,6 @@ impl<B: BufferLike, L> RawCanvas<B, L> {
         }
     }
 
-    /// Borrow the buffer with the same layout.
-    pub(crate) fn borrow(&self) -> RawCanvas<&'_ buf, L>
-    where
-        L: Clone,
-    {
-        RawCanvas {
-            buffer: &self.buffer,
-            layout: self.layout.clone(),
-        }
-    }
-
-    /// Borrow the buffer mutably with the same layout.
-    pub(crate) fn borrow_mut(&mut self) -> RawCanvas<&'_ mut buf, L>
-    where
-        B: BufferMut,
-        L: Clone,
-    {
-        RawCanvas {
-            buffer: &mut self.buffer,
-            layout: self.layout.clone(),
-        }
-    }
-
     /// Take ownership of the image's bytes.
     ///
     /// # Panics
@@ -607,6 +623,28 @@ impl<B, L> RawCanvas<B, L> {
     {
         &self.as_capacity_bytes()[..self.layout.byte_len()]
     }
+
+    /// Borrow the buffer with the same layout.
+    pub(crate) fn borrow(&self) -> RawCanvas<&'_ buf, &'_ L>
+    where
+        B: ops::Deref<Target = buf>,
+    {
+        RawCanvas {
+            buffer: &self.buffer,
+            layout: &self.layout,
+        }
+    }
+
+    /// Borrow the buffer mutably with the same layout.
+    pub(crate) fn borrow_mut(&mut self) -> RawCanvas<&'_ mut buf, &'_ mut L>
+    where
+        B: ops::DerefMut<Target = buf>,
+    {
+        RawCanvas {
+            buffer: &mut self.buffer,
+            layout: &mut self.layout,
+        }
+    }
 }
 
 /// Methods for all `Layouts` (the trait).
@@ -708,15 +746,69 @@ impl<B: BufferLike, L: SampleSlice> RawCanvas<B, L> {
     }
 }
 
-impl<'lt, L: Clone> From<&'lt Canvas<L>> for CanvasRef<'lt, L> {
+impl<'lt, L: Layout + Clone> From<Canvas<&'lt L>> for Canvas<L> {
+    fn from(canvas: Canvas<&'lt L>) -> Self {
+        let layout: L = (*canvas.layout()).clone();
+        RawCanvas::with_buffer(layout, canvas.inner.buffer).into()
+    }
+}
+
+impl<'lt, L: Layout + Clone> From<Canvas<&'lt mut L>> for Canvas<L> {
+    fn from(canvas: Canvas<&'lt mut L>) -> Self {
+        let layout: L = (*canvas.layout()).clone();
+        RawCanvas::with_buffer(layout, canvas.inner.buffer).into()
+    }
+}
+
+impl<'lt, L> From<&'lt Canvas<L>> for CanvasRef<'lt, &'lt L> {
     fn from(canvas: &'lt Canvas<L>) -> Self {
         canvas.as_ref()
     }
 }
 
-impl<'lt, L: Clone> From<&'lt mut Canvas<L>> for CanvasMut<'lt, L> {
+impl<'lt, L> From<&'lt mut Canvas<L>> for CanvasMut<'lt, &'lt mut L> {
     fn from(canvas: &'lt mut Canvas<L>) -> Self {
         canvas.as_mut()
+    }
+}
+
+impl<'lt, L: Layout + Clone> From<&'lt Canvas<L>> for CanvasRef<'lt, L> {
+    fn from(canvas: &'lt Canvas<L>) -> Self {
+        canvas.as_ref().into()
+    }
+}
+
+impl<'lt, L: Layout + Clone> From<&'lt mut Canvas<L>> for CanvasMut<'lt, L> {
+    fn from(canvas: &'lt mut Canvas<L>) -> Self {
+        canvas.as_mut().into()
+    }
+}
+
+impl<'lt, L: Layout + Clone> From<CanvasRef<'lt, &'_ L>> for CanvasRef<'lt, L> {
+    fn from(canvas: CanvasRef<'lt, &'_ L>) -> Self {
+        let layout: L = (*canvas.layout()).clone();
+        RawCanvas::with_buffer(layout, canvas.inner.buffer).into()
+    }
+}
+
+impl<'lt, L: Layout + Clone> From<CanvasRef<'lt, &'_ mut L>> for CanvasRef<'lt, L> {
+    fn from(canvas: CanvasRef<'lt, &'_ mut L>) -> Self {
+        let layout: L = (*canvas.layout()).clone();
+        RawCanvas::with_buffer(layout, canvas.inner.buffer).into()
+    }
+}
+
+impl<'lt, L: Layout + Clone> From<CanvasMut<'lt, &'_ L>> for CanvasMut<'lt, L> {
+    fn from(canvas: CanvasMut<'lt, &'_ L>) -> Self {
+        let layout: L = (*canvas.layout()).clone();
+        RawCanvas::with_buffer(layout, canvas.inner.buffer).into()
+    }
+}
+
+impl<'lt, L: Layout + Clone> From<CanvasMut<'lt, &'_ mut L>> for CanvasMut<'lt, L> {
+    fn from(canvas: CanvasMut<'lt, &'_ mut L>) -> Self {
+        let layout: L = (*canvas.layout()).clone();
+        RawCanvas::with_buffer(layout, canvas.inner.buffer).into()
     }
 }
 
