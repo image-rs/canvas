@@ -26,7 +26,7 @@
 //! ```
 //! # fn send_over_network(_: &[u8]) { };
 //! use canvas::Matrix;
-//! let mut canvas = Matrix::with_width_and_height(400, 400);
+//! let mut canvas = Matrix::<[u8; 4]>::with_width_and_height(400, 400);
 //!
 //! // Draw a bright red line.
 //! for i in 0..400 {
@@ -52,7 +52,7 @@
 extern crate alloc;
 
 mod buf;
-mod canvas;
+pub mod canvas;
 pub mod layout;
 mod matrix;
 mod rec;

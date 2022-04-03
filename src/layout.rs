@@ -530,11 +530,11 @@ impl<L: Layout> Decay<L> for Box<L> {
 /// example, the following comparison all hold:
 ///
 /// ```
-/// # use canvas::pixels::{U8, U16};
+/// # use canvas::texels::{U8, U16};
 /// # use canvas::layout::TexelLayout;
 /// let u8 = TexelLayout::from(U8);
-/// let u8x2 = TexelLayout::from(U8.array2());
-/// let u8x3 = TexelLayout::from(U8.array3());
+/// let u8x2 = TexelLayout::from(U8.array::<2>());
+/// let u8x3 = TexelLayout::from(U8.array::<3>());
 /// let u16 = TexelLayout::from(U16);
 ///
 /// assert!(u8 < u16, "due to size and alignment");

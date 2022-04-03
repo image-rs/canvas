@@ -88,6 +88,30 @@ pub(crate) mod constants {
         (F64, f64),
         (MAX, MaxAligned)
     );
+
+    impl<T: AsTexel> AsTexel for [T; 1] {
+        fn texel() -> Texel<[T; 1]> {
+            T::texel().array::<1>()
+        }
+    }
+
+    impl<T: AsTexel> AsTexel for [T; 2] {
+        fn texel() -> Texel<[T; 2]> {
+            T::texel().array::<2>()
+        }
+    }
+
+    impl<T: AsTexel> AsTexel for [T; 3] {
+        fn texel() -> Texel<[T; 3]> {
+            T::texel().array::<3>()
+        }
+    }
+
+    impl<T: AsTexel> AsTexel for [T; 4] {
+        fn texel() -> Texel<[T; 4]> {
+            T::texel().array::<4>()
+        }
+    }
 }
 
 impl<P: bytemuck::Pod> Texel<P> {

@@ -73,11 +73,11 @@ pub struct Matrix<P> {
 /// which does not require the interpretation as a full image.
 ///
 /// ```
-/// # use canvas::{Matrix, Layout, TexelBuffer};
+/// # use canvas::{Matrix, layout::MatrixTexels, TexelBuffer};
 /// let buffer = TexelBuffer::<u8>::new(16);
 /// let allocation = buffer.as_bytes().as_ptr();
 ///
-/// let bad_layout = Layout::width_and_height(buffer.capacity() + 1, 1).unwrap();
+/// let bad_layout = MatrixTexels::width_and_height(buffer.capacity() + 1, 1).unwrap();
 /// let error = match Matrix::from_reused_buffer(buffer, bad_layout) {
 ///     Ok(_) => unreachable!("The layout requires one too many pixels"),
 ///     Err(error) => error,
@@ -428,7 +428,12 @@ impl<P> Layout<P> {
     /// Like `std::mem::transmute`, the size of the two types need to be equal. This ensures that
     /// all indices are valid in both directions.
     pub fn transmute_to<Q>(self, pixel: Texel<Q>) -> Layout<Q> {
-        assert!(self.pixel.size() == pixel.size());
+        assert!(
+            self.pixel.size() == pixel.size(),
+            "{} vs {}",
+            self.pixel.size(),
+            pixel.size()
+        );
         Layout {
             width: self.width,
             height: self.height,
