@@ -230,7 +230,7 @@ impl<P> Matrix<P> {
 
     /// Reinterpret to another, same size pixel type.
     ///
-    /// See `transmute_to` for details.
+    /// See [`Matrix::transmute_to`] for details.
     pub fn transmute<Q: AsTexel>(self) -> Matrix<Q> {
         self.transmute_to(Q::texel())
     }
@@ -239,7 +239,7 @@ impl<P> Matrix<P> {
     ///
     /// # Panics
     ///
-    /// Like `std::mem::transmute`, the size of the two types need to be equal. This ensures that
+    /// Like [`core::mem::transmute`], the size of the two types need to be equal. This ensures that
     /// all indices are valid in both directions.
     pub fn transmute_to<Q: AsTexel>(self, pixel: Texel<Q>) -> Matrix<Q> {
         let layout = self.layout().transmute_to(pixel);
@@ -265,7 +265,7 @@ impl<P> Matrix<P> {
 
     /// Apply a function to all pixel values.
     ///
-    /// See [`map_to`] for the details.
+    /// See [`Matrix::map_to`] for the details.
     ///
     /// # Panics
     ///
@@ -281,8 +281,8 @@ impl<P> Matrix<P> {
 
     /// Apply a function to all pixel values.
     ///
-    /// Unlike [`transmute_to`] there are no restrictions on the pixel types. This will reuse the
-    /// underlying buffer or resize it if that is not possible.
+    /// Unlike [`Matrix::transmute_to`] there are no restrictions on the pixel types. This will
+    /// reuse the underlying buffer or resize it if that is not possible.
     ///
     /// # Panics
     ///

@@ -298,7 +298,7 @@ impl<P> TexelBuffer<P> {
 
     /// Map all elements to another value.
     ///
-    /// See [`map_to`] for details.
+    /// See [`TexelBuffer::map_to`] for details.
     pub fn map<Q>(self, f: impl Fn(P) -> Q) -> TexelBuffer<Q>
     where
         Q: AsTexel,

@@ -59,6 +59,7 @@ pub struct Strides {
     inner: Canvas<StrideLayout>,
 }
 
+/// Error that occurs when a [`StrideSpec`] is invalid.
 #[derive(Debug)]
 pub struct BadStrideError {
     kind: BadStrideKind,
@@ -245,59 +246,6 @@ impl StrideLayout {
     }
 }
 
-impl Strides {
-    /// Create a matrix with a specific layout.
-    pub fn new(layout: StrideLayout) -> Self {
-        Self::with_canvas(Canvas::new(layout))
-    }
-
-    /// Construct from a canvas.
-    ///
-    /// This will assert that the bytes reserved by the canvas correspond to the layout. This
-    /// should already be the case but `Canvas` does not require it.
-    pub fn with_canvas(inner: Canvas<StrideLayout>) -> Self {
-        let layout = inner.layout();
-        assert!(
-            inner.as_bytes().get(..layout.total).is_some(),
-            "Contract violation, canvas smaller than required by layout"
-        );
-        Strides { inner }
-    }
-
-    /// Shrink the element's size or alignment.
-    ///
-    /// This operation never reallocates the buffer.
-    pub fn shrink_element(&mut self, new: layout::TexelLayout) {
-        self.inner.layout_mut_unguarded().shrink_element(new)
-    }
-
-    /// Borrow this as a reference to an immutable byte matrix.
-    pub fn as_ref(&self) -> ByteCanvasRef<'_> {
-        ByteCanvasRef {
-            layout: *self.inner.layout(),
-            data: self.inner.as_bytes(),
-        }
-    }
-
-    /// Borrow this as a reference to a mutable byte matrix.
-    pub fn as_mut(&mut self) -> ByteCanvasMut<'_> {
-        ByteCanvasMut {
-            layout: *self.inner.layout(),
-            data: self.inner.as_bytes_mut(),
-        }
-    }
-}
-
-/// Unwrap the inner matrix.
-///
-/// This drops the strong assertion that the matrix buffer corresponds to the correct layout but
-/// allows reuse for a potentially unrelated layout.
-impl From<Strides> for Canvas<StrideLayout> {
-    fn from(strides: Strides) -> Canvas<StrideLayout> {
-        strides.inner
-    }
-}
-
 impl<'data> ByteCanvasRef<'data> {
     /// Construct a reference to a strided canvas buffer.
     pub fn new(canvas: &'data Canvas<impl Strided>) -> Self {
@@ -390,8 +338,15 @@ impl<'data> ByteCanvasMut<'data> {
     }
 }
 
-/// Describes a rectangular matrix of pixels.
+/// A layout that is a strided matrix of elements.
+///
+/// Like all layout traits, implementations should ensure that the layout returned in these methods
+/// occupied a subset of pixels of their original layout.
 pub trait Strided: Layout {
+    /// The valid strided specification of this layout.
+    ///
+    /// This call should not fail, or panic. Otherwise, prefer an optional getter for the
+    /// `StrideLayout` and have the caller decay their own buffer.
     fn strided(&self) -> StrideLayout;
 }
 
@@ -407,6 +362,24 @@ impl Strided for StrideLayout {
     }
 }
 
+impl<T: Strided> Strided for &'_ T {
+    fn strided(&self) -> StrideLayout {
+        (**self).strided()
+    }
+}
+
+impl<T: Strided> Strided for &'_ mut T {
+    fn strided(&self) -> StrideLayout {
+        (**self).strided()
+    }
+}
+
+impl<T: Strided> layout::Decay<T> for StrideLayout {
+    fn decay(from: T) -> Self {
+        from.strided()
+    }
+}
+
 impl<P: AsTexel> Strided for layout::MatrixTexels<P> {
     fn strided(&self) -> StrideLayout {
         let matrix: layout::Matrix = self.clone().into();
@@ -417,6 +390,12 @@ impl<P: AsTexel> Strided for layout::MatrixTexels<P> {
 impl From<BadStrideKind> for BadStrideError {
     fn from(kind: BadStrideKind) -> Self {
         BadStrideError { kind }
+    }
+}
+
+impl From<&'_ StrideLayout> for StrideSpec {
+    fn from(layout: &'_ StrideLayout) -> Self {
+        layout.spec()
     }
 }
 

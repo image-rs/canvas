@@ -1,3 +1,13 @@
+//! Defines the `Canvas` container, with flexibly type-safe layout.
+//!
+//! Besides the main type, [`Canvas`], which is an owned buffer of particular layout there are some
+//! supporting types that represent other ways in which layouts interact with buffers. Note that
+//! the layout is flexible in the sense that it is up to the user to ultimately ensure correct
+//! typing. The type definition will _help_ you by not providing the tools for strong types but
+//! it's always _allowed_/_valid_ to refer to the same bytes by a different layout. This makes it
+//! possible to use your own texel/pixel wrapper types regardless of the underlying byte
+//! representation. Indeed, the byte buffer need not even represent a pixel matrix (but it's
+//! advised, probably very common, and the only 'supported' use-case).
 // Distributed under The MIT License (MIT)
 //
 // Copyright (c) 2019, 2020 The `image-rs` developers
@@ -155,9 +165,9 @@ impl<L: Layout> Canvas<L> {
 
     /// If necessary, reallocate the buffer to fit the layout.
     ///
-    /// Call this method after having mutated a layout with [`layout_mut_unguarded`] whenever you
-    /// are not sure that the layout did not grow. This will ensure the contract that the internal
-    /// buffer is large enough for the layout.
+    /// Call this method after having mutated a layout with [`Canvas::layout_mut_unguarded`]
+    /// whenever you are not sure that the layout did not grow. This will ensure the contract that
+    /// the internal buffer is large enough for the layout.
     ///
     /// # Panics
     ///
@@ -168,7 +178,7 @@ impl<L: Layout> Canvas<L> {
 
     /// Change the layer of the canvas.
     ///
-    /// Reallocates the buffer when growing a layout. Call [`fits`] to check this property.
+    /// Reallocates the buffer when growing a layout. Call [`Canvas::fits`] to check this property.
     pub fn with_layout<M>(self, layout: M) -> Canvas<M>
     where
         M: Layout,
@@ -195,7 +205,7 @@ impl<L: Layout> Canvas<L> {
     /// assert_eq!(canvas.layout().height(), 400);
     /// ```
     ///
-    /// See also [`mend`] and [`try_mend`] for operations that reverse the effects.
+    /// See also [`Canvas::mend`] and [`Canvas::try_mend`] for operations that reverse the effects.
     ///
     /// Can also be used to forget specifics of the layout, turning the canvas into a more general
     /// container type. For example, to use a uniform type as an allocated buffer waiting on reuse.
@@ -391,7 +401,7 @@ impl<'data, L> CanvasRef<'data, L> {
         self.inner.borrow().into()
     }
 
-    /// Check if a call to [`with_layout`] would succeed.
+    /// Check if a call to [`CanvasRef::with_layout`] would succeed.
     pub fn fits(&self, other: &impl Layout) -> bool {
         self.inner.fits(other)
     }
@@ -399,8 +409,8 @@ impl<'data, L> CanvasRef<'data, L> {
     /// Change this view to a different layout.
     ///
     /// This returns `Some` if the layout fits the underlying data, and `None` otherwise. Use
-    /// [`fits`] to check this property in a separate call. Note that the new layout need not be
-    /// related to the old layout in any other way.
+    /// [`CanvasRef::fits`] to check this property in a separate call. Note that the new layout
+    /// need not be related to the old layout in any other way.
     pub fn with_layout<M>(self, layout: M) -> Option<CanvasRef<'data, M>>
     where
         M: Layout,
@@ -477,7 +487,7 @@ impl<'data, L> CanvasMut<'data, L> {
         self.inner.borrow_mut().into()
     }
 
-    /// Check if a call to [`with_layout`] would succeed, without consuming this reference.
+    /// Check if a call to [`CanvasMut::with_layout`] would succeed, without consuming this reference.
     pub fn fits(&self, other: &impl Layout) -> bool {
         self.inner.fits(other)
     }
@@ -485,8 +495,8 @@ impl<'data, L> CanvasMut<'data, L> {
     /// Change this view to a different layout.
     ///
     /// This returns `Some` if the layout fits the underlying data, and `None` otherwise. Use
-    /// [`fits`] to check this property in a separate call. Note that the new layout need not be
-    /// related to the old layout in any other way.
+    /// [`CanvasMut::fits`] to check this property in a separate call. Note that the new layout
+    /// need not be related to the old layout in any other way.
     pub fn with_layout<M>(self, layout: M) -> Option<CanvasMut<'data, M>>
     where
         M: Layout,

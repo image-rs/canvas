@@ -6,6 +6,8 @@ use core::{alloc, cmp};
 
 mod matrix;
 
+pub use crate::stride::{BadStrideError, StrideLayout, StrideSpec, Strided};
+
 /// A byte layout that only describes the user bytes.
 ///
 /// This is a minimal implementation of the basic `Layout` trait. It does not provide any
@@ -22,7 +24,7 @@ pub struct Bytes(pub usize);
 ///
 /// This type is a lower semi lattice. That is, given two elements the type formed by taking the
 /// minimum of size and alignment individually will always form another valid element. This
-/// operation is implemented in the [`infimum`] method.
+/// operation is implemented in the [`Self::infimum`] method.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Ord, Hash)]
 pub struct TexelLayout {
     size: usize,
@@ -273,7 +275,7 @@ impl TexelLayout {
     /// An element with maximum size and no alignment requirements.
     ///
     /// This constructor is mainly useful for the purpose of using it as a modifier. When used with
-    /// [`infimum`] it will only shrink the alignment and keep the size unchanged.
+    /// [`Self::infimum`] it will only shrink the alignment and keep the size unchanged.
     pub const MAX_SIZE: Self = {
         TexelLayout {
             size: isize::MAX as usize,
