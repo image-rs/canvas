@@ -17,6 +17,8 @@ use crate::buf::{buf, Buffer, Cog};
 use crate::layout::{Bytes, Decay, DynLayout, Layout, Mend, SampleSlice, Take, TryMend};
 use crate::{BufferReuseError, Texel, TexelBuffer};
 
+pub use crate::stride::{ByteCanvasMut, ByteCanvasRef};
+
 /// A owned canvas, parameterized over the layout.
 ///
 /// This type permits user defined layouts of any kind and does not unsafely depend on the validity
