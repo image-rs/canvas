@@ -45,7 +45,7 @@ pub struct StrideSpec {
 /// alignment according to their elements, not according to the maximum alignment, they may be used
 /// for external data that is copied to a canvas.
 #[derive(Clone, Copy, PartialEq, Eq)]
-pub struct StrideLayout {
+pub struct StridedBytes {
     spec: StrideSpec,
     /// The total number of bytes, as proof of calculation basically.
     total: usize,
@@ -53,7 +53,7 @@ pub struct StrideLayout {
 
 #[derive(Clone, Copy, PartialEq, Eq)]
 pub struct StridedTexels<T> {
-    inner: StrideLayout,
+    inner: StridedBytes,
     texel: Texel<T>,
 }
 
@@ -73,7 +73,7 @@ enum BadStrideKind {
 
 /// A reference to byte of a strided matrix.
 pub struct ByteCanvasRef<'data> {
-    layout: StrideLayout,
+    layout: StridedBytes,
     data: &'data [u8],
 }
 
@@ -88,10 +88,10 @@ pub struct ByteCanvasRef<'data> {
 /// Here is an example of filling a matrix-like canvas with a constant value.
 ///
 /// ```
-/// use canvas::layout::MatrixTexels;
+/// use canvas::layout::Matrix;
 /// use canvas::canvas::{ByteCanvasRef, ByteCanvasMut, Canvas};
 ///
-/// let layout = MatrixTexels::<u32>::width_and_height(4, 4).unwrap();
+/// let layout = Matrix::<u32>::width_and_height(4, 4).unwrap();
 /// let mut canvas = Canvas::new(layout);
 ///
 /// let fill = ByteCanvasRef::with_repeated_element(&0x42u32, 4, 4);
@@ -100,7 +100,7 @@ pub struct ByteCanvasRef<'data> {
 /// assert_eq!(canvas.as_slice(), &[0x42; 16]);
 /// ```
 pub struct ByteCanvasMut<'data> {
-    layout: StrideLayout,
+    layout: StridedBytes,
     data: &'data mut [u8],
 }
 
@@ -166,7 +166,7 @@ impl StrideSpec {
     }
 }
 
-impl StrideLayout {
+impl StridedBytes {
     /// Try to create a new layout from a specification.
     ///
     /// This fails if the specification does not describe a valid layout. The reasons for this
@@ -187,7 +187,7 @@ impl StrideLayout {
 
         let total = spec.end().ok_or(BadStrideKind::OutOfMemory)?;
 
-        Ok(StrideLayout { spec, total })
+        Ok(StridedBytes { spec, total })
     }
 
     /// Construct a layout with zeroed strides, repeating one element.
@@ -196,7 +196,7 @@ impl StrideLayout {
         width: usize,
         height: usize,
     ) -> Self {
-        StrideLayout {
+        StridedBytes {
             spec: StrideSpec {
                 element,
                 width,
@@ -213,8 +213,8 @@ impl StrideLayout {
     ///
     /// This is guaranteed to succeed and will construct the strides such that a packed column
     /// major matrix of elements at offset zero is described.
-    pub fn with_column_major(matrix: layout::Matrix) -> Self {
-        StrideLayout {
+    pub fn with_column_major(matrix: layout::MatrixBytes) -> Self {
+        StridedBytes {
             spec: StrideSpec {
                 element: matrix.element(),
                 width: matrix.width(),
@@ -233,8 +233,8 @@ impl StrideLayout {
     ///
     /// This is guaranteed to succeed and will construct the strides such that a packed row major
     /// matrix of elements at offset zero is described.
-    pub fn with_row_major(matrix: layout::Matrix) -> Self {
-        StrideLayout {
+    pub fn with_row_major(matrix: layout::MatrixBytes) -> Self {
+        StridedBytes {
             spec: StrideSpec {
                 element: matrix.element(),
                 width: matrix.width(),
@@ -288,7 +288,7 @@ impl StrideLayout {
 
 impl<'data> ByteCanvasRef<'data> {
     /// Construct a reference to a strided canvas buffer.
-    pub fn new(canvas: &'data Canvas<impl Strided>) -> Self {
+    pub fn new(canvas: &'data Canvas<impl StridedLayout>) -> Self {
         let layout = canvas.layout().strided();
         let data = &canvas.as_bytes()[..layout.total];
         ByteCanvasRef { layout, data }
@@ -298,7 +298,7 @@ impl<'data> ByteCanvasRef<'data> {
     ///
     /// Unlike a canvas, the data need only be aligned to the `element` mentioned in the layout and
     /// not to the maximum alignment.
-    pub fn with_bytes(layout: StrideLayout, content: &'data [u8]) -> Option<Self> {
+    pub fn with_bytes(layout: StridedBytes, content: &'data [u8]) -> Option<Self> {
         let data = content
             .get(..layout.total)
             .filter(|data| data.as_ptr() as usize % layout.spec.element.align() == 0)?;
@@ -307,7 +307,7 @@ impl<'data> ByteCanvasRef<'data> {
 
     pub fn with_repeated_element<T: AsTexel>(el: &'data T, width: usize, height: usize) -> Self {
         let texel = T::texel();
-        let layout = StrideLayout::with_repeated_width_and_height(texel.into(), width, height);
+        let layout = StridedBytes::with_repeated_width_and_height(texel.into(), width, height);
         let data = texel.to_bytes(core::slice::from_ref(el));
         ByteCanvasRef { layout, data }
     }
@@ -329,7 +329,7 @@ impl<'data> ByteCanvasRef<'data> {
 
 impl<'data> ByteCanvasMut<'data> {
     /// Construct a mutable reference to a strided canvas buffer.
-    pub fn new(canvas: &'data mut Canvas<impl Strided>) -> Self {
+    pub fn new(canvas: &'data mut Canvas<impl StridedLayout>) -> Self {
         let layout = canvas.layout().strided();
         let data = &mut canvas.as_bytes_mut()[..layout.total];
         ByteCanvasMut { layout, data }
@@ -339,7 +339,7 @@ impl<'data> ByteCanvasMut<'data> {
     ///
     /// Unlike a canvas, the data need only be aligned to the `element` mentioned in the layout and
     /// not to the maximum alignment.
-    pub fn with_bytes(layout: StrideLayout, content: &'data mut [u8]) -> Option<Self> {
+    pub fn with_bytes(layout: StridedBytes, content: &'data mut [u8]) -> Option<Self> {
         let data = content
             .get_mut(..layout.total)
             .filter(|data| data.as_ptr() as usize % layout.spec.element.align() == 0)?;
@@ -409,48 +409,48 @@ impl<'data> ByteCanvasMut<'data> {
 ///
 /// Like all layout traits, implementations should ensure that the layout returned in these methods
 /// occupied a subset of pixels of their original layout.
-pub trait Strided: Layout {
+pub trait StridedLayout: Layout {
     /// The valid strided specification of this layout.
     ///
     /// This call should not fail, or panic. Otherwise, prefer an optional getter for the
-    /// `StrideLayout` and have the caller decay their own buffer.
-    fn strided(&self) -> StrideLayout;
+    /// `StridedBytes` and have the caller decay their own buffer.
+    fn strided(&self) -> StridedBytes;
 }
 
-impl Layout for StrideLayout {
+impl Layout for StridedBytes {
     fn byte_len(&self) -> usize {
         self.total
     }
 }
 
-impl Strided for StrideLayout {
-    fn strided(&self) -> StrideLayout {
+impl StridedLayout for StridedBytes {
+    fn strided(&self) -> StridedBytes {
         *self
     }
 }
 
-impl<T: Strided> Strided for &'_ T {
-    fn strided(&self) -> StrideLayout {
+impl<T: StridedLayout> StridedLayout for &'_ T {
+    fn strided(&self) -> StridedBytes {
         (**self).strided()
     }
 }
 
-impl<T: Strided> Strided for &'_ mut T {
-    fn strided(&self) -> StrideLayout {
+impl<T: StridedLayout> StridedLayout for &'_ mut T {
+    fn strided(&self) -> StridedBytes {
         (**self).strided()
     }
 }
 
-impl<T: Strided> layout::Decay<T> for StrideLayout {
+impl<T: StridedLayout> layout::Decay<T> for StridedBytes {
     fn decay(from: T) -> Self {
         from.strided()
     }
 }
 
-impl<P: AsTexel> Strided for layout::MatrixTexels<P> {
-    fn strided(&self) -> StrideLayout {
-        let matrix: layout::Matrix = self.clone().into();
-        StrideLayout::with_row_major(matrix)
+impl<P: AsTexel> StridedLayout for layout::Matrix<P> {
+    fn strided(&self) -> StridedBytes {
+        let matrix: layout::MatrixBytes = self.clone().into();
+        StridedBytes::with_row_major(matrix)
     }
 }
 
@@ -460,8 +460,8 @@ impl From<BadStrideKind> for BadStrideError {
     }
 }
 
-impl From<&'_ StrideLayout> for StrideSpec {
-    fn from(layout: &'_ StrideLayout) -> Self {
+impl From<&'_ StridedBytes> for StrideSpec {
+    fn from(layout: &'_ StridedBytes) -> Self {
         layout.spec()
     }
 }
@@ -469,28 +469,30 @@ impl From<&'_ StrideLayout> for StrideSpec {
 #[test]
 fn align_validation() {
     // Setup a good base specification.
-    let matrix = layout::Matrix::from_width_height(layout::TexelLayout::from_pixel::<u16>(), 2, 2)
-        .expect("Valid matrix");
-    let layout = StrideLayout::with_row_major(matrix);
+    let matrix =
+        layout::MatrixBytes::from_width_height(layout::TexelLayout::from_pixel::<u16>(), 2, 2)
+            .expect("Valid matrix");
+    let layout = StridedBytes::with_row_major(matrix);
 
     let bad_offset = StrideSpec {
         offset: 1,
         ..layout.spec
     };
-    assert!(StrideLayout::new(bad_offset).is_err());
+    assert!(StridedBytes::new(bad_offset).is_err());
     let bad_pitch = StrideSpec {
         width_stride: 5,
         ..layout.spec
     };
-    assert!(StrideLayout::new(bad_pitch).is_err());
+    assert!(StridedBytes::new(bad_pitch).is_err());
 }
 
 #[test]
 fn canvas_copies() {
-    let matrix = layout::Matrix::from_width_height(layout::TexelLayout::from_pixel::<u8>(), 2, 2)
-        .expect("Valid matrix");
-    let row_layout = StrideLayout::with_row_major(matrix);
-    let col_layout = StrideLayout::with_column_major(matrix);
+    let matrix =
+        layout::MatrixBytes::from_width_height(layout::TexelLayout::from_pixel::<u8>(), 2, 2)
+            .expect("Valid matrix");
+    let row_layout = StridedBytes::with_row_major(matrix);
+    let col_layout = StridedBytes::with_column_major(matrix);
 
     let src = Canvas::with_bytes(row_layout, &[0u8, 1, 2, 3]);
 

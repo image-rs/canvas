@@ -15,13 +15,13 @@ use core::{fmt, ops};
 
 use crate::buf::{buf, Buffer, Cog};
 use crate::layout::{
-    Bytes, Decay, DynLayout, Layout, Mend, Raster, RasterMut, SampleSlice, Take, TryMend,
+    Bytes, Decay, DynLayout, Layout, Mend, Raster, RasterMut, SliceLayout, Take, TryMend,
 };
 use crate::{BufferReuseError, Texel, TexelBuffer};
 
 pub use crate::stride::{ByteCanvasMut, ByteCanvasRef};
 
-/// A owned canvas, parameterized over the layout.
+/// A container of allocated bytes, parameterized over the layout.
 ///
 /// This type permits user defined layouts of any kind and does not unsafely depend on the validity
 /// of the layouts. Correctness is achieved in the common case by discouraging methods that would
@@ -46,13 +46,11 @@ pub use crate::stride::{ByteCanvasMut, ByteCanvasRef};
 ///
 /// ```
 /// # fn test() -> Option<()> {
-/// use canvas::{Canvas, layout::MatrixTexels};
+/// use canvas::{Canvas, Matrix};
 ///
-/// let texel = canvas::texels::U8.array::<4>();
-/// let layout = MatrixTexels::<[u8; 4]>::width_and_height_for_texel(texel, 256, 256)?;
+/// let mut canvas = Canvas::from(Matrix::<[u8; 4]>::with_width_and_height(400, 400));
 ///
-/// let mut canvas = Canvas::new(layout);
-/// canvas.rasterize(|x, y, rgba| {
+/// canvas.shade(|x, y, rgba| {
 ///     rgba[0] = x as u8;
 ///     rgba[1] = y as u8;
 ///     rgba[3] = 0xff;
@@ -210,10 +208,10 @@ impl<L: Layout> Canvas<L> {
     /// ```
     /// # use canvas::{Canvas, Matrix, layout};
     /// let matrix = Matrix::<u8>::with_width_and_height(400, 400);
-    /// let canvas: Canvas<layout::MatrixTexels<u8>> = Canvas::from(matrix);
+    /// let canvas: Canvas<layout::Matrix<u8>> = Canvas::from(matrix);
     ///
     /// // to turn hide the `u8` type but keep width, height, texel layout
-    /// let canvas: Canvas<layout::Matrix> = canvas.decay();
+    /// let canvas: Canvas<layout::MatrixBytes> = canvas.decay();
     /// assert_eq!(canvas.layout().width(), 400);
     /// assert_eq!(canvas.layout().height(), 400);
     /// ```
@@ -394,16 +392,16 @@ impl<L> Canvas<L> {
     /// The order of evaluation is _not_ defined although certain layouts may offer more specific
     /// guarantees. In general, one can expect that layouts call the function in a cache-efficient
     /// manner if they are aware of a better iteration strategy.
-    pub fn rasterize<P>(&mut self, f: impl FnMut(u32, u32, &mut P))
+    pub fn shade<P>(&mut self, f: impl FnMut(u32, u32, &mut P))
     where
         L: RasterMut<P>,
     {
-        L::rasterize(self.as_mut(), f)
+        L::shade(self.as_mut(), f)
     }
 }
 
 /// Canvas methods for layouts based on pod samples.
-impl<L: SampleSlice> Canvas<L> {
+impl<L: SliceLayout> Canvas<L> {
     /// Interpret an existing buffer as a pixel canvas.
     ///
     /// The data already contained within the buffer is not modified so that prior initialization
@@ -507,7 +505,7 @@ impl<'data, L> CanvasRef<'data, L> {
     /// Get a slice of the individual samples in the layout.
     pub fn as_slice(&self) -> &[L::Sample]
     where
-        L: SampleSlice,
+        L: SliceLayout,
     {
         self.inner.as_slice()
     }
@@ -518,7 +516,7 @@ impl<'data, L> CanvasRef<'data, L> {
     /// and the `CanvasMut` need not stay alive.
     pub fn into_slice(self) -> &'data [L::Sample]
     where
-        L: SampleSlice,
+        L: SliceLayout,
     {
         self.inner.buffer.as_texels(self.inner.layout.sample())
     }
@@ -612,7 +610,7 @@ impl<'data, L> CanvasMut<'data, L> {
     /// Get a slice of the individual samples in the layout.
     pub fn as_slice(&self) -> &[L::Sample]
     where
-        L: SampleSlice,
+        L: SliceLayout,
     {
         self.inner.as_slice()
     }
@@ -620,7 +618,7 @@ impl<'data, L> CanvasMut<'data, L> {
     /// Get a mutable slice of the individual samples in the layout.
     pub fn as_mut_slice(&mut self) -> &mut [L::Sample]
     where
-        L: SampleSlice,
+        L: SliceLayout,
     {
         self.inner.as_mut_slice()
     }
@@ -631,7 +629,7 @@ impl<'data, L> CanvasMut<'data, L> {
     /// and the `CanvasMut` need not stay alive.
     pub fn into_slice(self) -> &'data [L::Sample]
     where
-        L: SampleSlice,
+        L: SliceLayout,
     {
         self.inner.buffer.as_texels(self.inner.layout.sample())
     }
@@ -642,7 +640,7 @@ impl<'data, L> CanvasMut<'data, L> {
     /// and the `CanvasMut` need not stay alive.
     pub fn into_mut_slice(self) -> &'data mut [L::Sample]
     where
-        L: SampleSlice,
+        L: SliceLayout,
     {
         self.inner.buffer.as_mut_texels(self.inner.layout.sample())
     }
@@ -668,16 +666,16 @@ impl<'data, L> CanvasMut<'data, L> {
     /// The order of evaluation is _not_ defined although certain layouts may offer more specific
     /// guarantees. In general, one can expect that layouts call the function in a cache-efficient
     /// manner if they are aware of a better iteration strategy.
-    pub fn rasterize<P>(&mut self, f: impl FnMut(u32, u32, &mut P))
+    pub fn shade<P>(&mut self, f: impl FnMut(u32, u32, &mut P))
     where
         L: RasterMut<P>,
     {
-        L::rasterize(self.as_mut(), f)
+        L::shade(self.as_mut(), f)
     }
 }
 
 // TODO: how to expose?
-// This is used internally in `RasterMut::rasterize` however only for the special case of
+// This is used internally in `RasterMut::shade` however only for the special case of
 // * `&mut &mut L` -> `&mut L`
 // * `&&mut L` -> `&L`
 // which we know are semantically equivalent. In the general case these would go through checks
@@ -912,7 +910,7 @@ impl<B, L> RawCanvas<B, L> {
     pub(crate) fn as_slice(&self) -> &[L::Sample]
     where
         B: ops::Deref<Target = buf>,
-        L: SampleSlice,
+        L: SliceLayout,
     {
         self.buffer.as_texels(self.layout.sample())
     }
@@ -1027,7 +1025,7 @@ impl<B: BufferLike, L: Layout> RawCanvas<B, L> {
 }
 
 /// Methods for layouts that are slices of individual samples.
-impl<B: BufferLike, L: SampleSlice> RawCanvas<B, L> {
+impl<B: BufferLike, L: SliceLayout> RawCanvas<B, L> {
     /// Interpret an existing buffer as a pixel canvas.
     ///
     /// The data already contained within the buffer is not modified so that prior initialization
@@ -1237,7 +1235,7 @@ impl<Layout: Default> Default for CopyOnGrow<'_, Layout> {
 
 impl<L> fmt::Debug for Canvas<L>
 where
-    L: SampleSlice + fmt::Debug,
+    L: SliceLayout + fmt::Debug,
     L::Sample: fmt::Debug,
 {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {

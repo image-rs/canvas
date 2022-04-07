@@ -6,7 +6,7 @@ use core::{cmp, fmt};
 
 use crate::buf::Buffer;
 use crate::canvas::{Canvas, RawCanvas};
-use crate::layout::MatrixTexels as Layout;
+use crate::layout::Matrix as Layout;
 use crate::{layout, AsTexel, BufferReuseError, Texel, TexelBuffer};
 
 /// A 2d, width-major matrix of pixels.
@@ -73,11 +73,11 @@ pub struct Matrix<P> {
 /// which does not require the interpretation as a full image.
 ///
 /// ```
-/// # use canvas::{Matrix, layout::MatrixTexels, TexelBuffer};
+/// # use canvas::{Matrix, layout, TexelBuffer};
 /// let buffer = TexelBuffer::<u8>::new(16);
 /// let allocation = buffer.as_bytes().as_ptr();
 ///
-/// let bad_layout = MatrixTexels::width_and_height(buffer.capacity() + 1, 1).unwrap();
+/// let bad_layout = layout::Matrix::width_and_height(buffer.capacity() + 1, 1).unwrap();
 /// let error = match Matrix::from_reused_buffer(buffer, bad_layout) {
 ///     Ok(_) => unreachable!("The layout requires one too many pixels"),
 ///     Err(error) => error,
@@ -369,7 +369,7 @@ impl<P> Layout<P> {
         }
     }
 
-    pub fn with_matrix(pixel: Texel<P>, matrix: layout::Matrix) -> Option<Self> {
+    pub fn with_matrix(pixel: Texel<P>, matrix: layout::MatrixBytes) -> Option<Self> {
         if pixel.size() == matrix.element.size() {
             Some(Layout {
                 pixel,
@@ -381,8 +381,8 @@ impl<P> Layout<P> {
         }
     }
 
-    pub fn into_matrix(self) -> layout::Matrix {
-        layout::Matrix {
+    pub fn into_matrix_bytes(self) -> layout::MatrixBytes {
+        layout::MatrixBytes {
             element: self.pixel.into(),
             first_dim: self.width,
             second_dim: self.height,
@@ -508,7 +508,7 @@ impl<P> layout::Layout for Layout<P> {
     }
 }
 
-impl<P> layout::SampleSlice for Layout<P> {
+impl<P> layout::SliceLayout for Layout<P> {
     type Sample = P;
 
     fn sample(&self) -> Texel<P> {
