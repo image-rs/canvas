@@ -6,6 +6,7 @@ use core::{alloc, cmp};
 
 mod matrix;
 
+use crate::canvas::{CanvasMut, CanvasRef, Coord};
 pub use crate::stride::{BadStrideError, StrideLayout, StrideSpec, Strided};
 
 /// A byte layout that only describes the user bytes.
@@ -202,9 +203,38 @@ pub trait SampleSlice: Layout {
     }
 }
 
+/// A raster layout.
+///
+/// This is a special form of texels that represent single group of color channels.
+pub trait Raster<Pixel>: Layout + Sized {
+    fn dimensions(&self) -> Coord;
+    fn get(from: CanvasRef<&Self>, at: Coord) -> Option<Pixel>;
+}
+
+/// A raster layout where one can change pixel values independently.
+///
+/// In other words, requires that texels are one-by-one blocks of pixels.
+pub trait RasterMut<Pixel>: Raster<Pixel> {
+    fn put(into: CanvasMut<&mut Self>, at: Coord, val: Pixel);
+
+    /// Evaluate a function on each texel of the raster image.
+    fn rasterize(mut canvas: CanvasMut<&mut Self>, mut f: impl FnMut(u32, u32, &mut Pixel)) {
+        let Coord(bx, by) = canvas.layout().dimensions();
+        for y in 0..by {
+            for x in 0..bx {
+                let mut pixel = Self::get(canvas.as_ref().as_deref(), Coord(x, y)).unwrap();
+                f(x, y, &mut pixel);
+                Self::put(canvas.as_mut().as_deref_mut(), Coord(x, y), pixel);
+            }
+        }
+    }
+}
+
 /// A dynamic descriptor of an image's layout.
+///
+/// FIXME: figure out if this is 'right' to expose in this crate.
 #[derive(Clone, Debug, PartialEq, Eq, Hash)]
-pub struct DynLayout {
+pub(crate) struct DynLayout {
     pub(crate) repr: LayoutRepr,
 }
 
@@ -238,8 +268,10 @@ pub struct MatrixTexels<P> {
 }
 
 /// Planar chroma 2×2 block-wise sub-sampled image.
+///
+/// FIXME: figure out if this is 'right' to expose in this crate.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
-pub struct Yuv420p {
+pub(crate) struct Yuv420p {
     channel: TexelLayout,
     width: u32,
     height: u32,
@@ -441,13 +473,13 @@ impl Layout for Bytes {
     }
 }
 
-impl<'lt, T: Layout> Layout for &'lt T {
+impl<'lt, T: Layout + ?Sized> Layout for &'lt T {
     fn byte_len(&self) -> usize {
         (**self).byte_len()
     }
 }
 
-impl<'lt, T: Layout> Layout for &'lt mut T {
+impl<'lt, T: Layout + ?Sized> Layout for &'lt mut T {
     fn byte_len(&self) -> usize {
         (**self).byte_len()
     }
@@ -491,6 +523,28 @@ impl<P> TryMend<Matrix> for Texel<P> {
 
     fn try_mend(self, matrix: &Matrix) -> Result<MatrixTexels<P>, Self::Err> {
         MatrixTexels::with_matrix(self, *matrix).ok_or_else(MismatchedPixelError::default)
+    }
+}
+
+impl<T> SampleSlice for &'_ T
+where
+    T: SampleSlice,
+{
+    type Sample = T::Sample;
+
+    fn sample(&self) -> Texel<Self::Sample> {
+        (**self).sample()
+    }
+}
+
+impl<T> SampleSlice for &'_ mut T
+where
+    T: SampleSlice,
+{
+    type Sample = T::Sample;
+
+    fn sample(&self) -> Texel<Self::Sample> {
+        (**self).sample()
     }
 }
 
@@ -595,6 +649,37 @@ impl<P> From<MatrixTexels<P>> for Matrix {
             element: mat.pixel().into(),
             first_dim: mat.width(),
             second_dim: mat.height(),
+        }
+    }
+}
+
+/// Note: on 64-bit targets only the first `u32::MAX` dimensions appear accessible.
+impl<P> Raster<P> for MatrixTexels<P> {
+    fn dimensions(&self) -> Coord {
+        use core::convert::TryFrom;
+        let width = u32::try_from(self.width()).unwrap_or(u32::MAX);
+        let height = u32::try_from(self.height()).unwrap_or(u32::MAX);
+        Coord(width, height)
+    }
+
+    fn get(from: CanvasRef<&Self>, Coord(x, y): Coord) -> Option<P> {
+        if from.layout().in_bounds(x as usize, y as usize) {
+            let index = from.layout().index_of(x as usize, y as usize);
+            let texel = from.layout().sample();
+            from.as_slice().get(index).map(|v| texel.copy_val(v))
+        } else {
+            None
+        }
+    }
+}
+
+impl<P> RasterMut<P> for MatrixTexels<P> {
+    fn put(into: CanvasMut<&mut Self>, Coord(x, y): Coord, val: P) {
+        if into.layout().in_bounds(x as usize, y as usize) {
+            let index = into.layout().index_of(x as usize, y as usize);
+            if let Some(dst) = into.into_mut_slice().get_mut(index) {
+                *dst = val;
+            }
         }
     }
 }

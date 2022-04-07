@@ -243,7 +243,7 @@ impl<P> Matrix<P> {
     /// all indices are valid in both directions.
     pub fn transmute_to<Q: AsTexel>(self, pixel: Texel<Q>) -> Matrix<Q> {
         let layout = self.layout().transmute_to(pixel);
-        let inner = self.inner.reinterpret_unguarded(layout);
+        let inner = self.inner.reinterpret_unguarded(|_| layout);
         Matrix { inner }
     }
 
@@ -257,10 +257,7 @@ impl<P> Matrix<P> {
     }
 
     fn index_of(&self, x: usize, y: usize) -> usize {
-        assert!(self.layout().in_bounds(x, y));
-
-        // Can't overflow, surely smaller than `layout.max_index()`.
-        y * self.layout().width() + x
+        self.layout().index_of(x, y)
     }
 
     /// Apply a function to all pixel values.
@@ -342,7 +339,7 @@ impl<P> Matrix<P> {
 }
 
 impl<P> Layout<P> {
-    pub fn width_and_height_for_pixel(
+    pub fn width_and_height_for_texel(
         pixel: Texel<P>,
         width: usize,
         height: usize,
@@ -361,7 +358,7 @@ impl<P> Layout<P> {
     where
         P: AsTexel,
     {
-        Self::width_and_height_for_pixel(P::texel(), width, height)
+        Self::width_and_height_for_texel(P::texel(), width, height)
     }
 
     pub const fn empty(pixel: Texel<P>) -> Self {
@@ -448,10 +445,17 @@ impl<P> Layout<P> {
 
     /// Utility method to change the pixel type without changing the dimensions.
     pub fn map_to<Q>(self, pixel: Texel<Q>) -> Option<Layout<Q>> {
-        Layout::width_and_height_for_pixel(pixel, self.width, self.height)
+        Layout::width_and_height_for_texel(pixel, self.width, self.height)
     }
 
-    fn in_bounds(self, x: usize, y: usize) -> bool {
+    pub(crate) fn index_of(self, x: usize, y: usize) -> usize {
+        assert!(self.in_bounds(x, y));
+
+        // Can't overflow, surely smaller than `layout.max_index()`.
+        y * self.width() + x
+    }
+
+    pub(crate) fn in_bounds(self, x: usize, y: usize) -> bool {
         x < self.width && y < self.height
     }
 
