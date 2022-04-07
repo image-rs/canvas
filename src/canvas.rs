@@ -112,7 +112,7 @@ impl Coord {
 /// This is a special form of texels that represent single group of color channels.
 pub trait Raster<Pixel>: Sized {
     fn dimensions(&self) -> Coord;
-    fn get(from: CanvasRef<&Self>, at: Coord) -> Pixel;
+    fn get(from: CanvasRef<&Self>, at: Coord) -> Option<Pixel>;
 }
 
 /// A raster layout where one can change pixel values independently.
@@ -302,6 +302,9 @@ impl<L> Canvas<L> {
     ///
     /// This reinterprets the bytes of the buffer. It can be used to view the buffer as any kind of
     /// pixel, regardless of its association with the layout. Use it with care.
+    ///
+    /// An alternative way to get a slice of texels when a layout has an inherent texel type is
+    /// [`Self::as_slice`].
     pub fn as_texels<P>(&self, pixel: Texel<P>) -> &[P] {
         self.inner.buffer.as_texels(pixel)
     }
@@ -310,6 +313,9 @@ impl<L> Canvas<L> {
     ///
     /// This reinterprets the bytes of the buffer. It can be used to view the buffer as any kind of
     /// pixel, regardless of its association with the layout. Use it with care.
+    ///
+    /// An alternative way to get a slice of texels when a layout has an inherent texel type is
+    /// [`Self::as_mut_slice`].
     pub fn as_mut_texels<P>(&mut self, pixel: Texel<P>) -> &mut [P] {
         self.inner.buffer.as_mut_texels(pixel)
     }
@@ -351,6 +357,22 @@ impl<L> Canvas<L> {
     pub fn try_to_mut<M: Layout>(&mut self, layout: M) -> Option<CanvasMut<'_, M>> {
         self.as_mut().with_layout(layout)
     }
+
+    /// Get a single texel from a raster image.
+    pub fn get_texel<P>(&self, coord: Coord) -> Option<P>
+    where
+        L: Raster<P>,
+    {
+        L::get(self.as_ref(), coord)
+    }
+
+    /// Put a single texel to a raster image.
+    pub fn put_texel<P>(&mut self, coord: Coord, texel: P)
+    where
+        L: RasterMut<P>,
+    {
+        L::put(self.as_mut(), coord, texel)
+    }
 }
 
 /// Canvas methods for layouts based on pod samples.
@@ -370,11 +392,17 @@ impl<L: SampleSlice> Canvas<L> {
     }
 
     /// Get a slice of the individual samples in the layout.
+    ///
+    /// An alternative way to get a slice of texels when a layout does _not_ have an inherent texel
+    /// _type_ is [`Self::as_texels`].
     pub fn as_slice(&self) -> &[L::Sample] {
         self.inner.as_slice()
     }
 
     /// Get a mutable slice of the individual samples in the layout.
+    ///
+    /// An alternative way to get a slice of texels when a layout does _not_ have an inherent texel
+    /// _type_ is [`Self::as_mut_texels`].
     pub fn as_mut_slice(&mut self) -> &mut [L::Sample] {
         self.inner.as_mut_slice()
     }
@@ -456,6 +484,25 @@ impl<'data, L> CanvasRef<'data, L> {
     {
         self.inner.as_slice()
     }
+
+    /// Turn into a slice of the individual samples in the layout.
+    ///
+    /// This preserves the lifetime with which the layout is borrowed from the underlying canvas,
+    /// and the `CanvasMut` need not stay alive.
+    pub fn into_slice(self) -> &'data [L::Sample]
+    where
+        L: SampleSlice,
+    {
+        self.inner.buffer.as_texels(self.inner.layout.sample())
+    }
+
+    /// Retrieve a single texel from a raster image.
+    pub fn get_texel<P>(&self, coord: Coord) -> Option<P>
+    where
+        L: Raster<P>,
+    {
+        L::get(self.as_ref(), coord)
+    }
 }
 
 impl<'data, L> CanvasMut<'data, L> {
@@ -527,6 +574,7 @@ impl<'data, L> CanvasMut<'data, L> {
         }
     }
 
+    /// Copy the bytes and layout to an owned container.
     pub fn to_owned(&self) -> Canvas<L>
     where
         L: Layout + Clone,
@@ -548,6 +596,44 @@ impl<'data, L> CanvasMut<'data, L> {
         L: SampleSlice,
     {
         self.inner.as_mut_slice()
+    }
+
+    /// Turn into a slice of the individual samples in the layout.
+    ///
+    /// This preserves the lifetime with which the layout is borrowed from the underlying canvas,
+    /// and the `CanvasMut` need not stay alive.
+    pub fn into_slice(self) -> &'data [L::Sample]
+    where
+        L: SampleSlice,
+    {
+        self.inner.buffer.as_texels(self.inner.layout.sample())
+    }
+
+    /// Turn into a mutable slice of the individual samples in the layout.
+    ///
+    /// This preserves the lifetime with which the layout is borrowed from the underlying canvas,
+    /// and the `CanvasMut` need not stay alive.
+    pub fn into_mut_slice(self) -> &'data mut [L::Sample]
+    where
+        L: SampleSlice,
+    {
+        self.inner.buffer.as_mut_texels(self.inner.layout.sample())
+    }
+
+    /// Retrieve a single texel from a raster image.
+    pub fn get_texel<P>(&self, coord: Coord) -> Option<P>
+    where
+        L: Raster<P>,
+    {
+        L::get(self.as_ref(), coord)
+    }
+
+    /// Put a single texel to a raster image.
+    pub fn put_texel<P>(&mut self, coord: Coord, texel: P)
+    where
+        L: RasterMut<P>,
+    {
+        L::put(self.as_mut(), coord, texel)
     }
 }
 

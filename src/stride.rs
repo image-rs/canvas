@@ -12,7 +12,7 @@
 use crate::canvas::Canvas;
 use crate::layout;
 use crate::layout::Layout;
-use crate::texel::AsTexel;
+use crate::texel::{AsTexel, Texel};
 use core::ops::Range;
 
 /// A simple layout describing some pixels as a byte matrix.
@@ -49,6 +49,12 @@ pub struct StrideLayout {
     spec: StrideSpec,
     /// The total number of bytes, as proof of calculation basically.
     total: usize,
+}
+
+#[derive(Clone, Copy, PartialEq, Eq)]
+pub struct StridedTexels<T> {
+    inner: StrideLayout,
+    texel: Texel<T>,
 }
 
 /// Error that occurs when a [`StrideSpec`] is invalid.
