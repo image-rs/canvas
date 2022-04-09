@@ -56,7 +56,7 @@ pub mod canvas;
 pub mod layout;
 mod matrix;
 mod rec;
-pub mod stride;
+mod stride;
 mod texel;
 
 pub use self::canvas::Canvas;

@@ -6,7 +6,7 @@ use core::{cmp, fmt};
 
 use crate::buf::Buffer;
 use crate::canvas::{Canvas, RawCanvas};
-use crate::layout::MatrixTexels as Layout;
+use crate::layout::Matrix as Layout;
 use crate::{layout, AsTexel, BufferReuseError, Texel, TexelBuffer};
 
 /// A 2d, width-major matrix of pixels.
@@ -73,11 +73,11 @@ pub struct Matrix<P> {
 /// which does not require the interpretation as a full image.
 ///
 /// ```
-/// # use canvas::{Matrix, layout::MatrixTexels, TexelBuffer};
+/// # use canvas::{Matrix, layout, TexelBuffer};
 /// let buffer = TexelBuffer::<u8>::new(16);
 /// let allocation = buffer.as_bytes().as_ptr();
 ///
-/// let bad_layout = MatrixTexels::width_and_height(buffer.capacity() + 1, 1).unwrap();
+/// let bad_layout = layout::Matrix::width_and_height(buffer.capacity() + 1, 1).unwrap();
 /// let error = match Matrix::from_reused_buffer(buffer, bad_layout) {
 ///     Ok(_) => unreachable!("The layout requires one too many pixels"),
 ///     Err(error) => error,
@@ -230,7 +230,7 @@ impl<P> Matrix<P> {
 
     /// Reinterpret to another, same size pixel type.
     ///
-    /// See `transmute_to` for details.
+    /// See [`Matrix::transmute_to`] for details.
     pub fn transmute<Q: AsTexel>(self) -> Matrix<Q> {
         self.transmute_to(Q::texel())
     }
@@ -239,11 +239,11 @@ impl<P> Matrix<P> {
     ///
     /// # Panics
     ///
-    /// Like `std::mem::transmute`, the size of the two types need to be equal. This ensures that
+    /// Like [`core::mem::transmute`], the size of the two types need to be equal. This ensures that
     /// all indices are valid in both directions.
     pub fn transmute_to<Q: AsTexel>(self, pixel: Texel<Q>) -> Matrix<Q> {
         let layout = self.layout().transmute_to(pixel);
-        let inner = self.inner.reinterpret_unguarded(layout);
+        let inner = self.inner.reinterpret_unguarded(|_| layout);
         Matrix { inner }
     }
 
@@ -257,15 +257,12 @@ impl<P> Matrix<P> {
     }
 
     fn index_of(&self, x: usize, y: usize) -> usize {
-        assert!(self.layout().in_bounds(x, y));
-
-        // Can't overflow, surely smaller than `layout.max_index()`.
-        y * self.layout().width() + x
+        self.layout().index_of(x, y)
     }
 
     /// Apply a function to all pixel values.
     ///
-    /// See [`map_to`] for the details.
+    /// See [`Matrix::map_to`] for the details.
     ///
     /// # Panics
     ///
@@ -281,8 +278,8 @@ impl<P> Matrix<P> {
 
     /// Apply a function to all pixel values.
     ///
-    /// Unlike [`transmute_to`] there are no restrictions on the pixel types. This will reuse the
-    /// underlying buffer or resize it if that is not possible.
+    /// Unlike [`Matrix::transmute_to`] there are no restrictions on the pixel types. This will
+    /// reuse the underlying buffer or resize it if that is not possible.
     ///
     /// # Panics
     ///
@@ -342,7 +339,7 @@ impl<P> Matrix<P> {
 }
 
 impl<P> Layout<P> {
-    pub fn width_and_height_for_pixel(
+    pub fn width_and_height_for_texel(
         pixel: Texel<P>,
         width: usize,
         height: usize,
@@ -361,7 +358,7 @@ impl<P> Layout<P> {
     where
         P: AsTexel,
     {
-        Self::width_and_height_for_pixel(P::texel(), width, height)
+        Self::width_and_height_for_texel(P::texel(), width, height)
     }
 
     pub const fn empty(pixel: Texel<P>) -> Self {
@@ -372,7 +369,7 @@ impl<P> Layout<P> {
         }
     }
 
-    pub fn with_matrix(pixel: Texel<P>, matrix: layout::Matrix) -> Option<Self> {
+    pub fn with_matrix(pixel: Texel<P>, matrix: layout::MatrixBytes) -> Option<Self> {
         if pixel.size() == matrix.element.size() {
             Some(Layout {
                 pixel,
@@ -384,8 +381,8 @@ impl<P> Layout<P> {
         }
     }
 
-    pub fn into_matrix(self) -> layout::Matrix {
-        layout::Matrix {
+    pub fn into_matrix_bytes(self) -> layout::MatrixBytes {
+        layout::MatrixBytes {
             element: self.pixel.into(),
             first_dim: self.width,
             second_dim: self.height,
@@ -448,10 +445,17 @@ impl<P> Layout<P> {
 
     /// Utility method to change the pixel type without changing the dimensions.
     pub fn map_to<Q>(self, pixel: Texel<Q>) -> Option<Layout<Q>> {
-        Layout::width_and_height_for_pixel(pixel, self.width, self.height)
+        Layout::width_and_height_for_texel(pixel, self.width, self.height)
     }
 
-    fn in_bounds(self, x: usize, y: usize) -> bool {
+    pub(crate) fn index_of(self, x: usize, y: usize) -> usize {
+        assert!(self.in_bounds(x, y));
+
+        // Can't overflow, surely smaller than `layout.max_index()`.
+        y * self.width() + x
+    }
+
+    pub(crate) fn in_bounds(self, x: usize, y: usize) -> bool {
         x < self.width && y < self.height
     }
 
@@ -504,7 +508,7 @@ impl<P> layout::Layout for Layout<P> {
     }
 }
 
-impl<P> layout::SampleSlice for Layout<P> {
+impl<P> layout::SliceLayout for Layout<P> {
     type Sample = P;
 
     fn sample(&self) -> Texel<P> {

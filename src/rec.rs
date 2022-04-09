@@ -12,7 +12,7 @@ use crate::{AsTexel, Texel};
 ///
 /// It allows efficient conversion to other texel representations, that is effective
 /// reinterpretation casts.
-pub struct TexelBuffer<P> {
+pub struct TexelBuffer<P = u8> {
     inner: Buffer,
     length: usize,
     texel: Texel<P>,
@@ -298,7 +298,7 @@ impl<P> TexelBuffer<P> {
 
     /// Map all elements to another value.
     ///
-    /// See [`map_to`] for details.
+    /// See [`TexelBuffer::map_to`] for details.
     pub fn map<Q>(self, f: impl Fn(P) -> Q) -> TexelBuffer<Q>
     where
         Q: AsTexel,

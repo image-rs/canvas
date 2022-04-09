@@ -1,10 +1,16 @@
 //! A module for different pixel layouts.
+//!
+//! The `*Layout` traits define generic standard layouts with a normal form. Other traits provide
+//! operations to convert between layouts, operations on the underlying image bytes, etc.
 use crate::texel::MaxAligned;
 use crate::{AsTexel, Texel};
 use ::alloc::boxed::Box;
 use core::{alloc, cmp};
 
 mod matrix;
+
+use crate::canvas::{CanvasMut, CanvasRef, Coord};
+pub use crate::stride::{BadStrideError, StrideSpec, StridedBytes, StridedLayout};
 
 /// A byte layout that only describes the user bytes.
 ///
@@ -22,7 +28,7 @@ pub struct Bytes(pub usize);
 ///
 /// This type is a lower semi lattice. That is, given two elements the type formed by taking the
 /// minimum of size and alignment individually will always form another valid element. This
-/// operation is implemented in the [`infimum`] method.
+/// operation is implemented in the [`Self::infimum`] method.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Ord, Hash)]
 pub struct TexelLayout {
     size: usize,
@@ -185,7 +191,7 @@ pub trait Take: Layout {
 ///
 /// These layouts are represented with a slice of a _single_ type of samples. In particular these
 /// can be addressed and mutated independently.
-pub trait SampleSlice: Layout {
+pub trait SliceLayout: Layout {
     /// The sample type itself.
     type Sample;
 
@@ -200,44 +206,92 @@ pub trait SampleSlice: Layout {
     }
 }
 
+/// A layout of individually addressable raster elements.
+///
+/// Often referred to as 'pixels', this is a special form of texels that represent a single group
+/// of color channels that form one color impression.
+///
+/// Note that it does not prescribe any particular order of arrangement of these channels. Indeed,
+/// they could be in column major format, in row major format, ordered according to some space
+/// filling curve, etc. Also, multiple pixels may form one group of subsampled channels.
+pub trait Raster<Pixel>: Layout + Sized {
+    fn dimensions(&self) -> Coord;
+    fn get(from: CanvasRef<&Self>, at: Coord) -> Option<Pixel>;
+}
+
+/// A raster layout where one can change pixel values independently.
+///
+/// In other words, requires that texels are actually one-by-one blocks of pixels.
+///
+/// Note that it does not prescribe any particular order of arrangement of these texels. Indeed,
+/// they could be in column major format, in row major format, ordered according to some space
+/// filling curve, etc. but subsampled images are not easily possible as pixels can not be written
+/// to independently.
+pub trait RasterMut<Pixel>: Raster<Pixel> {
+    fn put(into: CanvasMut<&mut Self>, at: Coord, val: Pixel);
+
+    /// Evaluate a function on each texel of the raster image.
+    fn shade(mut canvas: CanvasMut<&mut Self>, mut f: impl FnMut(u32, u32, &mut Pixel)) {
+        let Coord(bx, by) = canvas.layout().dimensions();
+        for y in 0..by {
+            for x in 0..bx {
+                let mut pixel = Self::get(canvas.as_ref().as_deref(), Coord(x, y)).unwrap();
+                f(x, y, &mut pixel);
+                Self::put(canvas.as_mut().as_deref_mut(), Coord(x, y), pixel);
+            }
+        }
+    }
+}
+
 /// A dynamic descriptor of an image's layout.
+///
+/// FIXME: figure out if this is 'right' to expose in this crate.
 #[derive(Clone, Debug, PartialEq, Eq, Hash)]
-pub struct DynLayout {
+pub(crate) struct DynLayout {
     pub(crate) repr: LayoutRepr,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub(crate) enum LayoutRepr {
-    Matrix(Matrix),
+    Matrix(MatrixBytes),
     Yuv420p(Yuv420p),
 }
 
-/// A matrix of packed pixels (channel groups).
+/// A matrix of packed texels (channel groups).
 ///
-/// This is a simple layout of exactly width·height homogeneous pixels. Note that it does not
-/// prescribe any particular order of arrangement of these channels. Indeed, they could be in
-/// column major format, in row major format, ordered according to some space filling curve, etc.
+/// This is a simple layout of exactly width·height homogeneous pixels.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
-pub struct Matrix {
+pub struct MatrixBytes {
     pub(crate) element: TexelLayout,
     pub(crate) first_dim: usize,
     pub(crate) second_dim: usize,
 }
 
-/// Describes the memory region used for the image.
+/// A matrix of packed texels (channel groups).
 ///
 /// The underlying buffer may have more data allocated than this region and cause the overhead to
 /// be reused when resizing the image. All ways to construct this already check that all pixels
 /// within the resulting image can be addressed via an index.
-pub struct MatrixTexels<P> {
+pub struct Matrix<P> {
     pub(crate) width: usize,
     pub(crate) height: usize,
     pub(crate) pixel: Texel<P>,
 }
 
+/// A layout that's a matrix of elements.
+pub trait MatrixLayout: Layout {
+    /// The valid matrix specification of this layout.
+    ///
+    /// This call should not fail, or panic. Otherwise, prefer an optional getter for the
+    /// `StridedBytes` and have the caller decay their own buffer.
+    fn matrix(&self) -> MatrixBytes;
+}
+
 /// Planar chroma 2×2 block-wise sub-sampled image.
+///
+/// FIXME: figure out if this is 'right' to expose in this crate.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
-pub struct Yuv420p {
+pub(crate) struct Yuv420p {
     channel: TexelLayout,
     width: u32,
     height: u32,
@@ -273,7 +327,7 @@ impl TexelLayout {
     /// An element with maximum size and no alignment requirements.
     ///
     /// This constructor is mainly useful for the purpose of using it as a modifier. When used with
-    /// [`infimum`] it will only shrink the alignment and keep the size unchanged.
+    /// [`Self::infimum`] it will only shrink the alignment and keep the size unchanged.
     pub const MAX_SIZE: Self = {
         TexelLayout {
             size: isize::MAX as usize,
@@ -353,9 +407,9 @@ impl DynLayout {
     }
 }
 
-impl Matrix {
+impl MatrixBytes {
     pub fn empty(element: TexelLayout) -> Self {
-        Matrix {
+        MatrixBytes {
             element,
             first_dim: 0,
             second_dim: 0,
@@ -370,7 +424,7 @@ impl Matrix {
         let max_index = first_dim.checked_mul(second_dim)?;
         let _ = max_index.checked_mul(element.size)?;
 
-        Some(Matrix {
+        Some(MatrixBytes {
             element,
             first_dim,
             second_dim,
@@ -439,13 +493,13 @@ impl Layout for Bytes {
     }
 }
 
-impl<'lt, T: Layout> Layout for &'lt T {
+impl<'lt, T: Layout + ?Sized> Layout for &'lt T {
     fn byte_len(&self) -> usize {
         (**self).byte_len()
     }
 }
 
-impl<'lt, T: Layout> Layout for &'lt mut T {
+impl<'lt, T: Layout + ?Sized> Layout for &'lt mut T {
     fn byte_len(&self) -> usize {
         (**self).byte_len()
     }
@@ -463,32 +517,60 @@ impl Layout for DynLayout {
     }
 }
 
-impl Layout for Matrix {
+impl Layout for MatrixBytes {
     fn byte_len(&self) -> usize {
-        Matrix::byte_len(*self)
+        MatrixBytes::byte_len(*self)
     }
 }
 
-impl Take for Matrix {
+impl Take for MatrixBytes {
     fn take(&mut self) -> Self {
-        core::mem::replace(self, Matrix::empty(self.element))
+        core::mem::replace(self, MatrixBytes::empty(self.element))
+    }
+}
+
+impl<P> MatrixLayout for Matrix<P> {
+    fn matrix(&self) -> MatrixBytes {
+        self.into_matrix_bytes()
     }
 }
 
 /// Remove the strong typing for dynamic channel type information.
-impl<P> Decay<MatrixTexels<P>> for Matrix {
-    fn decay(from: MatrixTexels<P>) -> Matrix {
-        from.into_matrix()
+impl<L: MatrixLayout> Decay<L> for MatrixBytes {
+    fn decay(from: L) -> MatrixBytes {
+        from.matrix()
     }
 }
 
 /// Try to use the matrix with a specific pixel type.
-impl<P> TryMend<Matrix> for Texel<P> {
-    type Into = MatrixTexels<P>;
+impl<P> TryMend<MatrixBytes> for Texel<P> {
+    type Into = Matrix<P>;
     type Err = MismatchedPixelError;
 
-    fn try_mend(self, matrix: &Matrix) -> Result<MatrixTexels<P>, Self::Err> {
-        MatrixTexels::with_matrix(self, *matrix).ok_or_else(MismatchedPixelError::default)
+    fn try_mend(self, matrix: &MatrixBytes) -> Result<Matrix<P>, Self::Err> {
+        Matrix::with_matrix(self, *matrix).ok_or_else(MismatchedPixelError::default)
+    }
+}
+
+impl<T> SliceLayout for &'_ T
+where
+    T: SliceLayout,
+{
+    type Sample = T::Sample;
+
+    fn sample(&self) -> Texel<Self::Sample> {
+        (**self).sample()
+    }
+}
+
+impl<T> SliceLayout for &'_ mut T
+where
+    T: SliceLayout,
+{
+    type Sample = T::Sample;
+
+    fn sample(&self) -> Texel<Self::Sample> {
+        (**self).sample()
     }
 }
 
@@ -568,11 +650,11 @@ macro_rules! bytes_from_layout {
 }
 
 bytes_from_layout!(DynLayout);
-bytes_from_layout!(Matrix);
-bytes_from_layout!(<P> MatrixTexels);
+bytes_from_layout!(MatrixBytes);
+bytes_from_layout!(<P> Matrix);
 
-impl From<Matrix> for DynLayout {
-    fn from(matrix: Matrix) -> Self {
+impl From<MatrixBytes> for DynLayout {
+    fn from(matrix: MatrixBytes) -> Self {
         DynLayout {
             repr: LayoutRepr::Matrix(matrix),
         }
@@ -587,12 +669,43 @@ impl From<Yuv420p> for DynLayout {
     }
 }
 
-impl<P> From<MatrixTexels<P>> for Matrix {
-    fn from(mat: MatrixTexels<P>) -> Self {
-        Matrix {
+impl<P> From<Matrix<P>> for MatrixBytes {
+    fn from(mat: Matrix<P>) -> Self {
+        MatrixBytes {
             element: mat.pixel().into(),
             first_dim: mat.width(),
             second_dim: mat.height(),
+        }
+    }
+}
+
+/// Note: on 64-bit targets only the first `u32::MAX` dimensions appear accessible.
+impl<P> Raster<P> for Matrix<P> {
+    fn dimensions(&self) -> Coord {
+        use core::convert::TryFrom;
+        let width = u32::try_from(self.width()).unwrap_or(u32::MAX);
+        let height = u32::try_from(self.height()).unwrap_or(u32::MAX);
+        Coord(width, height)
+    }
+
+    fn get(from: CanvasRef<&Self>, Coord(x, y): Coord) -> Option<P> {
+        if from.layout().in_bounds(x as usize, y as usize) {
+            let index = from.layout().index_of(x as usize, y as usize);
+            let texel = from.layout().sample();
+            from.as_slice().get(index).map(|v| texel.copy_val(v))
+        } else {
+            None
+        }
+    }
+}
+
+impl<P> RasterMut<P> for Matrix<P> {
+    fn put(into: CanvasMut<&mut Self>, Coord(x, y): Coord, val: P) {
+        if into.layout().in_bounds(x as usize, y as usize) {
+            let index = into.layout().index_of(x as usize, y as usize);
+            if let Some(dst) = into.into_mut_slice().get_mut(index) {
+                *dst = val;
+            }
         }
     }
 }

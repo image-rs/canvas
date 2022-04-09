@@ -1,33 +1,72 @@
+//! Defines the `Canvas` container, with flexibly type-safe layout.
+//!
+//! Besides the main type, [`Canvas`], which is an owned buffer of particular layout there are some
+//! supporting types that represent other ways in which layouts interact with buffers. Note that
+//! the layout is flexible in the sense that it is up to the user to ultimately ensure correct
+//! typing. The type definition will _help_ you by not providing the tools for strong types but
+//! it's always _allowed_/_valid_ to refer to the same bytes by a different layout. This makes it
+//! possible to use your own texel/pixel wrapper types regardless of the underlying byte
+//! representation. Indeed, the byte buffer need not even represent a pixel matrix (but it's
+//! advised, probably very common, and the only 'supported' use-case).
 // Distributed under The MIT License (MIT)
 //
 // Copyright (c) 2019, 2020 The `image-rs` developers
 use core::{fmt, ops};
 
 use crate::buf::{buf, Buffer, Cog};
-use crate::layout::{Bytes, Decay, DynLayout, Layout, Mend, SampleSlice, Take, TryMend};
+use crate::layout::{
+    Bytes, Decay, DynLayout, Layout, Mend, Raster, RasterMut, SliceLayout, Take, TryMend,
+};
 use crate::{BufferReuseError, Texel, TexelBuffer};
 
-/// A owned canvas, parameterized over the layout.
+pub use crate::stride::{ByteCanvasMut, ByteCanvasRef};
+
+/// A container of allocated bytes, parameterized over the layout.
 ///
 /// This type permits user defined layouts of any kind and does not unsafely depend on the validity
 /// of the layouts. Correctness is achieved in the common case by discouraging methods that would
 /// lead to a diverging size of the memory buffer and the layout. Hence, access to the image pixels
 /// should not lead to panic unless an incorrectly implemented layout is used.
 ///
+/// It possible to convert the layout to a less strictly typed one without reallocating the buffer.
+/// For example, all standard layouts such as `Matrix` can be weakened to `DynLayout`. The reverse
+/// can not be done unchecked but is possible with fallible conversions.
+///
+/// Indeed, the canvas can _arbitrarily_ change its own layout—different `CanvasRef` and
+/// `CanvasMut` may even chose _conflicting layouts—and thus overwrite the content with completely
+/// different types and layouts. This is intended to maximize the flexibility for users. In
+/// complicated cases it could be hard for the type system to reflect the compatibility of a custom
+/// pixel layout and a standard one. It is solely the user's responsibility to use the interface
+/// sensibly. The _soundness_ of standard channel types (e.g. `u8` or `u32`) is not impacted by
+/// this as any byte content is valid for them.
+///
+/// ## Examples
+///
+/// Initialize a matrix as computed `[u8; 4]` rga pixels:
+///
+/// ```
+/// # fn test() -> Option<()> {
+/// use canvas::{Canvas, Matrix};
+///
+/// let mut canvas = Canvas::from(Matrix::<[u8; 4]>::with_width_and_height(400, 400));
+///
+/// canvas.shade(|x, y, rgba| {
+///     rgba[0] = x as u8;
+///     rgba[1] = y as u8;
+///     rgba[3] = 0xff;
+/// });
+///
+/// # Some(()) }
+/// # let _ = test();
+/// ```
+///
+/// # Design
+///
 /// Since a `Canvas` can not unsafely rely on the layout behaving correctly, direct accessors may
 /// have suboptimal behaviour and perform a few (seemingly) redundant checks. More optimal, but
-/// much more specialized, wrappers are provided in other types such as `Matrix`.
-///
-/// Note also that any borrowing canvas can arbitrarily change its own layout and thus overwrite
-/// the content with completely different types and layouts. This is intended to maximize the
-/// flexibility for users. In complicated cases it could be hard for the type system to reflect the
-/// compatibility of a custom pixel layout and a standard one. It is solely the user's
-/// responsibility to use the interface sensibly. The _soundness_ of standard channel types (e.g.
-/// `u8` or `u32`) is not impacted by this as any byte content is valid for them.
-///
-/// It is possible to convert the layout to a less strictly typed one without reallocating the
-/// buffer. For example, all standard layouts such as `Matrix` can be weakened to `DynLayout`. The
-/// reverse can not be done unchecked but is possible with fallible conversions.
+/// much more specialized, wrappers can be provided in other types that first reduce to a
+/// first-party layout and byte buffer and then preserve this invariant by never calling
+/// second/third-party code from traits. Some of these may be offered in this crate in the future.
 ///
 /// Note also that `Canvas` provides fallible operations, some of them are meant to modify the
 /// type. This can obviously not be performed in-place, in the manner with which it would be common
@@ -37,11 +76,6 @@ use crate::{BufferReuseError, Texel, TexelBuffer};
 /// > [`fn mend<M>(&mut self, with: L::Item) -> Option<Canvas<M>>`][`mend`]
 ///
 /// [`mend`]: #method.mend
-///
-/// ## Examples
-///
-/// ```
-/// ```
 #[derive(Clone, PartialEq, Eq)]
 pub struct Canvas<Layout = Bytes> {
     inner: RawCanvas<Buffer, Layout>,
@@ -53,8 +87,10 @@ pub struct Canvas<Layout = Bytes> {
 /// may lead to an implicit change from a borrowed to an owned buffer. These methods are documented
 /// as performing a fallible allocation. Other method calls on the previously borrowing canvas will
 /// afterwards no longer change the bytes of the canvas it was borrowed from.
+///
+/// FIXME: figure out if this is 'right' to expose in this crate.
 #[derive(Clone, PartialEq, Eq)]
-pub struct CopyOnGrow<'buf, Layout = Bytes> {
+pub(crate) struct CopyOnGrow<'buf, Layout = Bytes> {
     inner: RawCanvas<Cog<'buf>, Layout>,
 }
 
@@ -95,21 +131,6 @@ impl Coord {
     }
 }
 
-/// A raster layout.
-///
-/// This is a special form of texels that represent single group of color channels.
-pub trait Raster<Pixel>: Sized {
-    fn dimensions(&self) -> Coord;
-    fn get(from: CanvasRef<&Self>, at: Coord) -> Pixel;
-}
-
-/// A raster layout where one can change pixel values independently.
-///
-/// In other words, requires that texels are one-by-one blocks of pixels.
-pub trait RasterMut<Pixel>: Raster<Pixel> {
-    fn put(into: CanvasMut<&mut Self>, at: Coord, val: Pixel);
-}
-
 /// Inner buffer implementation.
 ///
 /// Not exposed to avoid leaking the implementation detail of the `Buf` type parameter. This allows
@@ -138,9 +159,19 @@ impl<L: Layout> Canvas<L> {
         RawCanvas::<Buffer, L>::new(layout).into()
     }
 
-    /// Create a new canvas with initial content.
+    /// Create a new canvas with initial byte content.
     pub fn with_bytes(layout: L, bytes: &[u8]) -> Self {
         RawCanvas::with_contents(bytes, layout).into()
+    }
+
+    /// Create a new canvas with initial texel contents.
+    ///
+    /// The memory is reused as much as possible. If the layout is too large for the buffer then
+    /// the remainder is filled up with zeroed bytes.
+    pub fn with_buffer<T>(layout: L, bytes: TexelBuffer<T>) -> Self {
+        RawCanvas::with_buffer(Bytes(0), bytes.into_inner())
+            .with_layout(layout)
+            .into()
     }
 
     /// Get a reference to those bytes used by the layout.
@@ -155,9 +186,9 @@ impl<L: Layout> Canvas<L> {
 
     /// If necessary, reallocate the buffer to fit the layout.
     ///
-    /// Call this method after having mutated a layout with [`layout_mut_unguarded`] whenever you
-    /// are not sure that the layout did not grow. This will ensure the contract that the internal
-    /// buffer is large enough for the layout.
+    /// Call this method after having mutated a layout with [`Canvas::layout_mut_unguarded`]
+    /// whenever you are not sure that the layout did not grow. This will ensure the contract that
+    /// the internal buffer is large enough for the layout.
     ///
     /// # Panics
     ///
@@ -168,7 +199,7 @@ impl<L: Layout> Canvas<L> {
 
     /// Change the layer of the canvas.
     ///
-    /// Reallocates the buffer when growing a layout. Call [`fits`] to check this property.
+    /// Reallocates the buffer when growing a layout. Call [`Canvas::fits`] to check this property.
     pub fn with_layout<M>(self, layout: M) -> Canvas<M>
     where
         M: Layout,
@@ -187,15 +218,15 @@ impl<L: Layout> Canvas<L> {
     /// ```
     /// # use canvas::{Canvas, Matrix, layout};
     /// let matrix = Matrix::<u8>::with_width_and_height(400, 400);
-    /// let canvas: Canvas<layout::MatrixTexels<u8>> = Canvas::from(matrix);
+    /// let canvas: Canvas<layout::Matrix<u8>> = Canvas::from(matrix);
     ///
     /// // to turn hide the `u8` type but keep width, height, texel layout
-    /// let canvas: Canvas<layout::Matrix> = canvas.decay();
+    /// let canvas: Canvas<layout::MatrixBytes> = canvas.decay();
     /// assert_eq!(canvas.layout().width(), 400);
     /// assert_eq!(canvas.layout().height(), 400);
     /// ```
     ///
-    /// See also [`mend`] and [`try_mend`] for operations that reverse the effects.
+    /// See also [`Canvas::mend`] and [`Canvas::try_mend`] for operations that reverse the effects.
     ///
     /// Can also be used to forget specifics of the layout, turning the canvas into a more general
     /// container type. For example, to use a uniform type as an allocated buffer waiting on reuse.
@@ -237,7 +268,7 @@ impl<L: Layout> Canvas<L> {
         L: Take,
     {
         let new_layout = mend.mend(self.inner.layout());
-        self.inner.reinterpret_unguarded(new_layout).into()
+        self.inner.reinterpret_unguarded(|_| new_layout).into()
     }
 
     /// Strengthen the layout of the canvas.
@@ -255,7 +286,11 @@ impl<L: Layout> Canvas<L> {
         L: Take,
     {
         let new_layout = mend.try_mend(self.inner.layout())?;
-        Ok(self.inner.take().reinterpret_unguarded(new_layout).into())
+        Ok(self
+            .inner
+            .take()
+            .reinterpret_unguarded(|_| new_layout)
+            .into())
     }
 }
 
@@ -290,6 +325,9 @@ impl<L> Canvas<L> {
     ///
     /// This reinterprets the bytes of the buffer. It can be used to view the buffer as any kind of
     /// pixel, regardless of its association with the layout. Use it with care.
+    ///
+    /// An alternative way to get a slice of texels when a layout has an inherent texel type is
+    /// [`Self::as_slice`].
     pub fn as_texels<P>(&self, pixel: Texel<P>) -> &[P] {
         self.inner.buffer.as_texels(pixel)
     }
@@ -298,6 +336,9 @@ impl<L> Canvas<L> {
     ///
     /// This reinterprets the bytes of the buffer. It can be used to view the buffer as any kind of
     /// pixel, regardless of its association with the layout. Use it with care.
+    ///
+    /// An alternative way to get a slice of texels when a layout has an inherent texel type is
+    /// [`Self::as_mut_slice`].
     pub fn as_mut_texels<P>(&mut self, pixel: Texel<P>) -> &mut [P] {
         self.inner.buffer.as_mut_texels(pixel)
     }
@@ -339,10 +380,38 @@ impl<L> Canvas<L> {
     pub fn try_to_mut<M: Layout>(&mut self, layout: M) -> Option<CanvasMut<'_, M>> {
         self.as_mut().with_layout(layout)
     }
+
+    /// Get a single texel from a raster image.
+    pub fn get_texel<P>(&self, coord: Coord) -> Option<P>
+    where
+        L: Raster<P>,
+    {
+        L::get(self.as_ref(), coord)
+    }
+
+    /// Put a single texel to a raster image.
+    pub fn put_texel<P>(&mut self, coord: Coord, texel: P)
+    where
+        L: RasterMut<P>,
+    {
+        L::put(self.as_mut(), coord, texel)
+    }
+
+    /// Call a function on each texel of this raster image.
+    ///
+    /// The order of evaluation is _not_ defined although certain layouts may offer more specific
+    /// guarantees. In general, one can expect that layouts call the function in a cache-efficient
+    /// manner if they are aware of a better iteration strategy.
+    pub fn shade<P>(&mut self, f: impl FnMut(u32, u32, &mut P))
+    where
+        L: RasterMut<P>,
+    {
+        L::shade(self.as_mut(), f)
+    }
 }
 
 /// Canvas methods for layouts based on pod samples.
-impl<L: SampleSlice> Canvas<L> {
+impl<L: SliceLayout> Canvas<L> {
     /// Interpret an existing buffer as a pixel canvas.
     ///
     /// The data already contained within the buffer is not modified so that prior initialization
@@ -358,11 +427,17 @@ impl<L: SampleSlice> Canvas<L> {
     }
 
     /// Get a slice of the individual samples in the layout.
+    ///
+    /// An alternative way to get a slice of texels when a layout does _not_ have an inherent texel
+    /// _type_ is [`Self::as_texels`].
     pub fn as_slice(&self) -> &[L::Sample] {
         self.inner.as_slice()
     }
 
     /// Get a mutable slice of the individual samples in the layout.
+    ///
+    /// An alternative way to get a slice of texels when a layout does _not_ have an inherent texel
+    /// _type_ is [`Self::as_mut_texels`].
     pub fn as_mut_slice(&mut self) -> &mut [L::Sample] {
         self.inner.as_mut_slice()
     }
@@ -391,7 +466,7 @@ impl<'data, L> CanvasRef<'data, L> {
         self.inner.borrow().into()
     }
 
-    /// Check if a call to [`with_layout`] would succeed.
+    /// Check if a call to [`CanvasRef::with_layout`] would succeed.
     pub fn fits(&self, other: &impl Layout) -> bool {
         self.inner.fits(other)
     }
@@ -399,8 +474,8 @@ impl<'data, L> CanvasRef<'data, L> {
     /// Change this view to a different layout.
     ///
     /// This returns `Some` if the layout fits the underlying data, and `None` otherwise. Use
-    /// [`fits`] to check this property in a separate call. Note that the new layout need not be
-    /// related to the old layout in any other way.
+    /// [`CanvasRef::fits`] to check this property in a separate call. Note that the new layout
+    /// need not be related to the old layout in any other way.
     pub fn with_layout<M>(self, layout: M) -> Option<CanvasRef<'data, M>>
     where
         M: Layout,
@@ -440,9 +515,28 @@ impl<'data, L> CanvasRef<'data, L> {
     /// Get a slice of the individual samples in the layout.
     pub fn as_slice(&self) -> &[L::Sample]
     where
-        L: SampleSlice,
+        L: SliceLayout,
     {
         self.inner.as_slice()
+    }
+
+    /// Turn into a slice of the individual samples in the layout.
+    ///
+    /// This preserves the lifetime with which the layout is borrowed from the underlying canvas,
+    /// and the `CanvasMut` need not stay alive.
+    pub fn into_slice(self) -> &'data [L::Sample]
+    where
+        L: SliceLayout,
+    {
+        self.inner.buffer.as_texels(self.inner.layout.sample())
+    }
+
+    /// Retrieve a single texel from a raster image.
+    pub fn get_texel<P>(&self, coord: Coord) -> Option<P>
+    where
+        L: Raster<P>,
+    {
+        L::get(self.as_ref(), coord)
     }
 }
 
@@ -477,7 +571,7 @@ impl<'data, L> CanvasMut<'data, L> {
         self.inner.borrow_mut().into()
     }
 
-    /// Check if a call to [`with_layout`] would succeed, without consuming this reference.
+    /// Check if a call to [`CanvasMut::with_layout`] would succeed, without consuming this reference.
     pub fn fits(&self, other: &impl Layout) -> bool {
         self.inner.fits(other)
     }
@@ -485,8 +579,8 @@ impl<'data, L> CanvasMut<'data, L> {
     /// Change this view to a different layout.
     ///
     /// This returns `Some` if the layout fits the underlying data, and `None` otherwise. Use
-    /// [`fits`] to check this property in a separate call. Note that the new layout need not be
-    /// related to the old layout in any other way.
+    /// [`CanvasMut::fits`] to check this property in a separate call. Note that the new layout
+    /// need not be related to the old layout in any other way.
     pub fn with_layout<M>(self, layout: M) -> Option<CanvasMut<'data, M>>
     where
         M: Layout,
@@ -515,6 +609,7 @@ impl<'data, L> CanvasMut<'data, L> {
         }
     }
 
+    /// Copy the bytes and layout to an owned container.
     pub fn to_owned(&self) -> Canvas<L>
     where
         L: Layout + Clone,
@@ -525,7 +620,7 @@ impl<'data, L> CanvasMut<'data, L> {
     /// Get a slice of the individual samples in the layout.
     pub fn as_slice(&self) -> &[L::Sample]
     where
-        L: SampleSlice,
+        L: SliceLayout,
     {
         self.inner.as_slice()
     }
@@ -533,9 +628,85 @@ impl<'data, L> CanvasMut<'data, L> {
     /// Get a mutable slice of the individual samples in the layout.
     pub fn as_mut_slice(&mut self) -> &mut [L::Sample]
     where
-        L: SampleSlice,
+        L: SliceLayout,
     {
         self.inner.as_mut_slice()
+    }
+
+    /// Turn into a slice of the individual samples in the layout.
+    ///
+    /// This preserves the lifetime with which the layout is borrowed from the underlying canvas,
+    /// and the `CanvasMut` need not stay alive.
+    pub fn into_slice(self) -> &'data [L::Sample]
+    where
+        L: SliceLayout,
+    {
+        self.inner.buffer.as_texels(self.inner.layout.sample())
+    }
+
+    /// Turn into a mutable slice of the individual samples in the layout.
+    ///
+    /// This preserves the lifetime with which the layout is borrowed from the underlying canvas,
+    /// and the `CanvasMut` need not stay alive.
+    pub fn into_mut_slice(self) -> &'data mut [L::Sample]
+    where
+        L: SliceLayout,
+    {
+        self.inner.buffer.as_mut_texels(self.inner.layout.sample())
+    }
+
+    /// Retrieve a single texel from a raster image.
+    pub fn get_texel<P>(&self, coord: Coord) -> Option<P>
+    where
+        L: Raster<P>,
+    {
+        L::get(self.as_ref(), coord)
+    }
+
+    /// Put a single texel to a raster image.
+    pub fn put_texel<P>(&mut self, coord: Coord, texel: P)
+    where
+        L: RasterMut<P>,
+    {
+        L::put(self.as_mut(), coord, texel)
+    }
+
+    /// Call a function on each texel of this raster image.
+    ///
+    /// The order of evaluation is _not_ defined although certain layouts may offer more specific
+    /// guarantees. In general, one can expect that layouts call the function in a cache-efficient
+    /// manner if they are aware of a better iteration strategy.
+    pub fn shade<P>(&mut self, f: impl FnMut(u32, u32, &mut P))
+    where
+        L: RasterMut<P>,
+    {
+        L::shade(self.as_mut(), f)
+    }
+}
+
+// TODO: how to expose?
+// This is used internally in `RasterMut::shade` however only for the special case of
+// * `&mut &mut L` -> `&mut L`
+// * `&&mut L` -> `&L`
+// which we know are semantically equivalent. In the general case these would go through checks
+// that ensure the new layout is consistent with the data.
+impl<'data, 'l, L: Layout> CanvasRef<'data, &'l L> {
+    pub(crate) fn as_deref(self) -> CanvasRef<'data, &'l L::Target>
+    where
+        L: core::ops::Deref,
+        L::Target: Layout,
+    {
+        self.inner.reinterpret_unguarded(|l| &**l).into()
+    }
+}
+
+impl<'data, 'l, L: Layout> CanvasMut<'data, &'l mut L> {
+    pub(crate) fn as_deref_mut(self) -> CanvasMut<'data, &'l mut L::Target>
+    where
+        L: core::ops::DerefMut,
+        L::Target: Layout,
+    {
+        self.inner.reinterpret_unguarded(|l| &mut **l).into()
     }
 }
 
@@ -749,7 +920,7 @@ impl<B, L> RawCanvas<B, L> {
     pub(crate) fn as_slice(&self) -> &[L::Sample]
     where
         B: ops::Deref<Target = buf>,
-        L: SampleSlice,
+        L: SliceLayout,
     {
         self.buffer.as_texels(self.layout.sample())
     }
@@ -784,10 +955,13 @@ impl<B, L> RawCanvas<B, L> {
     }
 
     /// Change the layout without checking the buffer.
-    pub(crate) fn reinterpret_unguarded<Other: Layout>(self, layout: Other) -> RawCanvas<B, Other> {
+    pub(crate) fn reinterpret_unguarded<Other: Layout>(
+        self,
+        layout: impl FnOnce(L) -> Other,
+    ) -> RawCanvas<B, Other> {
         RawCanvas {
             buffer: self.buffer,
-            layout,
+            layout: layout(self.layout),
         }
     }
 
@@ -861,7 +1035,7 @@ impl<B: BufferLike, L: Layout> RawCanvas<B, L> {
 }
 
 /// Methods for layouts that are slices of individual samples.
-impl<B: BufferLike, L: SampleSlice> RawCanvas<B, L> {
+impl<B: BufferLike, L: SliceLayout> RawCanvas<B, L> {
     /// Interpret an existing buffer as a pixel canvas.
     ///
     /// The data already contained within the buffer is not modified so that prior initialization
@@ -1071,7 +1245,7 @@ impl<Layout: Default> Default for CopyOnGrow<'_, Layout> {
 
 impl<L> fmt::Debug for Canvas<L>
 where
-    L: SampleSlice + fmt::Debug,
+    L: SliceLayout + fmt::Debug,
     L::Sample: fmt::Debug,
 {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {

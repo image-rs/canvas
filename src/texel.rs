@@ -5,7 +5,7 @@
 
 use core::cmp::{Eq, Ord, Ordering, PartialEq, PartialOrd};
 use core::marker::PhantomData;
-use core::{fmt, hash, mem, ptr, slice};
+use core::{fmt, hash, mem, num, ptr, slice};
 
 use crate::buf::buf;
 
@@ -110,6 +110,12 @@ pub(crate) mod constants {
     impl<T: AsTexel> AsTexel for [T; 4] {
         fn texel() -> Texel<[T; 4]> {
             T::texel().array::<4>()
+        }
+    }
+
+    impl<T: AsTexel> AsTexel for ::core::num::Wrapping<T> {
+        fn texel() -> Texel<::core::num::Wrapping<T>> {
+            T::texel().num_wrapping()
         }
     }
 }
@@ -243,6 +249,13 @@ impl<P> Texel<P> {
         // Safety:
         // * P and O must have the same invariants, none
         // * P and O have the same alignment
+        unsafe { Texel::new_unchecked() }
+    }
+
+    /// Construct a texel that contains a number in the standard `Wrapping` type.
+    pub const fn num_wrapping(self) -> Texel<num::Wrapping<P>> {
+        // * Texel<P> = Self certifies the byte properties.
+        // * `core::num::Wrapping` is `repr(transparent)
         unsafe { Texel::new_unchecked() }
     }
 }
