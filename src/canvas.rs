@@ -159,9 +159,19 @@ impl<L: Layout> Canvas<L> {
         RawCanvas::<Buffer, L>::new(layout).into()
     }
 
-    /// Create a new canvas with initial content.
+    /// Create a new canvas with initial byte content.
     pub fn with_bytes(layout: L, bytes: &[u8]) -> Self {
         RawCanvas::with_contents(bytes, layout).into()
+    }
+
+    /// Create a new canvas with initial texel contents.
+    ///
+    /// The memory is reused as much as possible. If the layout is too large for the buffer then
+    /// the remainder is filled up with zeroed bytes.
+    pub fn with_buffer<T>(layout: L, bytes: TexelBuffer<T>) -> Self {
+        RawCanvas::with_buffer(Bytes(0), bytes.into_inner())
+            .with_layout(layout)
+            .into()
     }
 
     /// Get a reference to those bytes used by the layout.
