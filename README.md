@@ -4,6 +4,18 @@ An allocated buffer suitable for image data. Compared to a `Vec` of all
 samples, it restricts the possible data types but on the other hand focusses on
 a more efficient interface to casting the data or rearranging the contents.
 
+## What it is
+
+The buffer types provided provide several utility operations out of the box, or
+they can be used as internal structures on which a more concrete interface is
+built.
+
+- As the inner type of opaque image struct that offers conversion.
+- As standard forms of particularly shaped image data in interfaces.
+- As references to image data with their layout attached.
+- As a basis for optimized transform libraries.
+- As a mechanism for an FFI interface.
+
 ## Why
 
 After [some discussion](https://github.com/image-rs/image/pull/885) it
@@ -14,12 +26,9 @@ annotated `#[repr(C)]` or alike. This is hardly the fault of `Vec<_>`, as
 images and the necessary transmutations of the representative binary data are
 *far* from general but `Vec` must be.
 
-## Not
+## What it is not
 
-This library is not yet ready for use, and mostly a reservation in `crates.io`
-for future use within the `image-rs` organization managing the `image` crate.
-
-It is also not intended to provide nd-algebra or other matrix style operations.
+It is not optimized to provide nd-algebra or other matrix style operations.
 This firstly keeps the implementation complexity low, allows other
 implementation details, and separates concerns. If you nevertheless find it
 useful for such purposes, rest assured that we find this incredibly cool even
@@ -30,5 +39,3 @@ other needs.
 ## Todo
 
 * Use alignment for SIMD iteration/transmutation/map-operation
-* Ensure `core::mem::needs_drop` is `false` to provide better semantics for values.
-
