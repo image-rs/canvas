@@ -2,7 +2,7 @@
 use canvas::canvas::{CanvasMut, CanvasRef};
 use canvas::layout::{Layout as CanvasLayout, Matrix, MatrixBytes, MatrixLayout, Raster};
 
-use crate::layout::{ByteLayout, Layout};
+use crate::layout::{ByteLayout, Layout, SampleBits, Texel};
 
 /// A byte buffer with dynamic color contents.
 pub struct Frame {
@@ -79,12 +79,7 @@ impl Layout {
     /// The texel is chosen based on color. Returns `None` if the number of bytes used by the
     /// layout is larger than `usize::MAX`, i.e. the layout can not be allocated.
     pub fn for_scanlines(texel: TexelKind, width: u32, height: u32) -> Option<Self> {
-        Self::validate(Layout {
-            texel,
-            pixel_width: width,
-            pixel_height: height,
-            bytes_per_line: todo!(),
-        })
+        Self::validate(Layout { ..todo!() })
     }
 
     /// Returns the width of the underlying image in pixels.
@@ -100,11 +95,7 @@ impl Layout {
     fn flat_layout(&self) -> Option<SampleLayout> {
         Some(SampleLayout {
             channels: todo!(),
-            channel_stride: self.texel.byte_len(),
-            height: self.pixel_width,
-            height_stride: todo!(),
-            width: self.pixel_height,
-            width_stride: todo!(),
+            ..todo!()
         })
     }
 }
@@ -115,10 +106,11 @@ impl Frame {
     /// This will _not_ allocate.
     pub fn empty(texel: TexelKind) -> Self {
         Frame {
-            inner: canvas::Canvas::new(Layout::empty(texel)),
+            inner: canvas::Canvas::new(todo!()),
         }
     }
 
+    /// Get a reference to the layout of this frame.
     pub fn layout(&self) -> &Layout {
         self.inner.layout()
     }
@@ -165,6 +157,14 @@ impl Frame {
         // We can not reuse the allocation of `canvas`.
         self.as_bytes().to_owned()
     }
+
+    pub(crate) fn as_ref(&self) -> CanvasRef<'_, &'_ Layout> {
+        self.inner.as_ref()
+    }
+
+    pub(crate) fn as_mut(&mut self) -> CanvasMut<'_, &'_ mut Layout> {
+        self.inner.as_mut()
+    }
 }
 
 impl TexelKind {
@@ -183,6 +183,37 @@ impl TexelKind {
             F32x2 => 8,
             F32x3 => 12,
             F32x4 => 16,
+        }
+    }
+}
+
+impl From<Texel> for TexelKind {
+    fn from(texel: Texel) -> Self {
+        Self::from(texel.bits)
+    }
+}
+
+impl From<SampleBits> for TexelKind {
+    fn from(bits: SampleBits) -> Self {
+        match bits {
+            SampleBits::Int8 | SampleBits::Int332 | SampleBits::Int233 => TexelKind::U8,
+            SampleBits::Int16
+            | SampleBits::Int4x4
+            | SampleBits::Int_444
+            | SampleBits::Int444_
+            | SampleBits::Int565 => TexelKind::U16,
+            SampleBits::Int8x2 => TexelKind::U8x2,
+            SampleBits::Int8x3 => TexelKind::U8x3,
+            SampleBits::Int8x4 => TexelKind::U8x4,
+            SampleBits::Int16x2 => TexelKind::U16x2,
+            SampleBits::Int16x3 => TexelKind::U16x3,
+            SampleBits::Int16x4 => TexelKind::U16x4,
+            SampleBits::Int1010102
+            | SampleBits::Int2101010
+            | SampleBits::Int101010_
+            | SampleBits::Int_101010 => TexelKind::U16x2,
+            SampleBits::Float16x4 => TexelKind::U16x4,
+            SampleBits::Float32x4 => TexelKind::F32x3,
         }
     }
 }

@@ -2,10 +2,11 @@
 //!
 //! Takes quite a lot of inspiration from how GPUs work. We have a primitive sampler unit, a
 //! fragment unit, and pipeline multiple texels in parallel.
-use canvas::{canvas::Coord, TexelBuffer};
+use canvas::canvas::{CanvasMut, CanvasRef};
+use canvas::{canvas::Coord, AsTexel, Texel, TexelBuffer};
 use core::ops::Range;
 
-use crate::buffer::Frame;
+use crate::frame::{Frame, TexelKind};
 use crate::layout::{ByteLayout, Layout};
 
 #[repr(transparent)]
@@ -64,6 +65,9 @@ pub struct Converter {
     /// The ops (functions) used for conversion.
     ops: ConvertOps,
 }
+
+pub type FrameSource<'data, 'layout> = CanvasRef<'data, &'layout Layout>;
+pub type FrameTarget<'data, 'layout> = CanvasMut<'data, &'layout mut Layout>;
 
 /// The function pointers doing the conversion.
 ///
@@ -185,9 +189,9 @@ impl Converter {
             }
 
             self.generate_coords(&sb_x, &sb_y);
-            self.fetch_texels(frame_in);
+            self.read_texels(frame_in.as_ref());
             texel_conversion(self);
-            self.unfetch_texels(frame_out);
+            self.write_texels(frame_out.as_mut());
         }
     }
 
@@ -241,12 +245,98 @@ impl Converter {
         (self.ops.out_index)(&self.info, &self.out_coords, &mut self.out_index);
     }
 
-    fn fetch_texels(&mut self, from: &Frame) {
-        todo!()
+    fn read_texels(&mut self, from: FrameSource) {
+        fn fetchFromTexelArray<T>(
+            from: FrameSource,
+            idx: &[usize],
+            into: &mut TexelBuffer,
+            texel: Texel<T>,
+        ) {
+            for (&index, into) in idx.iter().zip(into.as_mut_texels(texel)) {
+                *into = texel.copy_val(&from.as_texels(texel)[index]);
+            }
+        }
+
+        struct ReadUnit<'data, 'layout> {
+            from: FrameSource<'data, 'layout>,
+            idx: &'data [usize],
+            into: &'data mut TexelBuffer,
+        }
+
+        impl ReadUnit<'_, '_> {
+            fn fetch_as<T>(self, texel: Texel<T>) {
+                fetchFromTexelArray(self.from, self.idx, self.into, texel)
+            }
+        }
+
+        let kind = TexelKind::from(from.layout().texel.bits);
+        let unit = ReadUnit {
+            from,
+            idx: &self.in_index,
+            into: &mut self.in_texels,
+        };
+
+        match kind {
+            TexelKind::U8 => unit.fetch_as(u8::texel()),
+            TexelKind::U8x2 => unit.fetch_as(<[u8; 2]>::texel()),
+            TexelKind::U8x3 => unit.fetch_as(<[u8; 3]>::texel()),
+            TexelKind::U8x4 => unit.fetch_as(<[u8; 4]>::texel()),
+            TexelKind::U16 => unit.fetch_as(<[u16; 1]>::texel()),
+            TexelKind::U16x2 => unit.fetch_as(<[u16; 2]>::texel()),
+            TexelKind::U16x3 => unit.fetch_as(<[u16; 3]>::texel()),
+            TexelKind::U16x4 => unit.fetch_as(<[u16; 4]>::texel()),
+            TexelKind::F32 => unit.fetch_as(<[f32; 1]>::texel()),
+            TexelKind::F32x2 => unit.fetch_as(<[f32; 2]>::texel()),
+            TexelKind::F32x3 => unit.fetch_as(<[f32; 3]>::texel()),
+            TexelKind::F32x4 => unit.fetch_as(<[f32; 4]>::texel()),
+        }
     }
 
-    fn unfetch_texels(&mut self, into: &mut Frame) {
-        todo!()
+    fn write_texels(&mut self, into: FrameTarget) {
+        fn writeFromTexelArray<T>(
+            mut into: FrameTarget,
+            idx: &[usize],
+            from: &TexelBuffer,
+            texel: Texel<T>,
+        ) {
+            for (&index, from) in idx.iter().zip(from.as_texels(texel)) {
+                into.as_mut_texels(texel)[index] = texel.copy_val(from);
+            }
+        }
+
+        struct WriteUnit<'data, 'layout> {
+            into: FrameTarget<'data, 'layout>,
+            idx: &'data [usize],
+            from: &'data TexelBuffer,
+        }
+
+        impl WriteUnit<'_, '_> {
+            fn write_as<T>(self, texel: Texel<T>) {
+                writeFromTexelArray(self.into, self.idx, self.from, texel)
+            }
+        }
+
+        let kind = TexelKind::from(into.layout().texel.bits);
+        let unit = WriteUnit {
+            into,
+            idx: &self.in_index,
+            from: &self.out_texels,
+        };
+
+        match kind {
+            TexelKind::U8 => unit.write_as(u8::texel()),
+            TexelKind::U8x2 => unit.write_as(<[u8; 2]>::texel()),
+            TexelKind::U8x3 => unit.write_as(<[u8; 3]>::texel()),
+            TexelKind::U8x4 => unit.write_as(<[u8; 4]>::texel()),
+            TexelKind::U16 => unit.write_as(<[u16; 1]>::texel()),
+            TexelKind::U16x2 => unit.write_as(<[u16; 2]>::texel()),
+            TexelKind::U16x3 => unit.write_as(<[u16; 3]>::texel()),
+            TexelKind::U16x4 => unit.write_as(<[u16; 4]>::texel()),
+            TexelKind::F32 => unit.write_as(<[f32; 1]>::texel()),
+            TexelKind::F32x2 => unit.write_as(<[f32; 2]>::texel()),
+            TexelKind::F32x3 => unit.write_as(<[f32; 3]>::texel()),
+            TexelKind::F32x4 => unit.write_as(<[f32; 4]>::texel()),
+        }
     }
 
     fn blocks(x: Range<u32>, y: Range<u32>) -> impl Iterator<Item = TexelCoord> + Clone {
