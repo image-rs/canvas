@@ -520,6 +520,17 @@ impl<'data, L> CanvasRef<'data, L> {
         self.inner.as_slice()
     }
 
+    /// View this buffer as a slice of pixels.
+    ///
+    /// This reinterprets the bytes of the buffer. It can be used to view the buffer as any kind of
+    /// pixel, regardless of its association with the layout. Use it with care.
+    ///
+    /// An alternative way to get a slice of texels when a layout has an inherent texel type is
+    /// [`Self::as_slice`].
+    pub fn as_texels<P>(&self, pixel: Texel<P>) -> &[P] {
+        self.inner.buffer.as_texels(pixel)
+    }
+
     /// Turn into a slice of the individual samples in the layout.
     ///
     /// This preserves the lifetime with which the layout is borrowed from the underlying canvas,
@@ -631,6 +642,28 @@ impl<'data, L> CanvasMut<'data, L> {
         L: SliceLayout,
     {
         self.inner.as_mut_slice()
+    }
+
+    /// View this buffer as a slice of pixels.
+    ///
+    /// This reinterprets the bytes of the buffer. It can be used to view the buffer as any kind of
+    /// pixel, regardless of its association with the layout. Use it with care.
+    ///
+    /// An alternative way to get a slice of texels when a layout has an inherent texel type is
+    /// [`Self::as_slice`].
+    pub fn as_texels<P>(&self, pixel: Texel<P>) -> &[P] {
+        self.inner.buffer.as_texels(pixel)
+    }
+
+    /// View this buffer as a slice of pixels.
+    ///
+    /// This reinterprets the bytes of the buffer. It can be used to view the buffer as any kind of
+    /// pixel, regardless of its association with the layout. Use it with care.
+    ///
+    /// An alternative way to get a slice of texels when a layout has an inherent texel type is
+    /// [`Self::as_mut_slice`].
+    pub fn as_mut_texels<P>(&mut self, pixel: Texel<P>) -> &mut [P] {
+        self.inner.buffer.as_mut_texels(pixel)
     }
 
     /// Turn into a slice of the individual samples in the layout.

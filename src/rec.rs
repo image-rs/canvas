@@ -259,6 +259,16 @@ impl<P> TexelBuffer<P> {
         self.buf_mut().as_bytes_mut()
     }
 
+    /// View the buffer as a different texel type.
+    pub fn as_texels<O>(&self, pixel: Texel<O>) -> &[O] {
+        self.inner.as_texels(pixel)
+    }
+
+    /// Mutate the buffer as a different texel type.
+    pub fn as_mut_texels<O>(&mut self, pixel: Texel<O>) -> &mut [O] {
+        self.inner.as_mut_texels(pixel)
+    }
+
     /// The total number of managed bytes.
     ///
     /// This will not change even through a reinterpretation casts. This corresponds to the
