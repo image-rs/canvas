@@ -2,8 +2,10 @@
 use canvas::canvas::{CanvasMut, CanvasRef};
 use canvas::layout::{Layout as CanvasLayout, Matrix, MatrixBytes, MatrixLayout, Raster};
 
+use crate::layout::{ByteLayout, Layout};
+
 /// A byte buffer with dynamic color contents.
-pub struct Canvas {
+pub struct Frame {
     inner: canvas::Canvas<Layout>,
 }
 
@@ -42,20 +44,6 @@ pub enum TexelKind {
     F32x4,
 }
 
-/// The layout of an image except for metadata.
-///
-/// Each layout indicates how texture units (texels) are stored in one or multiple matrix-like
-/// shape (a plane), currently up to 4.
-#[derive(Clone)]
-pub struct Layout {
-    /// The texel in non-planar fashion.
-    texel: TexelKind,
-    pixel_width: u32,
-    pixel_height: u32,
-    bytes_per_line: u32,
-    // TODO: color space information.
-}
-
 pub struct SampleLayout {
     pub channels: u8,
     pub channel_stride: usize,
@@ -75,38 +63,15 @@ pub struct PlanarLayout<T> {
     pub matrix: Matrix<T>,
 }
 
-impl CanvasLayout for Layout {
-    fn byte_len(&self) -> usize {
-        // Note: pre-checked during construction.
-        self.bytes_per_line as usize * self.pixel_height as usize
-    }
-}
-
-impl MatrixLayout for Layout {
-    fn matrix(&self) -> MatrixBytes {
-        todo!()
-    }
-}
-
 impl Layout {
     // Verify that the byte-length is below `isize::MAX`.
     fn validate(this: Self) -> Option<Self> {
-        let height = usize::try_from(this.pixel_height).ok()?;
-        let lines = usize::try_from(this.pixel_height).ok()?;
+        let lines = usize::try_from(this.bytes.width).ok()?;
+        let height = usize::try_from(this.bytes.height).ok()?;
         let ok = height
             .checked_mul(lines)
             .map_or(false, |len| len < isize::MAX as usize);
         Some(this).filter(|_| ok)
-    }
-
-    /// An empty layout with a single plane of the texel kind.
-    pub const fn empty(texel: TexelKind) -> Self {
-        Layout {
-            texel,
-            pixel_width: 0,
-            pixel_height: 0,
-            bytes_per_line: 0,
-        }
     }
 
     /// A layout representing scanlines of a colored pixel.
@@ -124,12 +89,12 @@ impl Layout {
 
     /// Returns the width of the underlying image in pixels.
     pub fn width(&self) -> u32 {
-        self.pixel_width
+        self.bytes.width
     }
 
     /// Returns the height of the underlying image in pixels.
     pub fn height(&self) -> u32 {
-        self.pixel_height
+        self.bytes.height
     }
 
     fn flat_layout(&self) -> Option<SampleLayout> {
@@ -144,14 +109,18 @@ impl Layout {
     }
 }
 
-impl Canvas {
+impl Frame {
     /// Create an empty image that will use the indicated texels.
     ///
     /// This will _not_ allocate.
     pub fn empty(texel: TexelKind) -> Self {
-        Canvas {
+        Frame {
             inner: canvas::Canvas::new(Layout::empty(texel)),
         }
+    }
+
+    pub fn layout(&self) -> &Layout {
+        self.inner.layout()
     }
 
     /// Overwrite the layout, allocate if necessary, and clear the image.

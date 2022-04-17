@@ -7,7 +7,7 @@ use canvas::layout::{Layout as CanvasLayout, Raster};
 /// An inner invariant is that the layout fits in memory, and in particular into a `usize`, while
 /// at the same time also fitting inside a `u64` of bytes.
 #[derive(Clone, Debug, PartialEq, Eq, Hash)]
-pub struct Layout {
+pub struct ByteLayout {
     /// The number of texels along our width.
     pub(crate) width: u32,
     /// The number of texels along our height.
@@ -21,6 +21,16 @@ pub struct Layout {
     /// The number of bytes per row.
     /// This is a u32 for compatibility with `wgpu`.
     pub(crate) bytes_per_row: u32,
+}
+
+#[derive(Clone, Debug, PartialEq)]
+pub struct Layout {
+    pub(crate) bytes: ByteLayout,
+    /// The texel representing merged layers.
+    pub(crate) texel: Texel,
+    // TODO: planarity..
+    /// How the numbers relate to physical quantities, important for conversion.
+    pub(crate) color: Color,
 }
 
 /// Describe a row-major rectangular matrix layout.
@@ -43,7 +53,7 @@ pub struct RowLayoutDescription {
 #[derive(Clone, Debug, PartialEq)]
 pub struct LayoutDescriptor {
     /// The byte and physical layout of the buffer.
-    pub layout: Layout,
+    pub layout: ByteLayout,
     /// Describe how each single texel is interpreted.
     pub texel: Texel,
     /// How the numbers relate to physical quantities, important for conversion.
@@ -225,7 +235,7 @@ pub(crate) enum ChannelPosition {
 
 impl LayoutDescriptor {
     pub const EMPTY: Self = LayoutDescriptor {
-        layout: Layout {
+        layout: ByteLayout {
             width: 0,
             height: 0,
             bytes_per_texel: 4,
@@ -240,7 +250,7 @@ impl LayoutDescriptor {
     };
 
     fn with_texel(texel: Texel, color: Color, width: u32, height: u32) -> Option<Self> {
-        let layout = Layout::with_texel(&texel, width, height)?;
+        let layout = ByteLayout::with_texel(&texel, width, height)?;
         Some(LayoutDescriptor {
             layout,
             texel,
@@ -382,7 +392,7 @@ impl Block {
     }
 }
 
-impl Layout {
+impl ByteLayout {
     /// Create a buffer layout given the layout of a simple, strided matrix.
     pub fn with_row_layout(rows: RowLayoutDescription) -> Option<Self> {
         let bytes_per_texel = u8::try_from(rows.texel_stride).ok()?;
@@ -397,7 +407,7 @@ impl Layout {
         let u64_len = u64::from(rows.height).checked_mul(rows.row_stride)?;
         let _ = usize::try_from(u64_len).ok()?;
 
-        Some(Layout {
+        Some(ByteLayout {
             width: rows.width,
             height: rows.height,
             bytes_per_texel,
@@ -439,6 +449,13 @@ impl Layout {
         (self.bytes_per_row as usize) * (self.height as usize)
     }
 
+    /// Returns the index of a texel in a slice of planar image data.
+    pub fn texel_index(&self, x: u32, y: u32) -> u64 {
+        let byte_index = u64::from(y) * u64::from(self.bytes_per_row)
+            + u64::from(x) * u64::from(self.bytes_per_texel);
+        byte_index / u64::from(self.bytes_per_texel)
+    }
+
     /// Returns a matrix descriptor that can store all bytes.
     ///
     /// Note: for the moment, all layouts are row-wise matrices. This will be relaxed in the future
@@ -457,6 +474,6 @@ impl Layout {
 
 impl CanvasLayout for Layout {
     fn byte_len(&self) -> usize {
-        Layout::byte_len(self)
+        ByteLayout::byte_len(&self.bytes)
     }
 }
