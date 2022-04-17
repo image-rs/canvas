@@ -6,3 +6,9 @@ mod frame;
 mod layout;
 /// Conversion operation.
 mod shader;
+
+pub use self::color::{Color, ColorChannel, Luminance, Primaries, Transfer, Whitepoint};
+pub use self::frame::{Frame, PlanarBytes, PlanarLayout, SampleLayout};
+pub use self::layout::{
+    Block, ByteLayout, Layout, RowLayoutDescription, SampleBits, SampleParts, Texel,
+};

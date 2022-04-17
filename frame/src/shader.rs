@@ -9,31 +9,6 @@ use core::ops::Range;
 use crate::frame::{Frame, TexelKind};
 use crate::layout::{ByteLayout, Layout};
 
-#[repr(transparent)]
-struct TexelCoord(Coord);
-
-struct Info {
-    /// Layout of the input frame.
-    in_layout: Layout,
-    /// Layout of the output frame.
-    out_layout: Layout,
-    /// The selected way to represent pixels in common parameter space.
-    common_pixel: CommonPixel,
-    /// The selected common color space, midpoint for conversion.
-    common_color: CommonColor,
-}
-
-enum CommonPixel {
-    U8x4,
-    U16x4,
-    U32x4,
-    F32x4,
-}
-
-enum CommonColor {
-    CieXyz,
-}
-
 /// A buffer for conversion.
 pub struct Converter {
     /// The underlying conversion info.
@@ -66,8 +41,43 @@ pub struct Converter {
     ops: ConvertOps,
 }
 
-pub type FrameSource<'data, 'layout> = CanvasRef<'data, &'layout Layout>;
-pub type FrameTarget<'data, 'layout> = CanvasMut<'data, &'layout mut Layout>;
+#[repr(transparent)]
+struct TexelCoord(Coord);
+
+struct Info {
+    /// Layout of the input frame.
+    in_layout: Layout,
+    /// Layout of the output frame.
+    out_layout: Layout,
+    /// The selected way to represent pixels in common parameter space.
+    common_pixel: CommonPixel,
+    /// The selected common color space, midpoint for conversion.
+    common_color: CommonColor,
+    /// The texel fetch we perform for input.
+    /// Note that this is not necessarily the underlying texel as we throw away parts of
+    /// interpretation, as long as it preserves size and alignment in a matter that produces the
+    /// correct bits on indexing.
+    in_kind: TexelKind,
+    /// The texel fetch we perform for output.
+    /// Note that this is not necessarily the underlying texel as we throw away parts of
+    /// interpretation, as long as it preserves size and alignment in a matter that produces the
+    /// correct bits on indexing.
+    out_kind: TexelKind,
+}
+
+enum CommonPixel {
+    U8x4,
+    U16x4,
+    U32x4,
+    F32x4,
+}
+
+enum CommonColor {
+    CieXyz,
+}
+
+type PlaneSource<'data, 'layout> = CanvasRef<'data, &'layout Layout>;
+type PlaneTarget<'data, 'layout> = CanvasMut<'data, &'layout mut Layout>;
 
 /// The function pointers doing the conversion.
 ///
@@ -109,6 +119,8 @@ impl Converter {
                 out_layout: frame_out.layout().clone(),
                 common_pixel: CommonPixel::F32x4,
                 common_color: CommonColor::CieXyz,
+                in_kind: TexelKind::from(frame_in.layout().texel.bits),
+                out_kind: TexelKind::from(frame_in.layout().texel.bits),
             },
             chunk: 512,
             super_blocks: vec![],
@@ -124,12 +136,9 @@ impl Converter {
             ops: ConvertOps {
                 in_index: Self::index_from_in_info,
                 out_index: Self::index_from_out_info,
-                expand: todo!(),
-                recolor: Some(RecolorOps {
-                    from: todo!(),
-                    into: todo!(),
-                }),
-                join: todo!(),
+                expand: CommonPixel::F32x4.expand_from_info(),
+                recolor: None,
+                join: CommonPixel::F32x4.join_from_info(),
             },
         }
     }
@@ -245,20 +254,23 @@ impl Converter {
         (self.ops.out_index)(&self.info, &self.out_coords, &mut self.out_index);
     }
 
-    fn read_texels(&mut self, from: FrameSource) {
+    fn read_texels(&mut self, from: PlaneSource) {
         fn fetchFromTexelArray<T>(
-            from: FrameSource,
+            from: PlaneSource,
             idx: &[usize],
             into: &mut TexelBuffer,
             texel: Texel<T>,
         ) {
+            into.resize_for_texel(idx.len(), texel);
             for (&index, into) in idx.iter().zip(into.as_mut_texels(texel)) {
-                *into = texel.copy_val(&from.as_texels(texel)[index]);
+                if let Some(from) = from.as_texels(texel).get(index) {
+                    *into = texel.copy_val(from);
+                }
             }
         }
 
         struct ReadUnit<'data, 'layout> {
-            from: FrameSource<'data, 'layout>,
+            from: PlaneSource<'data, 'layout>,
             idx: &'data [usize],
             into: &'data mut TexelBuffer,
         }
@@ -269,14 +281,13 @@ impl Converter {
             }
         }
 
-        let kind = TexelKind::from(from.layout().texel.bits);
         let unit = ReadUnit {
             from,
             idx: &self.in_index,
             into: &mut self.in_texels,
         };
 
-        match kind {
+        match self.info.in_kind {
             TexelKind::U8 => unit.fetch_as(u8::texel()),
             TexelKind::U8x2 => unit.fetch_as(<[u8; 2]>::texel()),
             TexelKind::U8x3 => unit.fetch_as(<[u8; 3]>::texel()),
@@ -292,20 +303,22 @@ impl Converter {
         }
     }
 
-    fn write_texels(&mut self, into: FrameTarget) {
+    fn write_texels(&mut self, into: PlaneTarget) {
         fn writeFromTexelArray<T>(
-            mut into: FrameTarget,
+            mut into: PlaneTarget,
             idx: &[usize],
             from: &TexelBuffer,
             texel: Texel<T>,
         ) {
             for (&index, from) in idx.iter().zip(from.as_texels(texel)) {
-                into.as_mut_texels(texel)[index] = texel.copy_val(from);
+                if let Some(into) = into.as_mut_texels(texel).get_mut(index) {
+                    *into = texel.copy_val(from);
+                }
             }
         }
 
         struct WriteUnit<'data, 'layout> {
-            into: FrameTarget<'data, 'layout>,
+            into: PlaneTarget<'data, 'layout>,
             idx: &'data [usize],
             from: &'data TexelBuffer,
         }
@@ -316,14 +329,13 @@ impl Converter {
             }
         }
 
-        let kind = TexelKind::from(into.layout().texel.bits);
         let unit = WriteUnit {
             into,
             idx: &self.in_index,
             from: &self.out_texels,
         };
 
-        match kind {
+        match self.info.out_kind {
             TexelKind::U8 => unit.write_as(u8::texel()),
             TexelKind::U8x2 => unit.write_as(<[u8; 2]>::texel()),
             TexelKind::U8x3 => unit.write_as(<[u8; 3]>::texel()),
@@ -359,5 +371,15 @@ impl Converter {
         for (&TexelCoord(Coord(x, y)), idx) in texel.iter().zip(idx) {
             *idx = info.texel_index(x, y) as usize;
         }
+    }
+}
+
+impl CommonPixel {
+    fn expand_from_info(self) -> fn(&Info, &TexelBuffer, &mut TexelBuffer) {
+        todo!()
+    }
+
+    fn join_from_info(self) -> fn(&Info, &TexelBuffer, &mut TexelBuffer) {
+        todo!()
     }
 }
