@@ -54,6 +54,82 @@ pub enum Color {
     },
 }
 
+/// How to interpret channels as physical quantities.
+///
+/// Each color model consists of a set of color channels, each of which may occur or be omitted in
+/// frames of that model. Each model defines one canonical _channel order_. This is the order they
+/// appear in within 'shader units' when pixels are decoded from texels.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[non_exhaustive]
+pub enum ColorChannelModel {
+    /// An additive model consisting of a redish, greenish, blueish channel.
+    ///
+    /// Not all models have truly red, green, or blue channels. More specifically we refer to any
+    /// color representation that uses three observer functions (weight functions on the visible
+    /// portion of the spectrum of light) and represents color as the simplex defined from mixing
+    /// them.
+    ///
+    /// The most common, or nearly universal in computer imagery, choice is a linear combination of
+    /// the three CIE XYZ standard observers at 2° center of vision.
+    ///
+    /// Example: sRGB, CIE XYZ.
+    Rgb,
+    /// A lightness, and two color difference components.
+    ///
+    /// Also sometimes called YUV but that is easily confused is the specific color model called
+    /// 'YUV', a common analog encoding for several PAL systems (now outdated). Don't confuse with
+    /// CIE Yuv (1960) or CIE L*u*v* which is different thing entirely. Yes, confusing.
+    ///
+    /// Based on an Rgb color spaces, with a linear transform to express the color in terms of a
+    /// total luminance and the difference of blue, red luminance relative to the total one. The
+    /// linear transform is most often applied to non-linear (aka. gamma pre-corrected, or
+    /// electric) R'G'B' values but sometimes (Rec.709) such correct is applied after
+    /// transformation. Coefficients differ between systems.
+    ///
+    /// As can be read from the terms, the intensity is given as a _photometric_ definition in
+    /// terms of luminance and not as a perceptual 'lightness' which differentiates it from Lab/Lch
+    /// as defined below.
+    // TODO: figure out if we want to call ICtCp `Yuv`.. After all there is a non-linear transform
+    // involved that is not evaluated independently for each channel. But we do not _need_ to add a
+    // corresponding `Color` variant that captures all the models.
+    // ICtCp
+    Yuv,
+    /// A lightness, and two chroma components.
+    ///
+    /// Differs from xyY spaces by a non-linear transform, commonly with the goal of generating
+    /// perceptually uniform values. Example: CIE La*b*.
+    ///
+    /// The uniformity permits a perceptual distance metric as Euclidean distance, although this
+    /// proves imprecise under in-depth investigation. Good for a decent estimate though.
+    Lab,
+    /// A lightness and two chroma components as polar coordinates.
+    ///
+    /// Polar transform of a Lab model. Example: Oklab
+    Lch,
+    /// A subtractive model consisting of fours inks defining absorbed colors.
+    ///
+    /// Example: ISO 2846 (Euroskala)
+    Cmyk,
+    // Deprecate as a joke?
+    /// HSV (Hue, saturation, value).
+    ///
+    /// On closer inspection, a model that is neither physical nor perceptual nor based on
+    /// correctness merits and its use should be strongly reconsidered in favor of a proper Lab-like
+    /// color model. Please stop, please. <https://en.wikipedia.org/wiki/HSL_and_HSV#Disadvantages>
+    Hsv,
+    /// HSL (Hue, saturation, lightness).
+    ///
+    /// Careful, lightness means neither luminance nor perceptual lightness and is a mere
+    /// arithmetic mean of color values. Some recommend using Luma (based on primary weights)
+    /// instead but neglect to mention a specific standard. Really research what definition was
+    /// used when the pixel color was computed. Good luck.
+    ///
+    /// On closer inspection, a model that is neither physical nor perceptual nor based on
+    /// correctness merits and its use should be strongly reconsidered in favor of a proper Lab-like
+    /// color model. Please stop, please. <https://en.wikipedia.org/wiki/HSL_and_HSV#Disadvantages>
+    Hsl,
+}
+
 /// Describes a single channel from an image.
 /// Note that it must match the descriptor when used in `extract` and `inject`.
 ///
@@ -154,6 +230,8 @@ pub enum Luminance {
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 #[non_exhaustive]
 pub enum Primaries {
+    /// The CIE XYZ 'primaries'.
+    Xyz,
     Bt601_525,
     Bt601_625,
     Bt709,

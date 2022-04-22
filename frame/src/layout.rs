@@ -104,6 +104,10 @@ pub struct SampleParts {
 macro_rules! sample_parts {
     ( $($(#[$attr:meta])* $name:ident = $($ch:path),+;)* ) => {
         $(sample_parts! { $(#[$attr])* $name = $($ch),* })*
+
+        impl SampleParts {
+            $(sample_parts! { $(#[$attr])* $name = $($ch),* })*
+        }
     };
     ($(#[$attr:meta])* $name:ident = $ch0:path) => {
         $(#[$attr])*
@@ -326,6 +330,36 @@ impl Texel {
     }
 }
 
+impl ColorChannel {
+    /// The color model of the channel.
+    ///
+    /// Returns `None` if it does not belong to any singular color model.
+    pub fn in_model(self, model: ColorChannelModel) -> bool {
+        self.canonical_index_in(model).is_some()
+    }
+
+    // Figure out how to expose this.. Return type is not entirely clear.
+    fn canonical_index_in(self, model: ColorChannelModel) -> Option<u8> {
+        use ColorChannel::*;
+        use ColorChannelModel::*;
+        Some(match (self, model) {
+            (R | X, Rgb) => 0,
+            (G | Y, Rgb) => 1,
+            (B | Z, Rgb) => 2,
+            (Luma, Yuv) => 0,
+            (Cb, Yuv) => 1,
+            (Cr, Yuv) => 2,
+            (L, Lab) => 0,
+            (LABa | C, Lab) => 1,
+            (LABb | LABh, Lab) => 2,
+            // Alpha allowed anywhere, as the last component.
+            (Alpha, _) => 3,
+            // FIXME: Scalar0, Scalar1, Scalar2
+            _ => return None,
+        })
+    }
+}
+
 impl SampleBits {
     /// Determine the number of bytes for texels containing these samples.
     pub fn bytes(self) -> usize {
@@ -344,12 +378,38 @@ impl SampleBits {
 }
 
 impl SampleParts {
+    /// Create from up to four color channels.
+    ///
+    /// The order of parts will be remembered. All color channels must belong to a common color
+    /// representation.
+    pub fn new(parts: [Option<ColorChannel>; 4], model: ColorChannelModel) -> Option<Self> {
+        let mut unused = [true; 4];
+        for part in parts {
+            if let Some(p) = part {
+                let idx = p.canonical_index_in(model)?;
+                if !core::mem::take(&mut unused[idx as usize]) {
+                    return None;
+                }
+            }
+        }
+
+        Some(SampleParts { parts })
+    }
+
     pub fn num_components(self) -> u8 {
         self.parts.iter().map(|ch| u8::from(ch.is_some())).sum()
     }
 }
 
 impl Color {
+    pub fn model(&self) -> Option<ColorChannelModel> {
+        Some(match self {
+            Color::Rgb { .. } => ColorChannelModel::Rgb,
+            Color::Oklab => ColorChannelModel::Lab,
+            Color::Scalars { .. } => return None,
+        })
+    }
+
     /// Check if this color space contains the sample parts.
     ///
     /// For example, an Xyz color is expressed in terms of a subset of Rgb while HSV color spaces
