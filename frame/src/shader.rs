@@ -6,8 +6,8 @@ use canvas::canvas::{CanvasMut, CanvasRef};
 use canvas::{canvas::Coord, AsTexel, Texel, TexelBuffer};
 use core::ops::Range;
 
-use crate::frame::{Frame, TexelKind};
-use crate::layout::{ByteLayout, Layout};
+use crate::frame::Frame;
+use crate::layout::{ByteLayout, FrameLayout, SampleBits, Texel as TexelBits};
 
 /// A buffer for conversion.
 pub struct Converter {
@@ -46,9 +46,9 @@ struct TexelCoord(Coord);
 
 struct Info {
     /// Layout of the input frame.
-    in_layout: Layout,
+    in_layout: FrameLayout,
     /// Layout of the output frame.
-    out_layout: Layout,
+    out_layout: FrameLayout,
     /// The selected way to represent pixels in common parameter space.
     common_pixel: CommonPixel,
     /// The selected common color space, midpoint for conversion.
@@ -65,6 +65,31 @@ struct Info {
     out_kind: TexelKind,
 }
 
+/// Denotes the type we pass to the color decoder.
+///
+/// This is an internal type due to the type assigned to each color being an implementation detail.
+/// Consider that rgb565 can be passed as u16 or a special wrapper type for example. Or that
+/// `[f16; 2]` can be a `u32` or a `[u16; 2]` or a wrapper. Until there's indication that this
+/// needs stabilization it's kept secret.
+///
+/// For a valid layout it also fits to the indicated color components. There may be more than one
+/// pixel in each texel.
+#[derive(Clone, Copy)]
+pub enum TexelKind {
+    U8,
+    U8x2,
+    U8x3,
+    U8x4,
+    U16,
+    U16x2,
+    U16x3,
+    U16x4,
+    F32,
+    F32x2,
+    F32x3,
+    F32x4,
+}
+
 enum CommonPixel {
     U8x4,
     U16x4,
@@ -76,8 +101,8 @@ enum CommonColor {
     CieXyz,
 }
 
-type PlaneSource<'data, 'layout> = CanvasRef<'data, &'layout Layout>;
-type PlaneTarget<'data, 'layout> = CanvasMut<'data, &'layout mut Layout>;
+type PlaneSource<'data, 'layout> = CanvasRef<'data, &'layout FrameLayout>;
+type PlaneTarget<'data, 'layout> = CanvasMut<'data, &'layout mut FrameLayout>;
 
 /// The function pointers doing the conversion.
 ///
@@ -360,14 +385,14 @@ impl Converter {
     }
 
     fn index_from_in_info(info: &Info, texel: &[TexelCoord], idx: &mut [usize]) {
-        Self::index_from_layer(&info.in_layout.bytes, texel, idx)
+        Self::index_from_layer(&info.in_layout, texel, idx)
     }
 
     fn index_from_out_info(info: &Info, texel: &[TexelCoord], idx: &mut [usize]) {
-        Self::index_from_layer(&info.out_layout.bytes, texel, idx)
+        Self::index_from_layer(&info.out_layout, texel, idx)
     }
 
-    fn index_from_layer(info: &ByteLayout, texel: &[TexelCoord], idx: &mut [usize]) {
+    fn index_from_layer(info: &FrameLayout, texel: &[TexelCoord], idx: &mut [usize]) {
         for (&TexelCoord(Coord(x, y)), idx) in texel.iter().zip(idx) {
             *idx = info.texel_index(x, y) as usize;
         }
@@ -381,5 +406,56 @@ impl CommonPixel {
 
     fn join_from_info(self) -> fn(&Info, &TexelBuffer, &mut TexelBuffer) {
         todo!()
+    }
+}
+
+impl TexelKind {
+    fn byte_len(&self) -> usize {
+        use TexelKind::*;
+        match self {
+            U8 => 1,
+            U8x2 => 2,
+            U8x3 => 3,
+            U8x4 => 4,
+            U16 => 2,
+            U16x2 => 4,
+            U16x3 => 6,
+            U16x4 => 8,
+            F32 => 4,
+            F32x2 => 8,
+            F32x3 => 12,
+            F32x4 => 16,
+        }
+    }
+}
+
+impl From<TexelBits> for TexelKind {
+    fn from(texel: TexelBits) -> Self {
+        Self::from(texel.bits)
+    }
+}
+
+impl From<SampleBits> for TexelKind {
+    fn from(bits: SampleBits) -> Self {
+        match bits {
+            SampleBits::Int8 | SampleBits::Int332 | SampleBits::Int233 => TexelKind::U8,
+            SampleBits::Int16
+            | SampleBits::Int4x4
+            | SampleBits::Int_444
+            | SampleBits::Int444_
+            | SampleBits::Int565 => TexelKind::U16,
+            SampleBits::Int8x2 => TexelKind::U8x2,
+            SampleBits::Int8x3 => TexelKind::U8x3,
+            SampleBits::Int8x4 => TexelKind::U8x4,
+            SampleBits::Int16x2 => TexelKind::U16x2,
+            SampleBits::Int16x3 => TexelKind::U16x3,
+            SampleBits::Int16x4 => TexelKind::U16x4,
+            SampleBits::Int1010102
+            | SampleBits::Int2101010
+            | SampleBits::Int101010_
+            | SampleBits::Int_101010 => TexelKind::U16x2,
+            SampleBits::Float16x4 => TexelKind::U16x4,
+            SampleBits::Float32x4 => TexelKind::F32x3,
+        }
     }
 }

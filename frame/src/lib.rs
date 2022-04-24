@@ -10,7 +10,8 @@ mod shader;
 pub use self::color::{
     Color, ColorChannel, ColorChannelModel, Luminance, Primaries, Transfer, Whitepoint,
 };
-pub use self::frame::{Frame, PlanarBytes, PlanarLayout, SampleLayout};
+pub use self::frame::Frame;
 pub use self::layout::{
-    Block, ByteLayout, Layout, RowLayoutDescription, SampleBits, SampleParts, Texel,
+    Block, ChannelLayout, FrameLayout, PlanarBytes, PlanarLayout, RowLayoutDescription, SampleBits,
+    SampleParts, Texel,
 };

@@ -1,36 +1,75 @@
 //! Defines layout and buffer of our images.
 use crate::color::*;
-use canvas::layout::{Layout as CanvasLayout, Raster};
+use canvas::layout::{Layout as CanvasLayout, Matrix, MatrixBytes, MatrixLayout, Raster};
 
 /// The byte layout of a buffer.
 ///
 /// An inner invariant is that the layout fits in memory, and in particular into a `usize`, while
 /// at the same time also fitting inside a `u64` of bytes.
 #[derive(Clone, Debug, PartialEq, Eq, Hash)]
-pub struct ByteLayout {
-    /// The number of texels along our width.
+pub(crate) struct ByteLayout {
+    /// The number of pixels along our width.
     pub(crate) width: u32,
-    /// The number of texels along our height.
+    /// The number of pixels along our height.
     pub(crate) height: u32,
-    /// The number of bytes per texel.
-    /// We need to be able to infallibly convert to both `usize` and `u32`. Thus we have chosen
-    /// `u8` for now because no actual texel is that large. However, we could use some other type
-    /// to represent the intersection of our two target types (i.e. the `index-ext` crate has
-    /// `mem::Umem32` with those exact semantics).
-    pub(crate) bytes_per_texel: u8,
     /// The number of bytes per row.
     /// This is a u32 for compatibility with `wgpu`.
     pub(crate) bytes_per_row: u32,
 }
 
+/// The layout of a full frame, with all planes and color.
 #[derive(Clone, Debug, PartialEq)]
-pub struct Layout {
+pub struct FrameLayout {
+    // TODO: planarity..
+    /// The primary layout descriptor of the image itself.
+    /// When no explicit planes are given then this describes the sole plane as well.
     pub(crate) bytes: ByteLayout,
     /// The texel representing merged layers.
+    /// When no explicit planes are given then this describes the sole plane as well.
     pub(crate) texel: Texel,
-    // TODO: planarity..
     /// How the numbers relate to physical quantities, important for conversion.
-    pub(crate) color: Color,
+    pub(crate) color: Option<Color>,
+    /// Additional color planes, if any.
+    pub(crate) planes: Box<[Plane]>,
+}
+
+/// The layout of a single color plane, internal.
+///
+/// This isn't a full descriptor as width and height in numbers of texels can be derived from the
+/// underlying byte layout.
+#[derive(Clone, Debug, PartialEq)]
+pub(crate) struct Plane {
+    /// Representation of the partial texel of the full frame.
+    pub(crate) texel: Texel,
+}
+
+/// A layout with uniformly spaced (color) channels.
+pub struct ChannelLayout {
+    pub channels: u8,
+    pub channel_stride: usize,
+    pub height: u32,
+    pub height_stride: usize,
+    pub width: u32,
+    pub width_stride: usize,
+}
+
+/// The byte matrix layout of a single plane of the image.
+pub struct PlanarBytes {
+    /// Offset within the image in bytes.
+    pub offset: usize,
+    /// The matrix descriptor of this plane.
+    pub matrix: MatrixBytes,
+}
+
+/// The typed matrix layout of a single plane of the image.
+///
+/// Note that this is _not_ fully public like the related [`PlanarBytes`] as we have invariants
+/// relating the texel type to alignment and offset of the matrix within the image.
+pub struct PlanarLayout<T> {
+    /// Offset within the image in bytes.
+    offset: usize,
+    /// The matrix descriptor of this plane.
+    matrix: Matrix<T>,
 }
 
 /// Describe a row-major rectangular matrix layout.
@@ -39,8 +78,8 @@ pub struct Layout {
 /// texels. It assumes a row-major layout without space between texels of a row as that is the most
 /// efficient and common such layout.
 ///
-/// For usage as an actual image buffer, to convert it to a `Layout` by calling
-/// [`Layout::with_row_layout`].
+/// For usage as an actual image buffer, to convert it to a `FrameLayout` by calling
+/// [`FrameLayout::with_row_layout`].
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub struct RowLayoutDescription {
     pub width: u32,
@@ -53,7 +92,7 @@ pub struct RowLayoutDescription {
 #[derive(Clone, Debug, PartialEq)]
 pub struct LayoutDescriptor {
     /// The byte and physical layout of the buffer.
-    pub layout: ByteLayout,
+    layout: ByteLayout,
     /// Describe how each single texel is interpreted.
     pub texel: Texel,
     /// How the numbers relate to physical quantities, important for conversion.
@@ -99,6 +138,8 @@ pub enum Block {
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct SampleParts {
     parts: [Option<ColorChannel>; 4],
+    /// The position of each channel as a 2-bit number.
+    position: u8,
 }
 
 macro_rules! sample_parts {
@@ -112,25 +153,29 @@ macro_rules! sample_parts {
     ($(#[$attr:meta])* $name:ident = $ch0:path) => {
         $(#[$attr])*
         pub const $name: SampleParts = SampleParts {
-            parts: [Some($ch0), None, None, None]
+            parts: [Some($ch0), None, None, None],
+            position: 0b11100100,
         };
     };
     ($(#[$attr:meta])* $name:ident = $ch0:path,$ch1:path) => {
         $(#[$attr])*
         pub const $name: SampleParts = SampleParts {
-            parts: [Some($ch0), Some($ch1), None, None]
+            parts: [Some($ch0), Some($ch1), None, None],
+            position: 0b11100100,
         };
     };
     ($(#[$attr:meta])* $name:ident = $ch0:path,$ch1:path,$ch2:path) => {
         $(#[$attr])*
         pub const $name: SampleParts = SampleParts {
-            parts: [Some($ch0), Some($ch1), Some($ch2), None]
+            parts: [Some($ch0), Some($ch1), Some($ch2), None],
+            position: 0b11100100,
         };
     };
     ($(#[$attr:meta])* $name:ident = $ch0:path,$ch1:path,$ch2:path,$ch3:path) => {
         $(#[$attr])*
         pub const $name: SampleParts = SampleParts {
-            parts: [Some($ch0), Some($ch1), Some($ch2), Some($ch3)]
+            parts: [Some($ch0), Some($ch1), Some($ch2), Some($ch3)],
+            position: 0b11100100,
         };
     };
 }
@@ -242,7 +287,6 @@ impl LayoutDescriptor {
         layout: ByteLayout {
             width: 0,
             height: 0,
-            bytes_per_texel: 4,
             bytes_per_row: 0,
         },
         texel: Texel {
@@ -275,8 +319,11 @@ impl LayoutDescriptor {
     /// correspond to each other, and the sample parts and sample bits field is correct, and the
     /// texel descriptor has the same number of bytes as the layout, etc.
     pub fn is_consistent(&self) -> bool {
-        // FIXME: other checks.
-        self.texel.bits.bytes() == usize::from(self.layout.bytes_per_texel)
+        // FIXME: actual checks.
+        // * bits and parts belong
+        // * for planar content everything is okay.
+        // * bytes_per_row does not overlap
+        true
     }
 
     /// Calculate the total number of pixels in width of this layout.
@@ -362,7 +409,7 @@ impl ColorChannel {
 
 impl SampleBits {
     /// Determine the number of bytes for texels containing these samples.
-    pub fn bytes(self) -> usize {
+    pub fn bytes(self) -> u16 {
         use SampleBits::*;
         #[allow(non_upper_case_globals)]
         match self {
@@ -384,16 +431,23 @@ impl SampleParts {
     /// representation.
     pub fn new(parts: [Option<ColorChannel>; 4], model: ColorChannelModel) -> Option<Self> {
         let mut unused = [true; 4];
-        for part in parts {
+        let mut position = [0; 4];
+        for (part, pos) in parts.into_iter().zip(&mut position) {
             if let Some(p) = part {
                 let idx = p.canonical_index_in(model)?;
                 if !core::mem::take(&mut unused[idx as usize]) {
                     return None;
                 }
+                *pos = idx;
             }
         }
 
-        Some(SampleParts { parts })
+        let position = position
+            .into_iter()
+            .enumerate()
+            .fold(0u8, |acc, (pos, idx)| acc | idx << (2 * pos));
+
+        Some(SampleParts { parts, position })
     }
 
     pub fn num_components(self) -> u8 {
@@ -470,7 +524,6 @@ impl ByteLayout {
         Some(ByteLayout {
             width: rows.width,
             height: rows.height,
-            bytes_per_texel,
             bytes_per_row,
         })
     }
@@ -508,12 +561,15 @@ impl ByteLayout {
         // No overflow due to inner invariant.
         (self.bytes_per_row as usize) * (self.height as usize)
     }
+}
 
+impl FrameLayout {
     /// Returns the index of a texel in a slice of planar image data.
     pub fn texel_index(&self, x: u32, y: u32) -> u64 {
-        let byte_index = u64::from(y) * u64::from(self.bytes_per_row)
-            + u64::from(x) * u64::from(self.bytes_per_texel);
-        byte_index / u64::from(self.bytes_per_texel)
+        let bytes_per_texel = self.texel.bits.bytes();
+        let byte_index = u64::from(y) * u64::from(self.bytes.bytes_per_row)
+            + u64::from(x) * u64::from(bytes_per_texel);
+        byte_index / u64::from(bytes_per_texel)
     }
 
     /// Returns a matrix descriptor that can store all bytes.
@@ -524,16 +580,58 @@ impl ByteLayout {
     /// the returned descriptor can be used to re-arrange all bytes into a simple matrix form.
     pub fn as_row_layout(&self) -> RowLayoutDescription {
         RowLayoutDescription {
-            width: self.width,
-            height: self.height,
-            texel_stride: u64::from(self.bytes_per_texel),
-            row_stride: u64::from(self.bytes_per_row),
+            width: self.bytes.width,
+            height: self.bytes.height,
+            texel_stride: u64::from(self.texel.bits.bytes()),
+            row_stride: u64::from(self.bytes.bytes_per_row),
         }
     }
 }
 
-impl CanvasLayout for Layout {
+impl CanvasLayout for FrameLayout {
     fn byte_len(&self) -> usize {
         ByteLayout::byte_len(&self.bytes)
+    }
+}
+
+impl<T> CanvasLayout for PlanarLayout<T> {
+    fn byte_len(&self) -> usize {
+        self.matrix.byte_len() + self.offset
+    }
+}
+
+impl CanvasLayout for PlanarBytes {
+    fn byte_len(&self) -> usize {
+        self.matrix.byte_len() + self.offset
+    }
+}
+
+impl<T> MatrixLayout for PlanarLayout<T> {
+    fn matrix(&self) -> MatrixBytes {
+        self.matrix.matrix()
+    }
+}
+
+impl MatrixLayout for PlanarBytes {
+    fn matrix(&self) -> MatrixBytes {
+        self.matrix.clone()
+    }
+}
+
+impl<T> Raster<T> for PlanarLayout<T> {
+    fn dimensions(&self) -> canvas::canvas::Coord {
+        self.matrix.dimensions()
+    }
+
+    fn get(from: canvas::canvas::CanvasRef<&Self>, at: canvas::canvas::Coord) -> Option<T> {
+        let (x, y) = at.xy();
+        let layout = from.layout();
+        let matrix = &layout.matrix;
+        let texel = matrix.pixel();
+        // TODO: should we add a method to `canvas::Matrix`?
+        let idx = y as usize * matrix.width() + x as usize;
+        let slice = from.as_texels(texel);
+        let value = slice.get(layout.offset..)?.get(idx)?;
+        Some(texel.copy_val(value))
     }
 }
