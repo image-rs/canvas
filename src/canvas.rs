@@ -582,6 +582,15 @@ impl<'data, L> CanvasMut<'data, L> {
         self.inner.borrow_mut().into()
     }
 
+    /// Convert to a view of this canvas.
+    pub fn into_ref(self) -> CanvasRef<'data, L> {
+        RawCanvas {
+            layout: self.inner.layout,
+            buffer: &*self.inner.buffer,
+        }
+        .into()
+    }
+
     /// Check if a call to [`CanvasMut::with_layout`] would succeed, without consuming this reference.
     pub fn fits(&self, other: &impl Layout) -> bool {
         self.inner.fits(other)

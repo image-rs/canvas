@@ -1,6 +1,9 @@
 //! Defines layout and buffer of our images.
 use crate::color::*;
-use canvas::layout::{Layout as CanvasLayout, Matrix, MatrixBytes, MatrixLayout, Raster};
+use canvas::layout::{
+    Decay, Layout as CanvasLayout, Matrix, MatrixBytes, MatrixLayout, Raster, StrideSpec,
+    StridedBytes, StridedTexels,
+};
 
 /// The byte layout of a buffer.
 ///
@@ -39,6 +42,7 @@ pub struct FrameLayout {
 /// underlying byte layout.
 #[derive(Clone, Debug, PartialEq)]
 pub(crate) struct Plane {
+    pub(crate) bytes_per_row: u32,
     /// Representation of the partial texel of the full frame.
     pub(crate) texel: Texel,
 }
@@ -56,9 +60,9 @@ pub struct ChannelLayout {
 /// The byte matrix layout of a single plane of the image.
 pub struct PlanarBytes {
     /// Offset within the image in bytes.
-    pub offset: usize,
+    offset: usize,
     /// The matrix descriptor of this plane.
-    pub matrix: MatrixBytes,
+    matrix: MatrixBytes,
 }
 
 /// The typed matrix layout of a single plane of the image.
@@ -422,6 +426,19 @@ impl SampleBits {
             Float32x4 => 16,
         }
     }
+
+    fn layout(self) -> canvas::layout::TexelLayout {
+        use crate::shader::{GenericTexelAction, TexelKind};
+        struct ToLayout;
+
+        impl GenericTexelAction<canvas::layout::TexelLayout> for ToLayout {
+            fn run<T>(self, texel: canvas::Texel<T>) -> canvas::layout::TexelLayout {
+                texel.into()
+            }
+        }
+
+        TexelKind::from(self).action(ToLayout)
+    }
 }
 
 impl SampleParts {
@@ -586,6 +603,61 @@ impl FrameLayout {
             row_stride: u64::from(self.bytes.bytes_per_row),
         }
     }
+
+    /// Returns the width of the underlying image in pixels.
+    pub fn width(&self) -> u32 {
+        self.bytes.width
+    }
+
+    /// Returns the height of the underlying image in pixels.
+    pub fn height(&self) -> u32 {
+        self.bytes.height
+    }
+
+    pub(crate) fn plane(&self, idx: usize) -> Option<PlanarBytes> {
+        if !self.planes.is_empty() {
+            // TODO: support.
+            return None;
+        }
+
+        if idx != 0 {
+            return None;
+        }
+
+        let matrix = MatrixBytes::from_width_height(
+            self.texel.bits.layout(),
+            self.bytes.width as usize,
+            self.bytes.height as usize,
+        )
+        .unwrap();
+
+        Some(PlanarBytes { offset: 0, matrix })
+    }
+
+    // Verify that the byte-length is below `isize::MAX`.
+    fn validate(this: Self) -> Option<Self> {
+        let lines = usize::try_from(this.bytes.width).ok()?;
+        let height = usize::try_from(this.bytes.height).ok()?;
+        let ok = height
+            .checked_mul(lines)
+            .map_or(false, |len| len < isize::MAX as usize);
+        Some(this).filter(|_| ok)
+    }
+}
+
+impl PlanarBytes {
+    pub(crate) fn is_compatible<T>(&self, texel: canvas::Texel<T>) -> Option<PlanarLayout<T>> {
+        use canvas::layout::TryMend;
+
+        if self.offset % texel.align() != 0 {
+            return None;
+        }
+
+        Some(PlanarLayout {
+            offset: self.offset,
+            matrix: texel.try_mend(&self.matrix).ok()?,
+        })
+    }
 }
 
 impl CanvasLayout for FrameLayout {
@@ -606,18 +678,6 @@ impl CanvasLayout for PlanarBytes {
     }
 }
 
-impl<T> MatrixLayout for PlanarLayout<T> {
-    fn matrix(&self) -> MatrixBytes {
-        self.matrix.matrix()
-    }
-}
-
-impl MatrixLayout for PlanarBytes {
-    fn matrix(&self) -> MatrixBytes {
-        self.matrix.clone()
-    }
-}
-
 impl<T> Raster<T> for PlanarLayout<T> {
     fn dimensions(&self) -> canvas::canvas::Coord {
         self.matrix.dimensions()
@@ -633,5 +693,14 @@ impl<T> Raster<T> for PlanarLayout<T> {
         let slice = from.as_texels(texel);
         let value = slice.get(layout.offset..)?.get(idx)?;
         Some(texel.copy_val(value))
+    }
+}
+
+impl<T> Decay<PlanarLayout<T>> for PlanarBytes {
+    fn decay(from: PlanarLayout<T>) -> Self {
+        PlanarBytes {
+            offset: from.offset,
+            matrix: from.matrix.into(),
+        }
     }
 }

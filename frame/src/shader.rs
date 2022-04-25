@@ -90,6 +90,10 @@ pub enum TexelKind {
     F32x4,
 }
 
+pub(crate) trait GenericTexelAction<R = ()> {
+    fn run<T>(self, texel: Texel<T>) -> R;
+}
+
 enum CommonPixel {
     U8x4,
     U16x4,
@@ -300,32 +304,17 @@ impl Converter {
             into: &'data mut TexelBuffer,
         }
 
-        impl ReadUnit<'_, '_> {
-            fn fetch_as<T>(self, texel: Texel<T>) {
+        impl GenericTexelAction for ReadUnit<'_, '_> {
+            fn run<T>(self, texel: Texel<T>) {
                 fetchFromTexelArray(self.from, self.idx, self.into, texel)
             }
         }
 
-        let unit = ReadUnit {
+        self.info.in_kind.action(ReadUnit {
             from,
             idx: &self.in_index,
             into: &mut self.in_texels,
-        };
-
-        match self.info.in_kind {
-            TexelKind::U8 => unit.fetch_as(u8::texel()),
-            TexelKind::U8x2 => unit.fetch_as(<[u8; 2]>::texel()),
-            TexelKind::U8x3 => unit.fetch_as(<[u8; 3]>::texel()),
-            TexelKind::U8x4 => unit.fetch_as(<[u8; 4]>::texel()),
-            TexelKind::U16 => unit.fetch_as(<[u16; 1]>::texel()),
-            TexelKind::U16x2 => unit.fetch_as(<[u16; 2]>::texel()),
-            TexelKind::U16x3 => unit.fetch_as(<[u16; 3]>::texel()),
-            TexelKind::U16x4 => unit.fetch_as(<[u16; 4]>::texel()),
-            TexelKind::F32 => unit.fetch_as(<[f32; 1]>::texel()),
-            TexelKind::F32x2 => unit.fetch_as(<[f32; 2]>::texel()),
-            TexelKind::F32x3 => unit.fetch_as(<[f32; 3]>::texel()),
-            TexelKind::F32x4 => unit.fetch_as(<[f32; 4]>::texel()),
-        }
+        })
     }
 
     fn write_texels(&mut self, into: PlaneTarget) {
@@ -348,32 +337,17 @@ impl Converter {
             from: &'data TexelBuffer,
         }
 
-        impl WriteUnit<'_, '_> {
-            fn write_as<T>(self, texel: Texel<T>) {
+        impl GenericTexelAction for WriteUnit<'_, '_> {
+            fn run<T>(self, texel: Texel<T>) {
                 writeFromTexelArray(self.into, self.idx, self.from, texel)
             }
         }
 
-        let unit = WriteUnit {
+        self.info.out_kind.action(WriteUnit {
             into,
             idx: &self.in_index,
-            from: &self.out_texels,
-        };
-
-        match self.info.out_kind {
-            TexelKind::U8 => unit.write_as(u8::texel()),
-            TexelKind::U8x2 => unit.write_as(<[u8; 2]>::texel()),
-            TexelKind::U8x3 => unit.write_as(<[u8; 3]>::texel()),
-            TexelKind::U8x4 => unit.write_as(<[u8; 4]>::texel()),
-            TexelKind::U16 => unit.write_as(<[u16; 1]>::texel()),
-            TexelKind::U16x2 => unit.write_as(<[u16; 2]>::texel()),
-            TexelKind::U16x3 => unit.write_as(<[u16; 3]>::texel()),
-            TexelKind::U16x4 => unit.write_as(<[u16; 4]>::texel()),
-            TexelKind::F32 => unit.write_as(<[f32; 1]>::texel()),
-            TexelKind::F32x2 => unit.write_as(<[f32; 2]>::texel()),
-            TexelKind::F32x3 => unit.write_as(<[f32; 3]>::texel()),
-            TexelKind::F32x4 => unit.write_as(<[f32; 4]>::texel()),
-        }
+            from: &mut self.out_texels,
+        });
     }
 
     fn blocks(x: Range<u32>, y: Range<u32>) -> impl Iterator<Item = TexelCoord> + Clone {
@@ -425,6 +399,23 @@ impl TexelKind {
             F32x2 => 8,
             F32x3 => 12,
             F32x4 => 16,
+        }
+    }
+
+    pub(crate) fn action<R>(self, action: impl GenericTexelAction<R>) -> R {
+        match self {
+            TexelKind::U8 => action.run(u8::texel()),
+            TexelKind::U8x2 => action.run(<[u8; 2]>::texel()),
+            TexelKind::U8x3 => action.run(<[u8; 3]>::texel()),
+            TexelKind::U8x4 => action.run(<[u8; 4]>::texel()),
+            TexelKind::U16 => action.run(<[u16; 1]>::texel()),
+            TexelKind::U16x2 => action.run(<[u16; 2]>::texel()),
+            TexelKind::U16x3 => action.run(<[u16; 3]>::texel()),
+            TexelKind::U16x4 => action.run(<[u16; 4]>::texel()),
+            TexelKind::F32 => action.run(<[f32; 1]>::texel()),
+            TexelKind::F32x2 => action.run(<[f32; 2]>::texel()),
+            TexelKind::F32x3 => action.run(<[f32; 3]>::texel()),
+            TexelKind::F32x4 => action.run(<[f32; 4]>::texel()),
         }
     }
 }

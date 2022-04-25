@@ -1,6 +1,5 @@
 //! A byte-buffer based image descriptor.
 use canvas::canvas::{CanvasMut, CanvasRef};
-use canvas::layout::{Layout as CanvasLayout, MatrixLayout, Raster};
 
 use crate::layout::{
     ByteLayout, ChannelLayout, FrameLayout, PlanarBytes, PlanarLayout, SampleBits, Texel,
@@ -11,43 +10,29 @@ pub struct Frame {
     inner: canvas::Canvas<FrameLayout>,
 }
 
+/// A byte buffer containing a single plane.
+pub struct Plane {
+    inner: canvas::Canvas<FrameLayout>,
+}
+
 /// Represents a single matrix like layer of an image.
-pub struct LayerRef<'data, T> {
+pub struct PlaneBytes<'data> {
+    inner: CanvasRef<'data, PlanarBytes>,
+}
+
+/// Represents a single matrix like layer of an image.
+pub struct PlaneBytesMut<'data> {
+    inner: CanvasMut<'data, PlanarBytes>,
+}
+
+/// Represents a single matrix like layer of an image.
+pub struct PlaneRef<'data, T> {
     inner: CanvasRef<'data, PlanarLayout<T>>,
 }
 
 /// Represents a single mutable matrix like layer of an image.
-pub struct LayerMut<'data, T> {
+pub struct PlaneMut<'data, T> {
     inner: CanvasMut<'data, PlanarLayout<T>>,
-}
-
-impl FrameLayout {
-    // Verify that the byte-length is below `isize::MAX`.
-    fn validate(this: Self) -> Option<Self> {
-        let lines = usize::try_from(this.bytes.width).ok()?;
-        let height = usize::try_from(this.bytes.height).ok()?;
-        let ok = height
-            .checked_mul(lines)
-            .map_or(false, |len| len < isize::MAX as usize);
-        Some(this).filter(|_| ok)
-    }
-
-    /// Returns the width of the underlying image in pixels.
-    pub fn width(&self) -> u32 {
-        self.bytes.width
-    }
-
-    /// Returns the height of the underlying image in pixels.
-    pub fn height(&self) -> u32 {
-        self.bytes.height
-    }
-
-    fn flat_layout(&self) -> Option<ChannelLayout> {
-        Some(ChannelLayout {
-            channels: todo!(),
-            ..todo!()
-        })
-    }
 }
 
 impl Frame {
@@ -79,17 +64,17 @@ impl Frame {
     }
 
     /// Get the matrix-like sample descriptor if the samples are `u8`.
-    pub fn as_flat_samples_u8(&self) -> Option<LayerRef<u8>> {
+    pub fn as_flat_samples_u8(&self) -> Option<PlaneRef<u8>> {
         None
     }
 
     /// Get the matrix-like sample descriptor if the samples are `u16`.
-    pub fn as_flat_samples_u16(&self) -> Option<LayerRef<u16>> {
+    pub fn as_flat_samples_u16(&self) -> Option<PlaneRef<u16>> {
         None
     }
 
     /// Get the matrix-like sample descriptor if the samples are `f32`.
-    pub fn as_flat_samples_f32(&self) -> Option<LayerRef<f32>> {
+    pub fn as_flat_samples_f32(&self) -> Option<PlaneRef<f32>> {
         None
     }
 
@@ -99,11 +84,78 @@ impl Frame {
         self.as_bytes().to_owned()
     }
 
+    pub fn plane(&self, idx: usize) -> Option<PlaneBytes<'_>> {
+        let layout = self.layout().plane(idx)?;
+        Some(PlaneBytes {
+            inner: self.inner.as_ref().with_layout(layout)?,
+        })
+    }
+
+    pub fn plane_mut(&mut self, idx: usize) -> Option<PlaneBytesMut<'_>> {
+        let layout = self.layout().plane(idx)?;
+        Some(PlaneBytesMut {
+            inner: self.inner.as_mut().with_layout(layout)?,
+        })
+    }
+
     pub(crate) fn as_ref(&self) -> CanvasRef<'_, &'_ FrameLayout> {
         self.inner.as_ref()
     }
 
     pub(crate) fn as_mut(&mut self) -> CanvasMut<'_, &'_ mut FrameLayout> {
         self.inner.as_mut()
+    }
+}
+
+impl<'data> PlaneBytes<'data> {
+    /// Upgrade to a view with strongly typed texel type.
+    pub fn as_texels<T>(self, texel: canvas::Texel<T>) -> Option<PlaneRef<'data, T>> {
+        if let Some(layout) = self.inner.layout().is_compatible(texel) {
+            Some(PlaneRef {
+                inner: self.inner.with_layout(layout).unwrap(),
+            })
+        } else {
+            None
+        }
+    }
+}
+
+impl<'data> PlaneBytesMut<'data> {
+    /// Upgrade to a view with strongly typed texel type.
+    pub fn as_texels<T>(self, texel: canvas::Texel<T>) -> Option<PlaneRef<'data, T>> {
+        if let Some(layout) = self.inner.layout().is_compatible(texel) {
+            Some(PlaneRef {
+                inner: self.inner.into_ref().with_layout(layout).unwrap(),
+            })
+        } else {
+            None
+        }
+    }
+
+    /// Upgrade to a mutable view with strongly typed texel type.
+    pub fn as_mut_texels<T>(self, texel: canvas::Texel<T>) -> Option<PlaneMut<'data, T>> {
+        if let Some(layout) = self.inner.layout().is_compatible(texel) {
+            Some(PlaneMut {
+                inner: self.inner.with_layout(layout).unwrap(),
+            })
+        } else {
+            None
+        }
+    }
+}
+
+impl<'data, T> From<PlaneRef<'data, T>> for PlaneBytes<'data> {
+    fn from(plane: PlaneRef<'data, T>) -> Self {
+        PlaneBytes {
+            inner: plane.inner.decay().unwrap(),
+        }
+    }
+}
+
+impl<'data, T> From<PlaneMut<'data, T>> for PlaneBytesMut<'data> {
+    fn from(plane: PlaneMut<'data, T>) -> Self {
+        PlaneBytesMut {
+            inner: plane.inner.decay().unwrap(),
+        }
     }
 }
