@@ -60,9 +60,9 @@ pub struct ChannelLayout {
 /// The byte matrix layout of a single plane of the image.
 pub struct PlanarBytes {
     /// Offset within the image in bytes.
-    offset: usize,
+    offset_in_texels: usize,
     /// The matrix descriptor of this plane.
-    matrix: MatrixBytes,
+    matrix: StridedBytes,
 }
 
 /// The typed matrix layout of a single plane of the image.
@@ -71,9 +71,9 @@ pub struct PlanarBytes {
 /// relating the texel type to alignment and offset of the matrix within the image.
 pub struct PlanarLayout<T> {
     /// Offset within the image in bytes.
-    offset: usize,
+    offset_in_texels: usize,
     /// The matrix descriptor of this plane.
-    matrix: Matrix<T>,
+    matrix: StridedTexels<T>,
 }
 
 /// Describe a row-major rectangular matrix layout.
@@ -84,12 +84,12 @@ pub struct PlanarLayout<T> {
 ///
 /// For usage as an actual image buffer, to convert it to a `FrameLayout` by calling
 /// [`FrameLayout::with_row_layout`].
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+#[derive(Clone, Debug, PartialEq)]
 pub struct RowLayoutDescription {
     pub width: u32,
     pub height: u32,
-    pub texel_stride: u64,
     pub row_stride: u64,
+    pub texel: Texel,
 }
 
 /// Describes an image semantically.
@@ -268,6 +268,11 @@ pub enum SampleBits {
     Float32x4,
 }
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct LayoutError {
+    inner: (),
+}
+
 /// Denotes the 'position' of a channel in the sample parts.
 ///
 /// This is private for now because the constructor might be a bit confusing. In actuality, we are
@@ -302,9 +307,10 @@ impl LayoutDescriptor {
     };
 
     fn with_texel(texel: Texel, color: Color, width: u32, height: u32) -> Option<Self> {
-        let layout = ByteLayout::with_texel(&texel, width, height)?;
+        // TODO: a bit overkill, ain't it?
+        let layout = FrameLayout::with_texel(&texel, width, height)?;
         Some(LayoutDescriptor {
-            layout,
+            layout: layout.bytes,
             texel,
             color,
         })
@@ -523,64 +529,67 @@ impl Block {
     }
 }
 
-impl ByteLayout {
-    /// Create a buffer layout given the layout of a simple, strided matrix.
-    pub fn with_row_layout(rows: RowLayoutDescription) -> Option<Self> {
-        let bytes_per_texel = u8::try_from(rows.texel_stride).ok()?;
-        let bytes_per_row = u32::try_from(rows.row_stride).ok()?;
+impl FrameLayout {
+    pub fn new(texel: Texel, layers: &[PlanarBytes]) -> Result<Self, LayoutError> {
+        if layers.len() == 0 {
+            return Err(LayoutError::NO_INFO);
+        }
 
-        // Enforce that the layout makes sense and does not alias.
-        let _ = u32::from(bytes_per_texel)
-            .checked_mul(rows.width)
-            .filter(|&bwidth| bwidth <= bytes_per_row)?;
+        if layers.len() > 1 {
+            return Err(LayoutError::NO_INFO);
+        }
 
-        // Enforce our inner invariant.
-        let u64_len = u64::from(rows.height).checked_mul(rows.row_stride)?;
-        let _ = usize::try_from(u64_len).ok()?;
+        let spec = layers[0].matrix.spec();
 
-        Some(ByteLayout {
-            width: rows.width,
-            height: rows.height,
-            bytes_per_row,
+        Self::validate(FrameLayout {
+            bytes: ByteLayout {
+                width: spec.width.try_into().map_err(LayoutError::width_error)?,
+                height: spec.height.try_into().map_err(LayoutError::height_error)?,
+                bytes_per_row: spec.width_stride as u32,
+            },
+            planes: Box::default(),
+            texel,
+            color: None,
         })
+        .ok_or(LayoutError::NO_INFO)
+    }
+
+    /// Create a buffer layout given the layout of a simple, strided matrix.
+    pub fn with_row_layout(rows: &RowLayoutDescription) -> Option<Self> {
+        let bytes_per_texel = rows.texel.bits.bytes();
+        let bytes_per_row = usize::try_from(rows.row_stride).ok()?;
+
+        let stride = StrideSpec {
+            offset: 0,
+            width: rows.width as usize,
+            height: rows.height as usize,
+            element: rows.texel.bits.layout(),
+            height_stride: bytes_per_row,
+            width_stride: bytes_per_texel.into(),
+        };
+
+        let bytes = PlanarBytes {
+            offset_in_texels: 0,
+            matrix: StridedBytes::new(stride).ok()?,
+        };
+
+        Self::new(rows.texel.clone(), &[bytes]).ok()
     }
 
     /// Create a buffer layout from a texel and dimensions.
+    ///
+    /// This is a simplification of `with_row_layout` which itself is a simplified `new`.
     pub fn with_texel(texel: &Texel, width: u32, height: u32) -> Option<Self> {
         let texel_stride = u64::try_from(texel.bits.bytes()).ok()?;
-        Self::with_row_layout(RowLayoutDescription {
+        Self::with_row_layout(&RowLayoutDescription {
             width,
             height,
-            texel_stride,
             // Note: with_row_layout will do an overflow check anyways.
             row_stride: u64::from(width) * texel_stride,
+            texel: texel.clone(),
         })
     }
 
-    /// Returns the width in texels.
-    pub fn width(&self) -> u32 {
-        self.width
-    }
-
-    /// Returns the height in texels.
-    pub fn height(&self) -> u32 {
-        self.height
-    }
-
-    /// Returns the memory usage as a `u64`.
-    pub fn u64_len(&self) -> u64 {
-        // No overflow due to inner invariant.
-        u64::from(self.bytes_per_row) * u64::from(self.height)
-    }
-
-    /// Returns the memory usage as a `usize`.
-    pub fn byte_len(&self) -> usize {
-        // No overflow due to inner invariant.
-        (self.bytes_per_row as usize) * (self.height as usize)
-    }
-}
-
-impl FrameLayout {
     /// Returns the index of a texel in a slice of planar image data.
     pub fn texel_index(&self, x: u32, y: u32) -> u64 {
         let bytes_per_texel = self.texel.bits.bytes();
@@ -599,7 +608,7 @@ impl FrameLayout {
         RowLayoutDescription {
             width: self.bytes.width,
             height: self.bytes.height,
-            texel_stride: u64::from(self.texel.bits.bytes()),
+            texel: self.texel.clone(),
             row_stride: u64::from(self.bytes.bytes_per_row),
         }
     }
@@ -614,6 +623,18 @@ impl FrameLayout {
         self.bytes.height
     }
 
+    /// Returns the memory usage as a `u64`.
+    pub fn u64_len(&self) -> u64 {
+        // No overflow due to inner invariant.
+        u64::from(self.bytes.bytes_per_row) * u64::from(self.bytes.height)
+    }
+
+    /// Returns the memory usage as a `usize`.
+    pub fn byte_len(&self) -> usize {
+        // No overflow due to inner invariant.
+        (self.bytes.bytes_per_row as usize) * (self.bytes.height as usize)
+    }
+
     pub(crate) fn plane(&self, idx: usize) -> Option<PlanarBytes> {
         if !self.planes.is_empty() {
             // TODO: support.
@@ -624,18 +645,26 @@ impl FrameLayout {
             return None;
         }
 
-        let matrix = MatrixBytes::from_width_height(
-            self.texel.bits.layout(),
-            self.bytes.width as usize,
-            self.bytes.height as usize,
-        )
-        .unwrap();
+        let matrix = StridedBytes::with_row_major(
+            MatrixBytes::from_width_height(
+                self.texel.bits.layout(),
+                self.bytes.width as usize,
+                self.bytes.height as usize,
+            )
+            .unwrap(),
+        );
 
-        Some(PlanarBytes { offset: 0, matrix })
+        Some(PlanarBytes {
+            offset_in_texels: 0,
+            matrix,
+        })
     }
 
-    // Verify that the byte-length is below `isize::MAX`.
+    /// Verify that the byte-length is below `isize::MAX`.
     fn validate(this: Self) -> Option<Self> {
+        // What about validating `self.texel` against planar texel spec?
+        todo!("Make sure this validation is sufficient");
+
         let lines = usize::try_from(this.bytes.width).ok()?;
         let height = usize::try_from(this.bytes.height).ok()?;
         let ok = height
@@ -648,50 +677,75 @@ impl FrameLayout {
 impl PlanarBytes {
     pub(crate) fn is_compatible<T>(&self, texel: canvas::Texel<T>) -> Option<PlanarLayout<T>> {
         use canvas::layout::TryMend;
-
-        if self.offset % texel.align() != 0 {
-            return None;
-        }
-
         Some(PlanarLayout {
-            offset: self.offset,
+            offset_in_texels: self.offset_in_texels,
             matrix: texel.try_mend(&self.matrix).ok()?,
         })
     }
 }
 
+impl LayoutError {
+    const NO_INFO: Self = LayoutError { inner: () };
+
+    fn width_error(_: core::num::TryFromIntError) -> Self {
+        Self::NO_INFO
+    }
+
+    fn height_error(_: core::num::TryFromIntError) -> Self {
+        Self::NO_INFO
+    }
+}
+
 impl CanvasLayout for FrameLayout {
     fn byte_len(&self) -> usize {
-        ByteLayout::byte_len(&self.bytes)
+        FrameLayout::byte_len(self)
     }
 }
 
 impl<T> CanvasLayout for PlanarLayout<T> {
     fn byte_len(&self) -> usize {
-        self.matrix.byte_len() + self.offset
+        self.matrix.byte_len()
     }
 }
 
 impl CanvasLayout for PlanarBytes {
     fn byte_len(&self) -> usize {
-        self.matrix.byte_len() + self.offset
+        self.matrix.byte_len()
     }
 }
 
 impl<T> Raster<T> for PlanarLayout<T> {
     fn dimensions(&self) -> canvas::canvas::Coord {
-        self.matrix.dimensions()
+        let StrideSpec { width, height, .. } = self.matrix.spec();
+        // The PlanarLayout should only be constructed from u32 width and height, guaranteeing that
+        // this conversion works. If it doesn't, these should be traced to the constructor.
+        debug_assert!(u32::try_from(width).is_ok(), "Invalid dimension: {}", width);
+        debug_assert!(
+            u32::try_from(height).is_ok(),
+            "Invalid dimension: {}",
+            height
+        );
+        canvas::canvas::Coord(width as u32, height as u32)
     }
 
     fn get(from: canvas::canvas::CanvasRef<&Self>, at: canvas::canvas::Coord) -> Option<T> {
         let (x, y) = at.xy();
         let layout = from.layout();
         let matrix = &layout.matrix;
-        let texel = matrix.pixel();
+        let texel = matrix.texel();
         // TODO: should we add a method to `canvas::Matrix`?
-        let idx = y as usize * matrix.width() + x as usize;
+        let StrideSpec { width_stride, .. } = matrix.spec();
+
+        debug_assert!(
+            width_stride % texel.size() == 0,
+            "Invalid stride: {} not valid for {:?}",
+            width_stride,
+            texel
+        );
+
+        let idx = y as usize * (width_stride / texel.size()) + x as usize;
         let slice = from.as_texels(texel);
-        let value = slice.get(layout.offset..)?.get(idx)?;
+        let value = slice.get(layout.offset_in_texels..)?.get(idx)?;
         Some(texel.copy_val(value))
     }
 }
@@ -699,8 +753,8 @@ impl<T> Raster<T> for PlanarLayout<T> {
 impl<T> Decay<PlanarLayout<T>> for PlanarBytes {
     fn decay(from: PlanarLayout<T>) -> Self {
         PlanarBytes {
-            offset: from.offset,
-            matrix: from.matrix.into(),
+            offset_in_texels: from.offset_in_texels,
+            matrix: StridedBytes::decay(from.matrix),
         }
     }
 }

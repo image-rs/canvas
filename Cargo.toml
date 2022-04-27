@@ -17,4 +17,4 @@ name = "canvas"
 bytemuck = "1.3"
 
 [workspace]
-members = [".", "drm", "frame"]
+members = [".", "drm", "framebuf"]
