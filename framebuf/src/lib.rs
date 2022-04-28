@@ -12,6 +12,6 @@ pub use self::color::{
 };
 pub use self::frame::Frame;
 pub use self::layout::{
-    Block, ChannelLayout, FrameLayout, PlanarBytes, PlanarLayout, RowLayoutDescription, SampleBits,
-    SampleParts, Texel,
+    Block, ChannelLayout, FrameLayout, LayoutError, PlanarBytes, PlanarLayout,
+    RowLayoutDescription, SampleBits, SampleParts, Texel,
 };

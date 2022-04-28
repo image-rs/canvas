@@ -396,6 +396,10 @@ impl TexelLayout {
     pub const fn align(self) -> usize {
         self.size
     }
+
+    pub const fn superset_of(&self, other: TexelLayout) -> bool {
+        self.size >= other.size && self.align >= other.align
+    }
 }
 
 impl DynLayout {

@@ -446,7 +446,10 @@ impl From<SampleBits> for TexelKind {
             | SampleBits::Int101010_
             | SampleBits::Int_101010 => TexelKind::U16x2,
             SampleBits::Float16x4 => TexelKind::U16x4,
-            SampleBits::Float32x4 => TexelKind::F32x3,
+            SampleBits::Float32 => TexelKind::F32,
+            SampleBits::Float32x2 => TexelKind::F32x2,
+            SampleBits::Float32x3 => TexelKind::F32x3,
+            SampleBits::Float32x4 => TexelKind::F32x4,
         }
     }
 }

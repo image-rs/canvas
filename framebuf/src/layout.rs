@@ -59,6 +59,8 @@ pub struct ChannelLayout {
 
 /// The byte matrix layout of a single plane of the image.
 pub struct PlanarBytes {
+    /// The texel in this plane.
+    texel: Texel,
     /// Offset within the image in bytes.
     offset_in_texels: usize,
     /// The matrix descriptor of this plane.
@@ -70,6 +72,8 @@ pub struct PlanarBytes {
 /// Note that this is _not_ fully public like the related [`PlanarBytes`] as we have invariants
 /// relating the texel type to alignment and offset of the matrix within the image.
 pub struct PlanarLayout<T> {
+    /// The texel in this plane.
+    texel: Texel,
     /// Offset within the image in bytes.
     offset_in_texels: usize,
     /// The matrix descriptor of this plane.
@@ -264,6 +268,9 @@ pub enum SampleBits {
     Int_101010,
     /// Four half-floats.
     Float16x4,
+    Float32,
+    Float32x2,
+    Float32x3,
     /// Four floats.
     Float32x4,
 }
@@ -308,7 +315,7 @@ impl LayoutDescriptor {
 
     fn with_texel(texel: Texel, color: Color, width: u32, height: u32) -> Option<Self> {
         // TODO: a bit overkill, ain't it?
-        let layout = FrameLayout::with_texel(&texel, width, height)?;
+        let layout = FrameLayout::with_texel(&texel, width, height).ok()?;
         Some(LayoutDescriptor {
             layout: layout.bytes,
             texel,
@@ -353,6 +360,29 @@ impl LayoutDescriptor {
 }
 
 impl Texel {
+    pub fn new_u8(parts: SampleParts) -> Self {
+        use SampleBits::*;
+        Self::pixel_from_bits(parts, [Int8, Int8x2, Int8x3, Int8x4])
+    }
+
+    pub fn new_u16(parts: SampleParts) -> Self {
+        use SampleBits::*;
+        Self::pixel_from_bits(parts, [Int16, Int16x2, Int16x3, Int16x4])
+    }
+
+    pub fn new_f32(parts: SampleParts) -> Self {
+        use SampleBits::*;
+        Self::pixel_from_bits(parts, [Float32, Float32x2, Float32x3, Float32x4])
+    }
+
+    fn pixel_from_bits(parts: SampleParts, bits: [SampleBits; 4]) -> Self {
+        Texel {
+            block: Block::Pixel,
+            bits: bits[(parts.num_components() - 1) as usize],
+            parts,
+        }
+    }
+
     /// Get the texel describing a single channel.
     /// Returns None if the channel is not contained, or if it can not be extracted on its own.
     pub fn channel_texel(&self, channel: ColorChannel) -> Option<Texel> {
@@ -426,9 +456,10 @@ impl SampleBits {
             Int8 | Int332 | Int233 => 1,
             Int8x2 | Int16 | Int565 | Int4x4 | Int444_ | Int_444 => 2,
             Int8x3 => 3,
-            Int8x4 | Int16x2 | Int1010102 | Int2101010 | Int101010_ | Int_101010 => 4,
+            Int8x4 | Int16x2 | Int1010102 | Int2101010 | Int101010_ | Int_101010 | Float32 => 4,
             Int16x3 => 6,
-            Int16x4 | Float16x4 => 8,
+            Int16x4 | Float16x4 | Float32x2 => 8,
+            Float32x3 => 12,
             Float32x4 => 16,
         }
     }
@@ -555,9 +586,9 @@ impl FrameLayout {
     }
 
     /// Create a buffer layout given the layout of a simple, strided matrix.
-    pub fn with_row_layout(rows: &RowLayoutDescription) -> Option<Self> {
+    pub fn with_row_layout(rows: &RowLayoutDescription) -> Result<Self, LayoutError> {
         let bytes_per_texel = rows.texel.bits.bytes();
-        let bytes_per_row = usize::try_from(rows.row_stride).ok()?;
+        let bytes_per_row = usize::try_from(rows.row_stride).map_err(LayoutError::width_error)?;
 
         let stride = StrideSpec {
             offset: 0,
@@ -569,18 +600,19 @@ impl FrameLayout {
         };
 
         let bytes = PlanarBytes {
+            texel: rows.texel.clone(),
             offset_in_texels: 0,
-            matrix: StridedBytes::new(stride).ok()?,
+            matrix: StridedBytes::new(stride).map_err(LayoutError::stride_error)?,
         };
 
-        Self::new(rows.texel.clone(), &[bytes]).ok()
+        Self::new(rows.texel.clone(), &[bytes])
     }
 
     /// Create a buffer layout from a texel and dimensions.
     ///
     /// This is a simplification of `with_row_layout` which itself is a simplified `new`.
-    pub fn with_texel(texel: &Texel, width: u32, height: u32) -> Option<Self> {
-        let texel_stride = u64::try_from(texel.bits.bytes()).ok()?;
+    pub fn with_texel(texel: &Texel, width: u32, height: u32) -> Result<Self, LayoutError> {
+        let texel_stride = u64::from(texel.bits.bytes());
         Self::with_row_layout(&RowLayoutDescription {
             width,
             height,
@@ -635,7 +667,7 @@ impl FrameLayout {
         (self.bytes.bytes_per_row as usize) * (self.bytes.height as usize)
     }
 
-    pub(crate) fn plane(&self, idx: usize) -> Option<PlanarBytes> {
+    pub(crate) fn plane(&self, idx: u8) -> Option<PlanarBytes> {
         if !self.planes.is_empty() {
             // TODO: support.
             return None;
@@ -655,21 +687,61 @@ impl FrameLayout {
         );
 
         Some(PlanarBytes {
+            texel: self.texel.clone(),
             offset_in_texels: 0,
             matrix,
         })
     }
 
+    pub(crate) fn num_planes(&self) -> u8 {
+        if self.planes.is_empty() {
+            1
+        } else {
+            self.planes.len() as u8
+        }
+    }
+
+    pub fn as_plane(&self) -> Option<PlanarBytes> {
+        // Not only a single plane.
+        if !self.planes.is_empty() {
+            return None;
+        }
+
+        self.plane(0)
+    }
+
     /// Verify that the byte-length is below `isize::MAX`.
     fn validate(this: Self) -> Option<Self> {
-        // What about validating `self.texel` against planar texel spec?
-        todo!("Make sure this validation is sufficient");
+        let mut start = 0;
+        // For now, validation requires that planes are successive.
+        // This can probably stay true for quite a while..
+        for plane in 0..this.num_planes() {
+            // Require that the number of planes actually works..
+            let plane = this.plane(plane)?;
+            let spec = plane.matrix.spec();
+            // TODO: should we require that planes are aligned to MAX_ALIGN?
+            // Probably useful for some methods but that's something for planar layouts.
+            let offset = plane.offset_in_texels.checked_mul(spec.element.size())?;
+            let plane_end = offset.checked_add(plane.matrix.byte_len())?;
+
+            let texel_layout = plane.texel.bits.layout();
+            if !spec.element.superset_of(texel_layout) {
+                return None;
+            }
+
+            if start > offset {
+                return None;
+            }
+
+            start = plane_end;
+        }
 
         let lines = usize::try_from(this.bytes.width).ok()?;
         let height = usize::try_from(this.bytes.height).ok()?;
         let ok = height
             .checked_mul(lines)
             .map_or(false, |len| len < isize::MAX as usize);
+
         Some(this).filter(|_| ok)
     }
 }
@@ -678,6 +750,7 @@ impl PlanarBytes {
     pub(crate) fn is_compatible<T>(&self, texel: canvas::Texel<T>) -> Option<PlanarLayout<T>> {
         use canvas::layout::TryMend;
         Some(PlanarLayout {
+            texel: self.texel.clone(),
             offset_in_texels: self.offset_in_texels,
             matrix: texel.try_mend(&self.matrix).ok()?,
         })
@@ -692,6 +765,10 @@ impl LayoutError {
     }
 
     fn height_error(_: core::num::TryFromIntError) -> Self {
+        Self::NO_INFO
+    }
+
+    fn stride_error(_: canvas::layout::BadStrideError) -> Self {
         Self::NO_INFO
     }
 }
@@ -753,6 +830,7 @@ impl<T> Raster<T> for PlanarLayout<T> {
 impl<T> Decay<PlanarLayout<T>> for PlanarBytes {
     fn decay(from: PlanarLayout<T>) -> Self {
         PlanarBytes {
+            texel: from.texel,
             offset_in_texels: from.offset_in_texels,
             matrix: StridedBytes::decay(from.matrix),
         }
