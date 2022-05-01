@@ -319,11 +319,15 @@ impl<P> Texel<P> {
     }
 
     /// Reinterpret a slice of texel as memory.
+    ///
+    /// Note that you can convert a reference to a single value by [`core::slice::from_ref`].
     pub fn to_bytes<'buf>(self, texel: &'buf [P]) -> &'buf [u8] {
         self.cast_bytes(texel)
     }
 
     /// Reinterpret a mutable slice of texel as memory.
+    ///
+    /// Note that you can convert a reference to a single value by [`core::slice::from_mut`].
     pub fn to_mut_bytes<'buf>(self, texel: &'buf mut [P]) -> &'buf mut [u8] {
         self.cast_mut_bytes(texel)
     }

@@ -7,7 +7,7 @@ use canvas::{canvas::Coord, AsTexel, Texel, TexelBuffer};
 use core::ops::Range;
 
 use crate::frame::Frame;
-use crate::layout::{ByteLayout, FrameLayout, SampleBits, Texel as TexelBits};
+use crate::layout::{ByteLayout, FrameLayout, SampleBits, SampleParts, Texel as TexelBits};
 
 /// A buffer for conversion.
 pub struct Converter {
@@ -94,6 +94,12 @@ pub(crate) trait GenericTexelAction<R = ()> {
     fn run<T>(self, texel: Texel<T>) -> R;
 }
 
+/// Specifies which bits a channel comes from, within a `TexelKind` aggregate.
+struct FromBits {
+    begin: usize,
+    len: usize,
+}
+
 enum CommonPixel {
     U8x4,
     U16x4,
@@ -174,7 +180,6 @@ impl Converter {
 
     pub fn run_on(&mut self, frame_in: &Frame, frame_out: &mut Frame) {
         // Check that the layout is accurate..
-
         self.with_filled_texels(
             |that| {
                 (that.ops.expand)(&that.info, &that.in_texels, &mut that.pixel_in_buffer);
@@ -284,7 +289,7 @@ impl Converter {
     }
 
     fn read_texels(&mut self, from: PlaneSource) {
-        fn fetchFromTexelArray<T>(
+        fn fetch_from_texel_array<T>(
             from: PlaneSource,
             idx: &[usize],
             into: &mut TexelBuffer,
@@ -306,7 +311,7 @@ impl Converter {
 
         impl GenericTexelAction for ReadUnit<'_, '_> {
             fn run<T>(self, texel: Texel<T>) {
-                fetchFromTexelArray(self.from, self.idx, self.into, texel)
+                fetch_from_texel_array(self.from, self.idx, self.into, texel)
             }
         }
 
@@ -374,12 +379,135 @@ impl Converter {
 }
 
 impl CommonPixel {
+    /// Create pixels from our aggregated block information.
+    ///
+    /// For each pixel in each texel block, our task is to extract all channels (at most 4) and
+    /// convert their bit representation to the `CommonPixel` representation, then put them into
+    /// the expected channel give by the color channel's normal form.
     fn expand_from_info(self) -> fn(&Info, &TexelBuffer, &mut TexelBuffer) {
-        todo!()
+        match self {
+            CommonPixel::U8x4 => |info, buffer, pixels| {
+                let TexelBits { bits, parts,  .. } = info.in_layout.texel; 
+                let from_bits = FromBits::new(bits, parts);
+
+                let texel = <[u8; 4]>::texel();
+                from_bits.map(|b| b.extract_as_msb(texel));
+                todo!()
+            },
+            CommonPixel::U16x4 => |info, texel, pixels| {
+                todo!()
+            },
+            CommonPixel::U32x4 => |info, texel, pixels| {
+                todo!()
+            },
+            CommonPixel::F32x4 => |info, texel, pixels| {
+                todo!()
+            },
+        }
     }
 
     fn join_from_info(self) -> fn(&Info, &TexelBuffer, &mut TexelBuffer) {
-        todo!()
+        match self {
+            CommonPixel::U8x4 => |info, texel, pixels| {
+                todo!()
+            },
+            CommonPixel::U16x4 => |info, texel, pixels| {
+                todo!()
+            },
+            CommonPixel::U32x4 => |info, texel, pixels| {
+                todo!()
+            },
+            CommonPixel::F32x4 => |info, texel, pixels| {
+                todo!()
+            },
+        }
+    }
+}
+
+macro_rules! from_bits {
+    ($bits:ident = { $($variant:pat => $($value:expr);+),* }) => {
+        match $bits {
+            $($variant => from_bits!(@ $($value)*)),*,
+            _ => panic!(""),
+        }
+    };
+    (@ $v0:expr) => {
+        [Some(FromBits::from_range($v0)), None, None, None]
+    };
+    (@ $v0:expr; $v1:expr) => {
+        [Some(FromBits::from_range($v0)), Some(FromBits::from_range($v1)), None, None]
+    };
+    (@ $v0:expr; $v1:expr; $v2:expr) => {
+        [
+            Some(FromBits::from_range($v0)),
+            Some(FromBits::from_range($v1)),
+            Some(FromBits::from_range($v2)),
+            None
+        ]
+    };
+    (@ $v0:expr; $v1:expr; $v2:expr; $v3:expr) => {
+        [
+            Some(FromBits::from_range($v0)),
+            Some(FromBits::from_range($v1)),
+            Some(FromBits::from_range($v2)),
+            Some(FromBits::from_range($v3)),
+        ]
+    };
+}
+
+impl FromBits {
+    const NO_BITS: Self = FromBits { begin: 0, len: 0 };
+
+    const fn from_range(range: core::ops::Range<usize>) -> Self {
+        FromBits { begin: range.start, len: range.end - range.start }
+    }
+
+    pub(crate) fn new(bits: SampleBits, parts: SampleParts) -> [Self; 4] {
+        let mut vals = [Self::NO_BITS; 4];
+
+        for (bits, (channel, pos)) in Self::bits(bits).zip(parts.channels()) {
+            if let Some(_) = channel {
+                vals[pos as usize] = bits;
+            }
+        }
+
+        vals
+    }
+
+    fn bits(bits: SampleBits) -> impl Iterator<Item=Self> {
+        use SampleBits::*;
+        let filled: [Option<Self>; 4] = from_bits!(bits = {
+            Int8 => 0..8,
+            Int16 => 0..16
+        });
+
+        filled.into_iter().filter_map(|x| x)
+    }
+
+    /// Extract bit as a big-endian interpretation.
+    ///
+    /// The highest bit of each byte being the first. Returns a value as `u32` with the same
+    /// interpretation.
+    #[inline]
+    fn extract_as_msb<T>(&self, texel: Texel<T>, val: &T) -> u32 {
+        // Grab up to 8 bytes surrounding the bits, convert using u64 intermediate, then shift
+        // upwards (by at most 7 bit) and mask off any remaining bits.
+        let ne_bytes = texel.to_bytes(core::slice::from_ref(val));
+        let startu64 = self.begin / 8;
+        let from_bytes = &ne_bytes[startu64.min(ne_bytes.len())..];
+
+        let shift = self.begin - startu64 * 8;
+        let bitlen = self.len + shift;
+        let copylen = (if bitlen % 8 == 0 { bitlen } else { bitlen + 1 }) / 8;
+
+        let mut be_bytes = [0; 8];
+        let initlen = copylen.min(8).min(from_bytes.len());
+        be_bytes[..initlen].copy_from_slice(&from_bytes[..initlen]);
+
+        let val = u64::from_be_bytes(be_bytes) >> (32 - shift);
+        // Start with a value where the 32-low bits are clear, high bits are set.
+        let mask = ((-1i64 as u64) ^ -1i32 as u64).rotate_right((bitlen as u32).min(32));
+        (val & mask) as u32
     }
 }
 

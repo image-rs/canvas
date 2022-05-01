@@ -507,6 +507,11 @@ impl SampleParts {
     pub fn num_components(self) -> u8 {
         self.parts.iter().map(|ch| u8::from(ch.is_some())).sum()
     }
+
+    pub(crate) fn channels(&self) -> impl '_ + Iterator<Item=(Option<ColorChannel>, u8)> {
+        (0..4)
+            .map(|i| (self.parts[i], (self.position >> 2*i) & 0x3))
+    }
 }
 
 impl Color {
