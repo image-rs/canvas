@@ -151,39 +151,53 @@ pub struct SampleParts {
 }
 
 macro_rules! sample_parts {
-    ( $($(#[$attr:meta])* $name:ident = $($ch:path),+;)* ) => {
-        $(sample_parts! { $(#[$attr])* $name = $($ch),* })*
+    ( $($(#[$attr:meta])* $color:ident: $name:ident = $($ch:path),+;)* ) => {
+        $(sample_parts! { @$color: $(#[$attr])* $name = $($ch),* })*
 
         impl SampleParts {
-            $(sample_parts! { $(#[$attr])* $name = $($ch),* })*
+            $(sample_parts! { @$color: $(#[$attr])* $name = $($ch),* })*
         }
     };
-    ($(#[$attr:meta])* $name:ident = $ch0:path) => {
+    (@$color:ident: $(#[$attr:meta])* $name:ident = $ch0:path) => {
         $(#[$attr])*
         pub const $name: SampleParts = SampleParts {
             parts: [Some($ch0), None, None, None],
-            position: 0b11100100,
+            position: (
+                $ch0.canonical_index_in_surely(ColorChannelModel::$color)
+            ),
         };
     };
-    ($(#[$attr:meta])* $name:ident = $ch0:path,$ch1:path) => {
+    (@$color:ident: $(#[$attr:meta])* $name:ident = $ch0:path,$ch1:path) => {
         $(#[$attr])*
         pub const $name: SampleParts = SampleParts {
             parts: [Some($ch0), Some($ch1), None, None],
-            position: 0b11100100,
+            position: (
+                $ch0.canonical_index_in_surely(ColorChannelModel::$color)
+                | $ch1.canonical_index_in_surely(ColorChannelModel::$color) << 2
+            ),
         };
     };
-    ($(#[$attr:meta])* $name:ident = $ch0:path,$ch1:path,$ch2:path) => {
+    (@$color:ident: $(#[$attr:meta])* $name:ident = $ch0:path,$ch1:path,$ch2:path) => {
         $(#[$attr])*
         pub const $name: SampleParts = SampleParts {
             parts: [Some($ch0), Some($ch1), Some($ch2), None],
-            position: 0b11100100,
+            position: (
+                $ch0.canonical_index_in_surely(ColorChannelModel::$color)
+                | $ch1.canonical_index_in_surely(ColorChannelModel::$color) << 2
+                | $ch2.canonical_index_in_surely(ColorChannelModel::$color) << 4
+            ),
         };
     };
-    ($(#[$attr:meta])* $name:ident = $ch0:path,$ch1:path,$ch2:path,$ch3:path) => {
+    (@$color:ident: $(#[$attr:meta])* $name:ident = $ch0:path,$ch1:path,$ch2:path,$ch3:path) => {
         $(#[$attr])*
         pub const $name: SampleParts = SampleParts {
             parts: [Some($ch0), Some($ch1), Some($ch2), Some($ch3)],
-            position: 0b11100100,
+            position: (
+                $ch0.canonical_index_in_surely(ColorChannelModel::$color)
+                | $ch1.canonical_index_in_surely(ColorChannelModel::$color) << 2
+                | $ch2.canonical_index_in_surely(ColorChannelModel::$color) << 4
+                | $ch3.canonical_index_in_surely(ColorChannelModel::$color) << 6
+            ),
         };
     };
 }
@@ -191,28 +205,29 @@ macro_rules! sample_parts {
 #[allow(non_upper_case_globals)]
 mod sample_parts {
     type Cc = super::ColorChannel;
+    use super::ColorChannelModel;
     use super::SampleParts;
 
     sample_parts! {
         /// A pure alpha part.
-        A = Cc::Alpha;
+        Rgb: A = Cc::Alpha;
         /// A pure red part.
-        R = Cc::R;
-        G = Cc::G;
-        B = Cc::B;
-        Luma = Cc::Luma;
-        LumaA = Cc::Luma,Cc::Alpha;
-        Rgb = Cc::R,Cc::G,Cc::B;
-        RgbA = Cc::R,Cc::G,Cc::B,Cc::Alpha;
-        ARgb = Cc::Alpha,Cc::R,Cc::G,Cc::B;
-        Bgr = Cc::B,Cc::G,Cc::R;
-        BgrA = Cc::B,Cc::G,Cc::R,Cc::Alpha;
-        ABgr = Cc::Alpha,Cc::B,Cc::G,Cc::R;
-        Yuv = Cc::L,Cc::Cb,Cc::Cr;
-        Lab = Cc::L,Cc::LABa,Cc::LABb;
-        LabA = Cc::L,Cc::LABa,Cc::LABb,Cc::Alpha;
-        Lch = Cc::L,Cc::C,Cc::LABh;
-        LchA = Cc::L,Cc::C,Cc::LABh,Cc::Alpha;
+        Rgb: R = Cc::R;
+        Rgb: G = Cc::G;
+        Rgb: B = Cc::B;
+        Yuv: Luma = Cc::Luma;
+        Yuv: LumaA = Cc::Luma,Cc::Alpha;
+        Rgb: Rgb = Cc::R,Cc::G,Cc::B;
+        Rgb: RgbA = Cc::R,Cc::G,Cc::B,Cc::Alpha;
+        Rgb: ARgb = Cc::Alpha,Cc::R,Cc::G,Cc::B;
+        Rgb: Bgr = Cc::B,Cc::G,Cc::R;
+        Rgb: BgrA = Cc::B,Cc::G,Cc::R,Cc::Alpha;
+        Rgb: ABgr = Cc::Alpha,Cc::B,Cc::G,Cc::R;
+        Yuv: Yuv = Cc::L,Cc::Cb,Cc::Cr;
+        Lab: Lab = Cc::L,Cc::LABa,Cc::LABb;
+        Lab: LabA = Cc::L,Cc::LABa,Cc::LABb,Cc::Alpha;
+        Lab: Lch = Cc::L,Cc::C,Cc::LABh;
+        Lab: LchA = Cc::L,Cc::C,Cc::LABh,Cc::Alpha;
     }
 
     /*
@@ -225,6 +240,12 @@ mod sample_parts {
     */
 }
 
+/// The bit-placement of samples within a texel.
+///
+/// We start with low-order bits in a little-endian representation of the surrounding numbers. So,
+/// for example, Int332 has the first sample in the three lowest bits of a u8 (byte-order
+/// independent) and a Int565 has its first channel in the first 5 low-order bits of a u16 little
+/// endian interpretation of the bytes.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 #[non_exhaustive]
 #[allow(non_camel_case_types)]
@@ -426,7 +447,7 @@ impl ColorChannel {
     }
 
     // Figure out how to expose this.. Return type is not entirely clear.
-    fn canonical_index_in(self, model: ColorChannelModel) -> Option<u8> {
+    const fn canonical_index_in(self, model: ColorChannelModel) -> Option<u8> {
         use ColorChannel::*;
         use ColorChannelModel::*;
         Some(match (self, model) {
@@ -444,6 +465,13 @@ impl ColorChannel {
             // FIXME: Scalar0, Scalar1, Scalar2
             _ => return None,
         })
+    }
+
+    const fn canonical_index_in_surely(self, model: ColorChannelModel) -> u8 {
+        match Self::canonical_index_in(self, model) {
+            Some(idx) => idx,
+            None => 0,
+        }
     }
 }
 
@@ -499,7 +527,7 @@ impl SampleParts {
         let position = position
             .into_iter()
             .enumerate()
-            .fold(0u8, |acc, (pos, idx)| acc | idx << (2 * pos));
+            .fold(0u8, |acc, (idx, pos)| acc | pos << (2 * idx));
 
         Some(SampleParts { parts, position })
     }
@@ -508,9 +536,8 @@ impl SampleParts {
         self.parts.iter().map(|ch| u8::from(ch.is_some())).sum()
     }
 
-    pub(crate) fn channels(&self) -> impl '_ + Iterator<Item=(Option<ColorChannel>, u8)> {
-        (0..4)
-            .map(|i| (self.parts[i], (self.position >> 2*i) & 0x3))
+    pub(crate) fn channels(&self) -> impl '_ + Iterator<Item = (Option<ColorChannel>, u8)> {
+        (0..4).map(|i| (self.parts[i], (self.position >> (2 * i)) & 0x3))
     }
 }
 
@@ -576,12 +603,14 @@ impl FrameLayout {
         }
 
         let spec = layers[0].matrix.spec();
+        let width = spec.width.try_into().map_err(LayoutError::width_error)?;
+        let height = spec.height.try_into().map_err(LayoutError::height_error)?;
 
         Self::validate(FrameLayout {
             bytes: ByteLayout {
-                width: spec.width.try_into().map_err(LayoutError::width_error)?,
-                height: spec.height.try_into().map_err(LayoutError::height_error)?,
-                bytes_per_row: spec.width_stride as u32,
+                width,
+                height,
+                bytes_per_row: (spec.width_stride as u32) * width,
             },
             planes: Box::default(),
             texel,

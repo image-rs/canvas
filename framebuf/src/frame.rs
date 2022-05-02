@@ -2,6 +2,7 @@
 use canvas::canvas::{CanvasMut, CanvasRef};
 
 use crate::layout::{ByteLayout, ChannelLayout, FrameLayout, PlanarBytes, PlanarLayout};
+use crate::shader::Converter;
 
 /// A byte buffer with dynamic color contents.
 pub struct Frame {
@@ -156,6 +157,10 @@ impl Frame {
         })
     }
 
+    pub fn convert(&self, into: &mut Self) {
+        Converter::new(self, into).run_on(self, into)
+    }
+
     pub(crate) fn as_ref(&self) -> CanvasRef<'_, &'_ FrameLayout> {
         self.inner.as_ref()
     }
@@ -216,4 +221,40 @@ impl<'data, T> From<PlaneMut<'data, T>> for PlaneBytesMut<'data> {
             inner: plane.inner.decay().unwrap(),
         }
     }
+}
+
+#[test]
+fn simple_conversion() -> Result<(), crate::LayoutError> {
+    use crate::{Frame, FrameLayout, SampleBits, SampleParts, Texel};
+
+    let texel = Texel::new_u8(SampleParts::RgbA);
+    let source_layout = FrameLayout::with_texel(&texel, 32, 32)?;
+    let target_layout = FrameLayout::with_texel(
+        &Texel {
+            bits: SampleBits::Int565,
+            parts: SampleParts::Bgr,
+            ..texel
+        },
+        32,
+        32,
+    )?;
+
+    let mut from = Frame::new(source_layout);
+    let mut into = Frame::new(target_layout);
+
+    from.inner
+        .as_mut_texels(<[u8; 4] as canvas::AsTexel>::texel())
+        .iter_mut()
+        .for_each(|b| *b = [0xff, 0xff, 0x0, 0xff]);
+
+    // Expecting conversion [0xff, 0xff, 0x0, 0xff] to 0–ff—ff
+    from.convert(&mut into);
+
+    into.inner
+        .as_mut_texels(<u16 as canvas::AsTexel>::texel())
+        .iter()
+        .enumerate()
+        .for_each(|(idx, b)| assert_eq!(*b, 0xffe0, "at {}", idx));
+
+    Ok(())
 }
