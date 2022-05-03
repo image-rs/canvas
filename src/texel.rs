@@ -260,6 +260,20 @@ impl<P> Texel<P> {
     }
 }
 
+impl<T, const N: usize> Texel<[T; N]> {
+    /// Construct a texel, from an array of elements.
+    pub const fn array_element(self) -> Texel<T> {
+        // Safety:
+        // We'll see that all properties are implied by _any_ suitable array.
+        // - The type must have an alignment of *at most* `MAX_ALIGN`. Array and inner type have
+        //   the same alignment.
+        // - The type must *not* be a ZST. The array would otherwise be a ZST.
+        // - The type must *not* have any Drop-glue (no drop, any contain not part that is Drop).
+        //   The array would otherwise have Drop-glue.
+        unsafe { Texel::new_unchecked() }
+    }
+}
+
 /// Operations that can be performed based on the evidence of Texel.
 impl<P> Texel<P> {
     /// Copy a texel.

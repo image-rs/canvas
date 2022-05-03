@@ -57,8 +57,8 @@ pub enum Color {
 /// How to interpret channels as physical quantities.
 ///
 /// Each color model consists of a set of color channels, each of which may occur or be omitted in
-/// frames of that model. Each model defines one canonical _channel order_. This is the order they
-/// appear in within 'shader units' when pixels are decoded from texels.
+/// buffers using that model. Each model defines one canonical _channel order_. This is the order
+/// they appear in within 'shader units' when pixels are decoded from texels.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 #[non_exhaustive]
 pub enum ColorChannelModel {

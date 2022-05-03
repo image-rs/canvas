@@ -1,7 +1,9 @@
 //! A byte-buffer based image descriptor.
 use canvas::canvas::{CanvasMut, CanvasRef};
 
-use crate::layout::{ByteLayout, ChannelLayout, FrameLayout, PlanarBytes, PlanarLayout};
+use crate::layout::{
+    ByteLayout, ChannelBytes, ChannelLayout, FrameLayout, PlanarLayout, PlaneBytes,
+};
 use crate::shader::Converter;
 
 /// A byte buffer with dynamic color contents.
@@ -15,13 +17,13 @@ pub struct Plane {
 }
 
 /// Represents a single matrix like layer of an image.
-pub struct PlaneBytes<'data> {
-    inner: CanvasRef<'data, PlanarBytes>,
+pub struct BytePlane<'data> {
+    inner: CanvasRef<'data, PlaneBytes>,
 }
 
 /// Represents a single matrix like layer of an image.
-pub struct PlaneBytesMut<'data> {
-    inner: CanvasMut<'data, PlanarBytes>,
+pub struct BytePlaneMut<'data> {
+    inner: CanvasMut<'data, PlaneBytes>,
 }
 
 /// Represents a single matrix like layer of an image.
@@ -32,6 +34,16 @@ pub struct PlaneRef<'data, T> {
 /// Represents a single mutable matrix like layer of an image.
 pub struct PlaneMut<'data, T> {
     inner: CanvasMut<'data, PlanarLayout<T>>,
+}
+
+/// Represent a single matrix with uniform channel type.
+pub struct ChannelsRef<'data, T> {
+    inner: CanvasRef<'data, ChannelLayout<T>>,
+}
+
+/// Represent a single matrix with uniform channel type.
+pub struct ChannelsMut<'data, T> {
+    inner: CanvasMut<'data, ChannelLayout<T>>,
 }
 
 impl Frame {
@@ -99,37 +111,91 @@ impl Frame {
         self.inner.as_bytes_mut()
     }
 
-    /// Get the matrix-like sample descriptor if the samples are `u8`.
+    /// Return the bytes making up this image as a slice of arbitrary elements.
+    pub fn as_texels<T>(&self, texel: canvas::Texel<T>) -> &[T] {
+        self.inner.as_texels(texel)
+    }
+
+    /// Return the bytes making up this image as a slice of arbitrary elements.
+    pub fn as_texels_mut<T>(&mut self, texel: canvas::Texel<T>) -> &mut [T] {
+        self.inner.as_mut_texels(texel)
+    }
+
+    /// Get the matrix-like channel descriptor if the channels are `u8`.
     ///
-    /// FIXME: returns Some only when texel is exactly `u8` compatible. However, we'd rather match
-    /// on the SampleBits and allow multiple channels?
-    pub fn as_flat_samples_u8(&self) -> Option<PlaneRef<u8>> {
+    /// Returns `Some` only when texel is some multiple of `u8`.
+    pub fn channels_u8(&self) -> Option<ChannelsRef<u8>> {
         let plane = self.inner.layout().as_plane()?;
-        let layout = plane.is_compatible(<u8 as canvas::AsTexel>::texel())?;
-        Some(PlaneRef {
+        let layout = plane
+            .as_channel_bytes()?
+            .is_compatible(<u8 as canvas::AsTexel>::texel())?;
+        Some(ChannelsRef {
             inner: self.inner.as_ref().with_layout(layout)?,
         })
     }
 
-    /// Get the matrix-like sample descriptor if the samples are `u16`.
+    /// Get the matrix-like channel descriptor if the channels are `u16`.
     ///
-    /// FIXME: see as_flat_samples_u8.
-    pub fn as_flat_samples_u16(&self) -> Option<PlaneRef<u16>> {
+    /// Returns `Some` only when texel is some multiple of `u16`.
+    pub fn channels_u16(&self) -> Option<ChannelsRef<u16>> {
         let plane = self.inner.layout().as_plane()?;
-        let layout = plane.is_compatible(<u16 as canvas::AsTexel>::texel())?;
-        Some(PlaneRef {
+        let layout = plane
+            .as_channel_bytes()?
+            .is_compatible(<u16 as canvas::AsTexel>::texel())?;
+        Some(ChannelsRef {
             inner: self.inner.as_ref().with_layout(layout)?,
         })
     }
 
-    /// Get the matrix-like sample descriptor if the samples are `f32`.
+    /// Get the matrix-like channel descriptor if the channels are `f32`.
     ///
-    /// FIXME: see as_flat_samples_f32.
-    pub fn as_flat_samples_f32(&self) -> Option<PlaneRef<f32>> {
+    /// Returns `Some` only when texel is some multiple of `f32`.
+    pub fn channels_f32(&self) -> Option<ChannelsRef<f32>> {
         let plane = self.inner.layout().as_plane()?;
-        let layout = plane.is_compatible(<f32 as canvas::AsTexel>::texel())?;
-        Some(PlaneRef {
+        let layout = plane
+            .as_channel_bytes()?
+            .is_compatible(<f32 as canvas::AsTexel>::texel())?;
+        Some(ChannelsRef {
             inner: self.inner.as_ref().with_layout(layout)?,
+        })
+    }
+
+    /// Get the matrix-like channel descriptor if the channels are `u8`.
+    ///
+    /// Returns `Some` only when texel is some multiple of `u8`.
+    pub fn channels_u8_mut(&mut self) -> Option<ChannelsMut<u8>> {
+        let plane = self.inner.layout().as_plane()?;
+        let layout = plane
+            .as_channel_bytes()?
+            .is_compatible(<u8 as canvas::AsTexel>::texel())?;
+        Some(ChannelsMut {
+            inner: self.inner.as_mut().with_layout(layout)?,
+        })
+    }
+
+    /// Get the matrix-like channel descriptor if the channels are `u16`.
+    ///
+    /// Returns `Some` only when texel is some multiple of `u16`.
+    pub fn channels_u16_mut(&mut self) -> Option<ChannelsMut<u16>> {
+        let plane = self.inner.layout().as_plane()?;
+        let layout = plane
+            .as_channel_bytes()?
+            .is_compatible(<u16 as canvas::AsTexel>::texel())?;
+        Some(ChannelsMut {
+            inner: self.inner.as_mut().with_layout(layout)?,
+        })
+    }
+
+    /// Get the matrix-like channel descriptor if the channels are `f32`.
+    ///
+    /// Returns `Some` only when texel is some multiple of `f32`.
+    pub fn channels_f32_mut(&mut self) -> Option<ChannelsMut<f32>> {
+        let plane = self.inner.layout().as_plane()?;
+        let layout = plane
+            .as_channel_bytes()?
+            .is_compatible(<f32 as canvas::AsTexel>::texel())?;
+        Some(ChannelsMut {
+            inner: self.inner.as_mut().with_layout(layout)?,
         })
     }
 
@@ -143,16 +209,16 @@ impl Frame {
     ///
     /// Returns `None` if the image contains data that can not be described as a single texel
     /// plane, e.g. multiple planes or if the plane is not a matrix.
-    pub fn plane(&self, idx: u8) -> Option<PlaneBytes<'_>> {
+    pub fn plane(&self, idx: u8) -> Option<BytePlane<'_>> {
         let layout = self.layout().plane(idx)?;
-        Some(PlaneBytes {
+        Some(BytePlane {
             inner: self.inner.as_ref().with_layout(layout)?,
         })
     }
 
-    pub fn plane_mut(&mut self, idx: u8) -> Option<PlaneBytesMut<'_>> {
+    pub fn plane_mut(&mut self, idx: u8) -> Option<BytePlaneMut<'_>> {
         let layout = self.layout().plane(idx)?;
-        Some(PlaneBytesMut {
+        Some(BytePlaneMut {
             inner: self.inner.as_mut().with_layout(layout)?,
         })
     }
@@ -170,7 +236,7 @@ impl Frame {
     }
 }
 
-impl<'data> PlaneBytes<'data> {
+impl<'data> BytePlane<'data> {
     /// Upgrade to a view with strongly typed texel type.
     pub fn as_texels<T>(self, texel: canvas::Texel<T>) -> Option<PlaneRef<'data, T>> {
         if let Some(layout) = self.inner.layout().is_compatible(texel) {
@@ -183,7 +249,7 @@ impl<'data> PlaneBytes<'data> {
     }
 }
 
-impl<'data> PlaneBytesMut<'data> {
+impl<'data> BytePlaneMut<'data> {
     /// Upgrade to a view with strongly typed texel type.
     pub fn as_texels<T>(self, texel: canvas::Texel<T>) -> Option<PlaneRef<'data, T>> {
         if let Some(layout) = self.inner.layout().is_compatible(texel) {
@@ -207,54 +273,18 @@ impl<'data> PlaneBytesMut<'data> {
     }
 }
 
-impl<'data, T> From<PlaneRef<'data, T>> for PlaneBytes<'data> {
+impl<'data, T> From<PlaneRef<'data, T>> for BytePlane<'data> {
     fn from(plane: PlaneRef<'data, T>) -> Self {
-        PlaneBytes {
+        BytePlane {
             inner: plane.inner.decay().unwrap(),
         }
     }
 }
 
-impl<'data, T> From<PlaneMut<'data, T>> for PlaneBytesMut<'data> {
+impl<'data, T> From<PlaneMut<'data, T>> for BytePlaneMut<'data> {
     fn from(plane: PlaneMut<'data, T>) -> Self {
-        PlaneBytesMut {
+        BytePlaneMut {
             inner: plane.inner.decay().unwrap(),
         }
     }
-}
-
-#[test]
-fn simple_conversion() -> Result<(), crate::LayoutError> {
-    use crate::{Frame, FrameLayout, SampleBits, SampleParts, Texel};
-
-    let texel = Texel::new_u8(SampleParts::RgbA);
-    let source_layout = FrameLayout::with_texel(&texel, 32, 32)?;
-    let target_layout = FrameLayout::with_texel(
-        &Texel {
-            bits: SampleBits::Int565,
-            parts: SampleParts::Bgr,
-            ..texel
-        },
-        32,
-        32,
-    )?;
-
-    let mut from = Frame::new(source_layout);
-    let mut into = Frame::new(target_layout);
-
-    from.inner
-        .as_mut_texels(<[u8; 4] as canvas::AsTexel>::texel())
-        .iter_mut()
-        .for_each(|b| *b = [0xff, 0xff, 0x0, 0xff]);
-
-    // Expecting conversion [0xff, 0xff, 0x0, 0xff] to 0–ff—ff
-    from.convert(&mut into);
-
-    into.inner
-        .as_mut_texels(<u16 as canvas::AsTexel>::texel())
-        .iter()
-        .enumerate()
-        .for_each(|(idx, b)| assert_eq!(*b, 0xffe0, "at {}", idx));
-
-    Ok(())
 }

@@ -7,7 +7,7 @@ use canvas::{canvas::Coord, AsTexel, Texel, TexelBuffer};
 use core::ops::Range;
 
 use crate::frame::Frame;
-use crate::layout::{ByteLayout, FrameLayout, SampleBits, SampleParts, Texel as TexelBits};
+use crate::layout::{FrameLayout, SampleBits, SampleParts, Texel as TexelBits};
 
 /// A buffer for conversion.
 pub struct Converter {
