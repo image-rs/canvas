@@ -1,4 +1,4 @@
-# image-frame
+# image-framebuf
 
 Provides a planar, colored, convertible frame buffer based on `image-canvas`.
 

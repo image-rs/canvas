@@ -11,8 +11,6 @@ use crate::layout::{FrameLayout, SampleBits, SampleParts, Texel as TexelBits};
 
 /// A buffer for conversion.
 pub struct Converter {
-    /// The underlying conversion info.
-    info: Info,
     /// How many texels to do at once.
     chunk: usize,
 
@@ -36,9 +34,6 @@ pub struct Converter {
     neutral_color_buffer: TexelBuffer,
     /// The output texels, split into pixels in the color's natural order.
     pixel_out_buffer: TexelBuffer,
-
-    /// The ops (functions) used for conversion.
-    ops: ConvertOps,
 }
 
 #[repr(transparent)]
@@ -150,16 +145,8 @@ struct SuperTexel {
 }
 
 impl Converter {
-    pub fn new(frame_in: &Frame, frame_out: &Frame) -> Self {
+    pub fn new() -> Self {
         Converter {
-            info: Info {
-                in_layout: frame_in.layout().clone(),
-                out_layout: frame_out.layout().clone(),
-                common_pixel: CommonPixel::F32x4,
-                common_color: CommonColor::CieXyz,
-                in_kind: TexelKind::from(frame_in.layout().texel.bits),
-                out_kind: TexelKind::from(frame_out.layout().texel.bits),
-            },
             chunk: 512,
             super_blocks: vec![],
             in_texels: TexelBuffer::default(),
@@ -171,30 +158,36 @@ impl Converter {
             pixel_in_buffer: TexelBuffer::default(),
             neutral_color_buffer: TexelBuffer::default(),
             pixel_out_buffer: TexelBuffer::default(),
-            ops: ConvertOps {
-                in_index: Self::index_from_in_info,
-                out_index: Self::index_from_out_info,
-                expand: CommonPixel::expand_from_info,
-                recolor: None,
-                join: CommonPixel::join_from_info,
-            },
         }
     }
 
     pub fn run_on(&mut self, frame_in: &Frame, frame_out: &mut Frame) {
+        let info = Info {
+            in_layout: frame_in.layout().clone(),
+            out_layout: frame_out.layout().clone(),
+            common_pixel: CommonPixel::F32x4,
+            common_color: CommonColor::CieXyz,
+            in_kind: TexelKind::from(frame_in.layout().texel.bits),
+            out_kind: TexelKind::from(frame_out.layout().texel.bits),
+        };
+
+        let ops = ConvertOps {
+            in_index: Self::index_from_in_info,
+            out_index: Self::index_from_out_info,
+            expand: CommonPixel::expand_from_info,
+            recolor: None,
+            join: CommonPixel::join_from_info,
+        };
+
         // Check that the layout is accurate..
         self.with_filled_texels(
             |that| {
-                (that.ops.expand)(&that.info, &that.in_texels, &mut that.pixel_in_buffer);
+                (ops.expand)(&info, &that.in_texels, &mut that.pixel_in_buffer);
 
-                let pixel_out = if let Some(ref recolor) = that.ops.recolor {
-                    (recolor.from)(
-                        &that.info,
-                        &that.pixel_in_buffer,
-                        &mut that.neutral_color_buffer,
-                    );
+                let pixel_out = if let Some(ref recolor) = ops.recolor {
+                    (recolor.from)(&info, &that.pixel_in_buffer, &mut that.neutral_color_buffer);
                     (recolor.into)(
-                        &that.info,
+                        &info,
                         &that.neutral_color_buffer,
                         &mut that.pixel_out_buffer,
                     );
@@ -204,8 +197,10 @@ impl Converter {
                 };
 
                 // FIXME: necessary to do a reorder of pixels here? Or let join do this?
-                (that.ops.join)(&that.info, pixel_out, &mut that.out_texels);
+                (ops.join)(&info, pixel_out, &mut that.out_texels);
             },
+            &info,
+            &ops,
             frame_in,
             frame_out,
         )
@@ -215,6 +210,8 @@ impl Converter {
     fn with_filled_texels(
         &mut self,
         mut texel_conversion: impl FnMut(&mut Self),
+        info: &Info,
+        ops: &ConvertOps,
         frame_in: &Frame,
         frame_out: &mut Frame,
     ) {
@@ -223,7 +220,7 @@ impl Converter {
         // have 4 times as many outputs as inputs, respectively coordinates.
         //
         // Anyways, first we fill the coordinate buffers, then calculate the planar indices.
-        let (sb_x, sb_y) = self.super_texel();
+        let (sb_x, sb_y) = self.super_texel(info);
         let mut blocks = Self::blocks(sb_x.blocks.clone(), sb_y.blocks.clone());
 
         loop {
@@ -234,25 +231,25 @@ impl Converter {
                 break;
             }
 
-            self.generate_coords(&sb_x, &sb_y);
-            self.reserve_buffers();
-            self.read_texels(frame_in.as_ref());
+            self.generate_coords(info, ops, &sb_x, &sb_y);
+            self.reserve_buffers(info, ops);
+            self.read_texels(info, frame_in.as_ref());
             texel_conversion(self);
-            self.write_texels(frame_out.as_mut());
+            self.write_texels(info, frame_out.as_mut());
         }
     }
 
-    fn super_texel(&self) -> (SuperTexel, SuperTexel) {
-        let b0 = self.info.in_layout.texel.block;
-        let b1 = self.info.out_layout.texel.block;
+    fn super_texel(&self, info: &Info) -> (SuperTexel, SuperTexel) {
+        let b0 = info.in_layout.texel.block;
+        let b1 = info.out_layout.texel.block;
 
         let super_width = core::cmp::max(b0.width(), b1.width());
         let super_height = core::cmp::max(b0.height(), b1.height());
 
         let sampled_with = |w, bs| w / bs + if w % bs == 0 { 0 } else { 1 };
 
-        let sb_width = sampled_with(self.info.in_layout.bytes.width, super_width);
-        let sb_height = sampled_with(self.info.in_layout.bytes.height, super_height);
+        let sb_width = sampled_with(info.in_layout.bytes.width, super_width);
+        let sb_height = sampled_with(info.in_layout.bytes.height, super_height);
 
         (
             SuperTexel {
@@ -268,7 +265,13 @@ impl Converter {
         )
     }
 
-    fn generate_coords(&mut self, sb_x: &SuperTexel, sb_y: &SuperTexel) {
+    fn generate_coords(
+        &mut self,
+        info: &Info,
+        ops: &ConvertOps,
+        sb_x: &SuperTexel,
+        sb_y: &SuperTexel,
+    ) {
         self.in_coords.clear();
         self.out_coords.clear();
 
@@ -288,11 +291,11 @@ impl Converter {
         self.in_index.resize_with(self.in_coords.len(), || 0);
         self.out_index.resize_with(self.out_coords.len(), || 0);
 
-        (self.ops.in_index)(&self.info, &self.in_coords, &mut self.in_index);
-        (self.ops.out_index)(&self.info, &self.out_coords, &mut self.out_index);
+        (ops.in_index)(&info, &self.in_coords, &mut self.in_index);
+        (ops.out_index)(&info, &self.out_coords, &mut self.out_index);
     }
 
-    fn reserve_buffers(&mut self) {
+    fn reserve_buffers(&mut self, info: &Info, ops: &ConvertOps) {
         struct ResizeAction<'data>(&'data mut TexelBuffer, usize);
 
         impl GenericTexelAction for ResizeAction<'_> {
@@ -302,17 +305,15 @@ impl Converter {
         }
 
         let in_texels = self.in_coords.len();
-        let in_block = self.info.in_layout.texel.block;
+        let in_block = info.in_layout.texel.block;
         let in_pixels = (in_block.width() * in_block.height()) as usize * in_texels;
-        self.info
-            .in_kind
+        info.in_kind
             .action(ResizeAction(&mut self.in_texels, in_texels));
 
         let out_texels = self.out_coords.len();
-        let out_block = self.info.out_layout.texel.block;
+        let out_block = info.out_layout.texel.block;
         let out_pixels = (out_block.width() * out_block.height()) as usize * out_texels;
-        self.info
-            .out_kind
+        info.out_kind
             .action(ResizeAction(&mut self.out_texels, out_texels));
 
         debug_assert!(
@@ -322,17 +323,15 @@ impl Converter {
             out_pixels
         );
         let pixels = in_pixels.max(out_pixels);
-        self.info
-            .common_pixel
+        info.common_pixel
             .action(ResizeAction(&mut self.pixel_in_buffer, pixels));
-        if let Some(_) = self.ops.recolor {
-            self.info
-                .common_pixel
+        if let Some(_) = ops.recolor {
+            info.common_pixel
                 .action(ResizeAction(&mut self.pixel_out_buffer, pixels));
         }
     }
 
-    fn read_texels(&mut self, from: PlaneSource) {
+    fn read_texels(&mut self, info: &Info, from: PlaneSource) {
         fn fetch_from_texel_array<T>(
             from: PlaneSource,
             idx: &[usize],
@@ -359,14 +358,14 @@ impl Converter {
             }
         }
 
-        self.info.in_kind.action(ReadUnit {
+        info.in_kind.action(ReadUnit {
             from,
             idx: &self.in_index,
             into: &mut self.in_texels,
         })
     }
 
-    fn write_texels(&mut self, into: PlaneTarget) {
+    fn write_texels(&mut self, info: &Info, into: PlaneTarget) {
         fn write_from_texel_array<T>(
             mut into: PlaneTarget,
             idx: &[usize],
@@ -392,7 +391,7 @@ impl Converter {
             }
         }
 
-        self.info.out_kind.action(WriteUnit {
+        info.out_kind.action(WriteUnit {
             into,
             idx: &self.in_index,
             from: &mut self.out_texels,

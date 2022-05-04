@@ -2,8 +2,8 @@
 use crate::color::*;
 
 use canvas::layout::{
-    Decay, Layout as CanvasLayout, Matrix, MatrixBytes, MatrixLayout, Raster, StrideSpec,
-    StridedBytes, StridedTexels, TexelLayout,
+    Decay, Layout as CanvasLayout, MatrixBytes, Raster, StrideSpec, StridedBytes, StridedTexels,
+    TexelLayout,
 };
 
 /// The byte layout of a buffer.
@@ -48,7 +48,7 @@ pub(crate) struct Plane {
     pub(crate) texel: Texel,
 }
 
-/// Describes uniformly spaced (color) channels.
+/// The strides of uniformly spaced (color) channels.
 pub struct ChannelSpec {
     pub channels: u8,
     pub channel_stride: usize,
@@ -72,6 +72,7 @@ pub struct ChannelBytes {
     pub(crate) channels: u8,
 }
 
+/// A typed layout with uniform spaced (color) channels.
 #[derive(Clone, PartialEq)]
 pub struct ChannelLayout<T> {
     pub(crate) channel: canvas::Texel<T>,
@@ -115,17 +116,6 @@ pub struct RowLayoutDescription {
     pub height: u32,
     pub row_stride: u64,
     pub texel: Texel,
-}
-
-/// Describes an image semantically.
-#[derive(Clone, Debug, PartialEq)]
-pub struct LayoutDescriptor {
-    /// The byte and physical layout of the buffer.
-    layout: ByteLayout,
-    /// Describe how each single texel is interpreted.
-    pub texel: Texel,
-    /// How the numbers relate to physical quantities, important for conversion.
-    pub color: Color,
 }
 
 /// One Unit of bytes in a texture.
@@ -321,71 +311,10 @@ pub enum SampleBits {
     Float32x4,
 }
 
-/// An error
+/// Error that occurs when constructing a layout.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct LayoutError {
     inner: (),
-}
-
-impl LayoutDescriptor {
-    pub const EMPTY: Self = LayoutDescriptor {
-        layout: ByteLayout {
-            width: 0,
-            height: 0,
-            bytes_per_row: 0,
-        },
-        texel: Texel {
-            block: Block::Pixel,
-            bits: SampleBits::Int8x4,
-            parts: sample_parts::RgbA,
-        },
-        color: Color::SRGB,
-    };
-
-    fn with_texel(texel: Texel, color: Color, width: u32, height: u32) -> Option<Self> {
-        // TODO: a bit overkill, ain't it?
-        let layout = FrameLayout::with_texel(&texel, width, height).ok()?;
-        Some(LayoutDescriptor {
-            layout: layout.bytes,
-            texel,
-            color,
-        })
-    }
-
-    /// Get the texel describing a single channel.
-    /// Returns None if the channel is not contained, or if it can not be extracted on its own.
-    pub fn channel_texel(&self, channel: ColorChannel) -> Option<Texel> {
-        self.texel.channel_texel(channel)
-    }
-
-    /// Check if the descriptor is consistent.
-    ///
-    /// A consistent descriptor makes inherent sense. That is, the different fields contain values
-    /// that are not contradictory. For example, the color channels parts and the color model
-    /// correspond to each other, and the sample parts and sample bits field is correct, and the
-    /// texel descriptor has the same number of bytes as the layout, etc.
-    pub fn is_consistent(&self) -> bool {
-        // FIXME: actual checks.
-        // * bits and parts belong
-        // * for planar content everything is okay.
-        // * bytes_per_row does not overlap
-        true
-    }
-
-    /// Calculate the total number of pixels in width of this layout.
-    pub fn pixel_width(&self) -> u32 {
-        self.layout.width * self.texel.block.width()
-    }
-
-    /// Calculate the total number of pixels in height of this layout.
-    pub fn pixel_height(&self) -> u32 {
-        self.layout.height * self.texel.block.height()
-    }
-
-    /// Calculate the number of texels in width and height dimension.
-    pub fn size(&self) -> (u32, u32) {
-        (self.layout.width, self.layout.height)
-    }
 }
 
 impl Texel {
@@ -614,7 +543,24 @@ impl Block {
 }
 
 impl FrameLayout {
-    pub fn new(texel: Texel, layers: &[PlaneBytes]) -> Result<Self, LayoutError> {
+    /// Construct a full frame from a single plane.
+    pub fn with_plane(bytes: PlaneBytes) -> Self {
+        let stride = bytes.matrix.spec();
+
+        FrameLayout {
+            bytes: ByteLayout {
+                width: stride.width as u32,
+                height: stride.height as u32,
+                bytes_per_row: stride.width_stride as u32,
+            },
+            planes: Box::default(),
+            texel: bytes.texel,
+            color: None,
+        }
+    }
+
+    /// Create from a list of planes, and the texel they describe when merged.
+    pub fn with_planes(layers: &[PlaneBytes], texel: Texel) -> Result<Self, LayoutError> {
         if layers.len() == 0 {
             return Err(LayoutError::NO_INFO);
         }
@@ -660,7 +606,7 @@ impl FrameLayout {
             matrix: StridedBytes::new(stride).map_err(LayoutError::stride_error)?,
         };
 
-        Self::new(rows.texel.clone(), &[bytes])
+        Self::with_planes(&[bytes], rows.texel.clone())
     }
 
     /// Create a buffer layout from a texel and dimensions.

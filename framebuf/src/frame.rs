@@ -1,9 +1,7 @@
 //! A byte-buffer based image descriptor.
 use canvas::canvas::{CanvasMut, CanvasRef};
 
-use crate::layout::{
-    ByteLayout, ChannelBytes, ChannelLayout, FrameLayout, PlanarLayout, PlaneBytes,
-};
+use crate::layout::{ChannelLayout, FrameLayout, PlanarLayout, PlaneBytes};
 use crate::shader::Converter;
 
 /// A byte buffer with dynamic color contents.
@@ -223,8 +221,9 @@ impl Frame {
         })
     }
 
+    /// Write into another frame, converting color representation between.
     pub fn convert(&self, into: &mut Self) {
-        Converter::new(self, into).run_on(self, into)
+        Converter::new().run_on(self, into)
     }
 
     pub(crate) fn as_ref(&self) -> CanvasRef<'_, &'_ FrameLayout> {

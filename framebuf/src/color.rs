@@ -131,9 +131,9 @@ pub enum ColorChannelModel {
 }
 
 /// Describes a single channel from an image.
-/// Note that it must match the descriptor when used in `extract` and `inject`.
 ///
-/// This can be thought of as an index into a vector of channels relating to a color.
+/// This can be thought of as an index into a vector of channels relating to a color. Combine with
+/// a concrete [`ColorChannelModel`] for the canonical index in a 4-sample color representation.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 #[non_exhaustive]
 pub enum ColorChannel {
