@@ -11,7 +11,7 @@
 //! allocator.
 use crate::canvas::Canvas;
 use crate::layout;
-use crate::layout::Layout;
+use crate::layout::{Layout, MismatchedPixelError, TexelLayout, TryMend};
 use crate::texel::{AsTexel, Texel};
 use core::ops::Range;
 
@@ -26,7 +26,7 @@ pub struct StrideSpec {
     ///
     /// If this differs from both `width_stride` and `height_stride` the any copy must loop over
     /// individual pixels. Otherwise, whole rows or columns of contiguous data may be inspected.
-    pub element: layout::TexelLayout,
+    pub element: TexelLayout,
     /// The number of bytes to go one pixel along the width.
     pub width_stride: usize,
     /// The number of bytes to go one pixel along the height.
@@ -192,7 +192,7 @@ impl StridedBytes {
 
     /// Construct a layout with zeroed strides, repeating one element.
     pub fn with_repeated_width_and_height(
-        element: layout::TexelLayout,
+        element: TexelLayout,
         width: usize,
         height: usize,
     ) -> Self {
@@ -257,7 +257,7 @@ impl StridedBytes {
     /// Shrink the element's size or alignment.
     ///
     /// This is always valid since the new layout is strictly contained within the old one.
-    pub fn shrink_element(&mut self, new: layout::TexelLayout) {
+    pub fn shrink_element(&mut self, new: TexelLayout) {
         self.spec.element = self.spec.element.infimum(new);
     }
 
@@ -283,6 +283,30 @@ impl StridedBytes {
 
     fn pixel(&self, x: usize, y: usize) -> Range<usize> {
         self.spec.element(x, y)
+    }
+}
+
+impl<T> StridedTexels<T> {
+    /// Upgrade a byte specification to a strong typed texel one.
+    ///
+    /// Requires that the element is _exactly_ equivalent to the provided texel.
+    pub fn with_texel(texel: Texel<T>, bytes: StridedBytes) -> Option<Self> {
+        if TexelLayout::from(texel) == bytes.spec.element {
+            Some(StridedTexels {
+                inner: bytes,
+                texel,
+            })
+        } else {
+            None
+        }
+    }
+
+    pub fn spec(&self) -> StrideSpec {
+        self.inner.spec()
+    }
+
+    pub fn texel(&self) -> Texel<T> {
+        self.texel
     }
 }
 
@@ -313,7 +337,7 @@ impl<'data> ByteCanvasRef<'data> {
     }
 
     /// Shrink the element's size or alignment.
-    pub fn shrink_element(&mut self, new: layout::TexelLayout) -> layout::TexelLayout {
+    pub fn shrink_element(&mut self, new: TexelLayout) -> TexelLayout {
         self.layout.shrink_element(new);
         self.layout.spec.element
     }
@@ -347,7 +371,7 @@ impl<'data> ByteCanvasMut<'data> {
     }
 
     /// Shrink the element's size or alignment.
-    pub fn shrink_element(&mut self, new: layout::TexelLayout) -> layout::TexelLayout {
+    pub fn shrink_element(&mut self, new: TexelLayout) -> TexelLayout {
         self.layout.shrink_element(new);
         self.layout.spec.element
     }
@@ -454,6 +478,18 @@ impl<P: AsTexel> StridedLayout for layout::Matrix<P> {
     }
 }
 
+impl<P> Layout for StridedTexels<P> {
+    fn byte_len(&self) -> usize {
+        self.inner.total
+    }
+}
+
+impl<P> StridedLayout for StridedTexels<P> {
+    fn strided(&self) -> StridedBytes {
+        self.inner.clone()
+    }
+}
+
 impl From<BadStrideKind> for BadStrideError {
     fn from(kind: BadStrideKind) -> Self {
         BadStrideError { kind }
@@ -466,12 +502,21 @@ impl From<&'_ StridedBytes> for StrideSpec {
     }
 }
 
+/// Try to use the matrix with a specific pixel type.
+impl<P> TryMend<StridedBytes> for Texel<P> {
+    type Into = StridedTexels<P>;
+    type Err = MismatchedPixelError;
+
+    fn try_mend(self, matrix: &StridedBytes) -> Result<StridedTexels<P>, Self::Err> {
+        StridedTexels::with_texel(self, *matrix).ok_or_else(MismatchedPixelError::default)
+    }
+}
+
 #[test]
 fn align_validation() {
     // Setup a good base specification.
-    let matrix =
-        layout::MatrixBytes::from_width_height(layout::TexelLayout::from_pixel::<u16>(), 2, 2)
-            .expect("Valid matrix");
+    let matrix = layout::MatrixBytes::from_width_height(TexelLayout::from_pixel::<u16>(), 2, 2)
+        .expect("Valid matrix");
     let layout = StridedBytes::with_row_major(matrix);
 
     let bad_offset = StrideSpec {
@@ -488,9 +533,8 @@ fn align_validation() {
 
 #[test]
 fn canvas_copies() {
-    let matrix =
-        layout::MatrixBytes::from_width_height(layout::TexelLayout::from_pixel::<u8>(), 2, 2)
-            .expect("Valid matrix");
+    let matrix = layout::MatrixBytes::from_width_height(TexelLayout::from_pixel::<u8>(), 2, 2)
+        .expect("Valid matrix");
     let row_layout = StridedBytes::with_row_major(matrix);
     let col_layout = StridedBytes::with_column_major(matrix);
 

@@ -159,6 +159,21 @@ impl<P> TexelBuffer<P> {
         self.length = bytes;
     }
 
+    /// Change the allocated bytes, interpreted for another texel.
+    ///
+    /// This will always reallocate the buffer if the size exceeds the current capacity.
+    ///
+    /// # Panics
+    ///
+    /// This function will panic when the byte-length of the slice with the provided count would
+    /// exceed the possible `usize` values. To avoid this, use `resize_bytes` with manual
+    /// calculation of the byte length instead.
+    ///
+    /// This function will also panic if an allocation is necessary but fails.
+    pub fn resize_for_texel<O>(&mut self, count: usize, texel: Texel<O>) {
+        self.resize_bytes(mem_size(texel, count))
+    }
+
     /// Change the number of texel without reallocation.
     ///
     /// Returns `Ok` when the resizing was successfully completed to the requested size and returns
@@ -257,6 +272,16 @@ impl<P> TexelBuffer<P> {
 
     pub fn as_bytes_mut(&mut self) -> &mut [u8] {
         self.buf_mut().as_bytes_mut()
+    }
+
+    /// View the buffer as a different texel type.
+    pub fn as_texels<O>(&self, pixel: Texel<O>) -> &[O] {
+        self.inner.as_texels(pixel)
+    }
+
+    /// Mutate the buffer as a different texel type.
+    pub fn as_mut_texels<O>(&mut self, pixel: Texel<O>) -> &mut [O] {
+        self.inner.as_mut_texels(pixel)
     }
 
     /// The total number of managed bytes.

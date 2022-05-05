@@ -10,7 +10,7 @@ use core::{alloc, cmp};
 mod matrix;
 
 use crate::canvas::{CanvasMut, CanvasRef, Coord};
-pub use crate::stride::{BadStrideError, StrideSpec, StridedBytes, StridedLayout};
+pub use crate::stride::{BadStrideError, StrideSpec, StridedBytes, StridedLayout, StridedTexels};
 
 /// A byte layout that only describes the user bytes.
 ///
@@ -395,6 +395,10 @@ impl TexelLayout {
     /// Get the minimum required alignment of the element.
     pub const fn align(self) -> usize {
         self.size
+    }
+
+    pub const fn superset_of(&self, other: TexelLayout) -> bool {
+        self.size >= other.size && self.align >= other.align
     }
 }
 
