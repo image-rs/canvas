@@ -96,6 +96,14 @@ struct FromBits {
     len: usize,
 }
 
+/// FIXME(color): What about colors with more than three stimuli (e.g. scientific instruments such
+/// as Mars202 have 13 bands). In general, any observer function that's not a linear combination of
+/// the CIE XYZ can not be converted from/to color spaces defined through it without loss because
+/// 'observation' is assumed to measure spectrum under a wavelength response curve.
+///
+/// Examples that fall outside of this, 'yellow' cones in human vision and other awesome mutations
+/// such as partial color blindness, that's a shifted response curve of the common cone variant. Do
+/// we want to be able to represent those?
 #[derive(Clone, Copy, Debug)]
 enum CommonPixel {
     U8x4,
@@ -165,7 +173,11 @@ impl Converter {
         let info = Info {
             in_layout: frame_in.layout().clone(),
             out_layout: frame_out.layout().clone(),
+            // FIXME(perf): not optimal in all cases, but necessary for accurate conversion.
+            // allow configuration / detect trivial conversion.
             common_pixel: CommonPixel::F32x4,
+            // FIXME(color): currently the only case, we also go through this if any conversion is
+            // required, but of course in general a potential loss of accuracy. General enough?
             common_color: CommonColor::CieXyz,
             in_kind: TexelKind::from(frame_in.layout().texel.bits),
             out_kind: TexelKind::from(frame_out.layout().texel.bits),
@@ -175,6 +187,7 @@ impl Converter {
             in_index: Self::index_from_in_info,
             out_index: Self::index_from_out_info,
             expand: CommonPixel::expand_from_info,
+            // FIXME(color):
             recolor: None,
             join: CommonPixel::join_from_info,
         };
@@ -339,6 +352,7 @@ impl Converter {
             texel: Texel<T>,
         ) {
             into.resize_for_texel(idx.len(), texel);
+            // FIXME(color): multi-planar texel fetch.
             for (&index, into) in idx.iter().zip(into.as_mut_texels(texel)) {
                 if let Some(from) = from.as_texels(texel).get(index) {
                     *into = texel.copy_val(from);
@@ -372,6 +386,7 @@ impl Converter {
             from: &TexelBuffer,
             texel: Texel<T>,
         ) {
+            // FIXME(color): multi-planar texel write.
             for (&index, from) in idx.iter().zip(from.as_texels(texel)) {
                 if let Some(into) = into.as_mut_texels(texel).get_mut(index) {
                     *into = texel.copy_val(from);
@@ -415,6 +430,7 @@ impl Converter {
     }
 
     fn index_from_layer(info: &FrameLayout, texel: &[TexelCoord], idx: &mut [usize]) {
+        // FIXME(perf): review performance. Could probably be vectorized by hand.
         for (&TexelCoord(Coord(x, y)), idx) in texel.iter().zip(idx) {
             *idx = info.texel_index(x, y) as usize;
         }
@@ -441,15 +457,24 @@ impl CommonPixel {
                 let texel_slice = self.texel_buf.as_texels(texel);
                 let pixel_slice = self.pixel_buf.as_mut_texels(self.expand);
 
+                // FIXME(color): block expansion to multiple pixels.
+                // FIXME(color): adjust the FromBits for multiple planes.
                 for (texbits, expand) in texel_slice.iter().zip(pixel_slice) {
                     *expand = (self.expand_fn)(self.bits.map(|b| b.extract_as_lsb(texel, texbits)));
                 }
             }
         }
 
+        // FIXME(perf): some bit/part combinations require no reordering of bits and could skip
+        // large parts of this phase, or be done vectorized, effectively amounting to a memcpy when
+        // the expanded value has the same representation as the texel.
         let TexelBits { bits, parts, .. } = info.in_layout.texel;
         let bits = FromBits::new(bits, parts);
 
+        // FIXME(color): rescaling of channels, and their bit interpretation.
+        // Here we presume that everything is encoded as int. We should scale integers so that they
+        // occupy the full dynamic range, and scale floats to [0; 1.0) or the respective HDR upper
+        // bound, i.e. likely 100.0 to represent 10_000 cd/m².
         match info.common_pixel {
             CommonPixel::U8x4 => info.in_kind.action(ExpandAction {
                 expand: <[u8; 4]>::texel(),
@@ -496,6 +521,8 @@ impl CommonPixel {
                 let texel_slice = self.texel_buf.as_mut_texels(texel);
                 let pixel_slice = self.pixel_buf.as_texels(self.join);
 
+                // FIXME(color): block from multiple pixels—how to?
+                // FIXME(color): adjust the FromBits for multiple planes.
                 for (texbits, joined) in texel_slice.iter_mut().zip(pixel_slice) {
                     let values = (self.join_fn)(self.join.copy_val(joined));
                     for (bits, value) in self.bits.iter().zip(values) {
@@ -505,9 +532,16 @@ impl CommonPixel {
             }
         }
 
+        // FIXME(perf): some bit/part combinations require no reordering of bits and could skip
+        // large parts of this phase, or be done vectorized, effectively amounting to a memcpy when
+        // the expanded value had the same representation as the texel.
         let TexelBits { bits, parts, .. } = info.out_layout.texel;
         let bits = FromBits::new(bits, parts);
 
+        // FIXME(color): rescaling of channels, and their bit interpretation.
+        // Here we presume that everything is encoded as int. We should scale integers so that they
+        // occupy the full dynamic range, and scale floats from [0; 1.0) or the respective HDR upper
+        // bound, i.e. likely 100.0 to represent 10_000 cd/m².
         match info.common_pixel {
             CommonPixel::U8x4 => info.out_kind.action(JoinAction {
                 join: <[u8; 4]>::texel(),
@@ -643,6 +677,7 @@ impl FromBits {
     /// either 32-bit boundary or 64-bit boundary then the startu64 is also one of two constants.
     #[inline]
     fn extract_as_lsb<T>(&self, texel: Texel<T>, val: &T) -> u32 {
+        // FIXME(perf): vectorized form for all texels where possible.
         // Grab up to 8 bytes surrounding the bits, convert using u64 intermediate, then shift
         // upwards (by at most 7 bit) and mask off any remaining bits.
         let ne_bytes = texel.to_bytes(core::slice::from_ref(val));
@@ -669,6 +704,7 @@ impl FromBits {
     }
 
     fn insert_as_lsb<T>(&self, texel: Texel<T>, val: &mut T, bits: u32) {
+        // FIXME(perf): vectorized form for all texels where possible.
         let ne_bytes = texel.to_mut_bytes(core::slice::from_mut(val));
         let startu64 = self.begin / 8;
         let bytestart = startu64.min(ne_bytes.len());
