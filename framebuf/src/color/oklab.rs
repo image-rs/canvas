@@ -18,7 +18,7 @@ pub fn oklab_from_xyz(xyza: [f32; 4]) -> [f32; 4] {
     // The OKLab transformation.
     let lms = M1.mul_vec([x, y, z]);
     // We can't use pow outright for negative components.
-    let lms_star = copysign(pow(abs(lms), 1.0 / 3.0), lms);
+    let lms_star = f_lms(lms);
     let [l, ca, cb] = M2.mul_vec(lms_star);
 
     // Write this as our 'linear color' (preserve alpha).
@@ -33,10 +33,18 @@ pub fn oklab_to_xyz([l, ca, cb, a]: [f32; 4]) -> [f32; 4] {
     // The OKLab transformation.
     let lms_star = M2_INV.mul_vec([l, ca, cb]);
     // Not using pow because that would be undefined for negative components.
-    let lms = pow3(lms_star);
+    let lms = f_lms_inv(lms_star);
     let [x, y, z] = M1_INV.mul_vec(lms);
 
     [x, y, z, a]
+}
+
+pub(crate) fn f_lms(lms: [f32; 3]) -> [f32; 3] {
+    copysign(pow(abs(lms), 1.0 / 3.0), lms)
+}
+
+pub(crate) fn f_lms_inv(lms: [f32; 3]) -> [f32; 3] {
+    pow3(lms)
 }
 
 fn pow([a, b, c]: [f32; 3], exp: f32) -> [f32; 3] {

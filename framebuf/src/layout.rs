@@ -494,37 +494,6 @@ impl SampleParts {
     }
 }
 
-impl Color {
-    pub fn model(&self) -> Option<ColorChannelModel> {
-        Some(match self {
-            Color::Rgb { .. } => ColorChannelModel::Rgb,
-            Color::Oklab => ColorChannelModel::Lab,
-            Color::Scalars { .. } => return None,
-        })
-    }
-
-    /// Check if this color space contains the sample parts.
-    ///
-    /// For example, an Xyz color is expressed in terms of a subset of Rgb while HSV color spaces
-    /// contains the Hsv parts (duh!) and CIECAM and similar spaces have a polar representation of
-    /// hue etc.
-    ///
-    /// Note that one can always combine a color space with an alpha component.
-    #[allow(non_upper_case_globals)]
-    pub fn is_consistent(&self, parts: SampleParts) -> bool {
-        use sample_parts::*;
-        matches!(
-            (self, parts),
-            (Color::Rgb { .. }, R | G | B | Rgb | RgbA)
-            //  | Rgb_ | _Rgb | Bgr_ | _Bgr
-            | (Color::Oklab, Lch | LchA)
-            // With scalars pseudo color, everything goes.
-            // Essentially, the user assigns which meaning each channel has.
-            | (Color::Scalars { .. }, _)
-        )
-    }
-}
-
 impl Block {
     pub fn width(&self) -> u32 {
         use Block::*;

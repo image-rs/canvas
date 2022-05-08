@@ -1,4 +1,5 @@
 mod oklab;
+mod srlab2;
 mod transfer;
 
 use crate::color_matrix::{ColMatrix, RowMatrix};
@@ -57,6 +58,18 @@ pub enum Color {
         /// You can simply use `Linear` if you do not want to encode and rgb texel.
         transfer: Transfer,
     },
+    /// A LAB space based on contemporary perceptual understanding.
+    ///
+    /// > The newly defined SRLAB2 color model is a compromise between the simplicity of CIELAB and
+    /// the correctness of CIECAM02.
+    ///
+    /// By combining whitepoint adaption in the (more) precise model of CIECAM02 while performing
+    /// the transfer function in the cone response space, this achieves a good uniformity by
+    /// simply modelling the human perception properly. It just leaves out the surround luminance
+    /// model in the vastly more complex CIECAM02.
+    ///
+    /// Reference: <https://www.magnetkern.de/srlab2.html>
+    SrLab2 { whitepoint: Whitepoint },
 }
 
 /// How to interpret channels as physical quantities.
@@ -306,6 +319,11 @@ impl Color {
                 [x, y, z, a]
             }
             Color::Scalars { transfer } => transfer.to_optical_display(value),
+            Color::SrLab2 { whitepoint } => {
+                let [x, y, z, a] = value;
+                let [x, y, z] = srlab2::srlab_to_xyz([x, y, z], *whitepoint);
+                [x, y, z, a]
+            }
         }
     }
 
@@ -324,7 +342,20 @@ impl Color {
                 transfer.from_optical_display([r, g, b, a])
             }
             Color::Scalars { transfer } => transfer.from_optical_display(value),
+            Color::SrLab2 { whitepoint } => {
+                let [x, y, z, a] = value;
+                let [x, y, z] = srlab2::srlab_from_xyz([x, y, z], *whitepoint);
+                [x, y, z, a]
+            }
         }
+    }
+
+    pub fn model(&self) -> Option<ColorChannelModel> {
+        Some(match self {
+            Color::Rgb { .. } => ColorChannelModel::Rgb,
+            Color::Oklab | Color::SrLab2 { .. } => ColorChannelModel::Lab,
+            Color::Scalars { .. } => return None,
+        })
     }
 }
 
