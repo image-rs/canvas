@@ -1,3 +1,8 @@
+mod oklab;
+mod transfer;
+
+use crate::color_matrix::{ColMatrix, RowMatrix};
+
 /// Identifies a color representation.
 ///
 /// This names the model by which the numbers in the channels relate to a physical model. How
@@ -285,6 +290,120 @@ impl Color {
         transfer: Transfer::Bt709,
         whitepoint: Whitepoint::D65,
     };
+
+    pub(crate) fn to_xyz(&self, value: [f32; 4]) -> [f32; 4] {
+        match self {
+            Color::Oklab => oklab::oklab_to_xyz(value),
+            Color::Rgb {
+                primary,
+                transfer,
+                whitepoint,
+                luminance: _,
+            } => {
+                let [r, g, b, a] = transfer.to_optical_display(value);
+                let to_xyz = primary.to_xyz(*whitepoint);
+                let [x, y, z] = to_xyz.mul_vec([r, g, b]);
+                [x, y, z, a]
+            }
+            Color::Scalars { transfer } => transfer.to_optical_display(value),
+        }
+    }
+
+    pub(crate) fn from_xyz(&self, value: [f32; 4]) -> [f32; 4] {
+        match self {
+            Color::Oklab => oklab::oklab_from_xyz(value),
+            Color::Rgb {
+                primary,
+                transfer,
+                whitepoint,
+                luminance: _,
+            } => {
+                let [x, y, z, a] = value;
+                let from_xyz = primary.to_xyz(*whitepoint).inv();
+                let [r, g, b] = from_xyz.mul_vec([x, y, z]);
+                transfer.from_optical_display([r, g, b, a])
+            }
+            Color::Scalars { transfer } => transfer.from_optical_display(value),
+        }
+    }
+}
+
+impl Transfer {
+    /// Convert to optical (=linear) display intensity.
+    ///
+    /// The difference between display and scene light only matters for very recent HDR content,
+    /// just regard it as electro-optical transfer application.
+    pub(crate) fn to_optical_display(self, value: [f32; 4]) -> [f32; 4] {
+        use self::transfer::*;
+
+        let [r, g, b, a] = value;
+        let rgb = [r, g, b];
+
+        let [r, g, b] = match self {
+            Transfer::Bt709 => rgb.map(transfer_eo_bt709),
+            Transfer::Bt470M => rgb.map(transfer_eo_bt470m),
+            Transfer::Bt601 => rgb.map(transfer_eo_bt601),
+            Transfer::Smpte240 => rgb.map(transfer_eo_smpte240),
+            Transfer::Linear => rgb,
+            Transfer::Srgb => rgb.map(transfer_eo_srgb),
+            Transfer::Bt2020_10bit => rgb.map(transfer_eo_bt2020_10b),
+            Transfer::Bt2020_12bit => {
+                // FIXME(color): implement.
+                todo!()
+            }
+            Transfer::Smpte2084 => rgb.map(transfer_eo_smpte2084),
+            Transfer::Bt2100Pq => {
+                // FIXME(color): implement.
+                todo!()
+            }
+            Transfer::Bt2100Hlg => {
+                // FIXME(color): implement.
+                todo!()
+            }
+            Transfer::Bt2100Scene => {
+                // FIXME(color): implement.
+                todo!()
+            }
+        };
+
+        [r, g, b, a]
+    }
+
+    pub(crate) fn from_optical_display(self, value: [f32; 4]) -> [f32; 4] {
+        use self::transfer::*;
+
+        let [r, g, b, a] = value;
+        let rgb = [r, g, b];
+
+        let [r, g, b] = match self {
+            Transfer::Bt709 => rgb.map(transfer_oe_bt709),
+            Transfer::Bt470M => rgb.map(transfer_oe_bt470m),
+            Transfer::Bt601 => rgb.map(transfer_oe_bt601),
+            Transfer::Smpte240 => rgb.map(transfer_oe_smpte240),
+            Transfer::Linear => rgb,
+            Transfer::Srgb => rgb.map(transfer_oe_srgb),
+            Transfer::Bt2020_10bit => rgb.map(transfer_oe_bt2020_10b),
+            Transfer::Bt2020_12bit => {
+                // FIXME(color): implement.
+                todo!()
+            }
+            Transfer::Smpte2084 => rgb.map(transfer_oe_smpte2084),
+            Transfer::Bt2100Pq => {
+                // FIXME(color): implement.
+                todo!()
+            }
+            Transfer::Bt2100Hlg => {
+                // FIXME(color): implement.
+                todo!()
+            }
+            Transfer::Bt2100Scene => {
+                // FIXME(color): implement.
+                todo!()
+            }
+        };
+
+        [r, g, b, a]
+    }
 }
 
 impl Whitepoint {
@@ -303,5 +422,49 @@ impl Whitepoint {
             F7 => [0.95041, 1.00000, 1.08747],
             F11 => [1.00962, 1.00000, 0.64350],
         }
+    }
+}
+
+#[rustfmt::skip]
+impl Primaries {
+    pub(crate) fn to_xyz(self, white: Whitepoint) -> RowMatrix {
+        use Primaries::*;
+        // Rec.BT.601
+        // https://en.wikipedia.org/wiki/Color_spaces_with_RGB_primaries#Specifications_with_RGB_primaries
+        let xy: [[f32; 2]; 3] = match self {
+            Bt601_525 | Smpte240 => [[0.63, 0.34], [0.31, 0.595], [0.155, 0.07]],
+            Bt601_625 => [[0.64, 0.33], [0.29, 0.6], [0.15, 0.06]],
+            Bt709 => [[0.64, 0.33], [0.30, 0.60], [0.15, 0.06]],
+            Bt2020 | Bt2100 => [[0.708, 0.292], [0.170, 0.797], [0.131, 0.046]],
+            Xyz => todo!(),
+        };
+
+        // A column of CIE XYZ intensities for that primary.
+        let xyz = |[x, y]: [f32; 2]| {
+            [x / y, 1.0, (1.0 - x - y)/y]
+        };
+
+        let xyz_r = xyz(xy[0]);
+        let xyz_g = xyz(xy[1]);
+        let xyz_b = xyz(xy[2]);
+
+        // Virtually, N = [xyz_r | xyz_g | xyz_b]
+        // As the unweighted conversion matrix for:
+        //  XYZ = N · RGB
+        let n1 = ColMatrix([xyz_r, xyz_g, xyz_b]).inv();
+
+        // http://www.brucelindbloom.com/index.html
+        let w = white.to_xyz();
+
+        // s is the weights that give the whitepoint when converted to xyz.
+        // That is we're solving:
+        //  W = N · S
+        let s = n1.mul_vec(w);
+
+        RowMatrix([
+            s[0]*xyz_r[0], s[1]*xyz_g[0], s[2]*xyz_b[0],
+            s[0]*xyz_r[1], s[1]*xyz_g[1], s[2]*xyz_b[1],
+            s[0]*xyz_r[2], s[1]*xyz_g[2], s[2]*xyz_b[2],
+        ])
     }
 }

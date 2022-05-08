@@ -215,6 +215,9 @@ macro_rules! sample_parts {
 }
 
 #[allow(non_upper_case_globals)]
+// We use items here just as a glob-import.
+// They are duplicated as constants to the struct then.
+#[allow(unused)]
 mod sample_parts {
     type Cc = super::ColorChannel;
     use super::ColorChannelModel;

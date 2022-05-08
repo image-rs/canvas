@@ -1,61 +1,20 @@
-#[rustfmt::skip]
-impl Primaries {
-    pub(crate) fn to_xyz(self, white: Whitepoint) -> RowMatrix {
-        use Primaries::*;
-        // Rec.BT.601
-        // https://en.wikipedia.org/wiki/Color_spaces_with_RGB_primaries#Specifications_with_RGB_primaries
-        let xy: [[f32; 2]; 3] = match self {
-            Bt601_525 | Smpte240 => [[0.63, 0.34], [0.31, 0.595], [0.155, 0.07]],
-            Bt601_625 => [[0.64, 0.33], [0.29, 0.6], [0.15, 0.06]],
-            Bt709 => [[0.64, 0.33], [0.30, 0.60], [0.15, 0.06]],
-            Bt2020 | Bt2100 => [[0.708, 0.292], [0.170, 0.797], [0.131, 0.046]],
-        };
-
-        // A column of CIE XYZ intensities for that primary.
-        let xyz = |[x, y]: [f32; 2]| {
-            [x / y, 1.0, (1.0 - x - y)/y]
-        };
-
-        let xyz_r = xyz(xy[0]);
-        let xyz_g = xyz(xy[1]);
-        let xyz_b = xyz(xy[2]);
-
-        // Virtually, N = [xyz_r | xyz_g | xyz_b]
-        // As the unweighted conversion matrix for:
-        //  XYZ = N · RGB
-        let RowMatrix(n1) = ColMatrix([xyz_r, xyz_g, xyz_b]).inv();
-
-        // http://www.brucelindbloom.com/index.html
-        let w = white.to_xyz();
-
-        // s is the weights that give the whitepoint when converted to xyz.
-        // That is we're solving:
-        //  W = N · S
-        let s = [
-            (w[0]*n1[0] + w[1]*n1[1] + w[2]*n1[2]),
-            (w[0]*n1[3] + w[1]*n1[4] + w[2]*n1[5]),
-            (w[0]*n1[6] + w[1]*n1[7] + w[2]*n1[8]),
-        ];
-
-        RowMatrix([
-            s[0]*xyz_r[0], s[1]*xyz_g[0], s[2]*xyz_b[0],
-            s[0]*xyz_r[1], s[1]*xyz_g[1], s[2]*xyz_b[1],
-            s[0]*xyz_r[2], s[1]*xyz_g[2], s[2]*xyz_b[2],
-        ])
-    }
-}
+#![allow(dead_code)] // Mostly imported code from another project. Bare minimum linear algebra.
 
 /// A column major matrix.
+///
+/// FIXME: const everything, in particular matrix inversion, but this is blocked on floating point
+/// arithmetic in constants.
+
 #[derive(Clone, Copy, Debug, PartialEq)]
-pub(crate) struct ColMatrix([[f32; 3]; 3]);
+pub(crate) struct ColMatrix(pub(crate) [[f32; 3]; 3]);
 
 /// A row major matrix.
 #[derive(Clone, Copy, Debug, PartialEq)]
-pub(crate) struct RowMatrix([f32; 9]);
+pub(crate) struct RowMatrix(pub(crate) [f32; 9]);
 
 #[rustfmt::skip]
 impl ColMatrix {
-    fn adj(self) -> RowMatrix {
+    pub(crate) fn adj(self) -> RowMatrix {
         let m = self.0;
 
         let det = |c1: usize, c2: usize, r1: usize, r2: usize| {
@@ -69,7 +28,7 @@ impl ColMatrix {
         ])
     }
 
-    fn det(self) -> f32 {
+    pub(crate) fn det(self) -> f32 {
         let det2 = |ma, mb, na, nb| {
             ma * nb - na * mb
         };
@@ -89,6 +48,28 @@ impl ColMatrix {
             adj[6] / det_n, adj[7] / det_n, adj[8] / det_n,
         ])
     }
+
+    #[rustfmt::skip]
+    pub(crate) const fn to_row(self) -> RowMatrix {
+        let ColMatrix(m) = self;
+
+        RowMatrix([
+            m[0][0], m[1][0], m[2][0],
+            m[0][1], m[1][1], m[2][1],
+            m[0][2], m[1][2], m[2][2],
+        ])
+    }
+
+    pub(crate) fn mul_vec(&self, vec: [f32; 3]) -> [f32; 3] {
+        let ColMatrix(m) = self;
+        let [a, b, c] = vec;
+
+        [
+            a*m[0][0] + b*m[1][0] + c*m[2][0],
+            a*m[0][1] + b*m[1][1] + c*m[2][1],
+            a*m[0][2] + b*m[1][2] + c*m[2][2],
+        ]
+    }
 }
 
 #[rustfmt::skip]
@@ -101,11 +82,11 @@ impl RowMatrix {
         ])
     }
 
-    pub(crate) fn new(rows: [f32; 9]) -> RowMatrix {
+    pub(crate) const fn new(rows: [f32; 9]) -> RowMatrix {
         RowMatrix(rows)
     }
 
-    pub(crate) fn diag(x: f32, y: f32, z: f32) -> Self {
+    pub(crate) const fn diag(x: f32, y: f32, z: f32) -> Self {
         RowMatrix([
             x, 0., 0.,
             0., y, 0.,
@@ -114,7 +95,7 @@ impl RowMatrix {
     }
 
     #[allow(clippy::many_single_char_names)]
-    pub(crate) fn transpose(self) -> Self {
+    pub(crate) const fn transpose(self) -> Self {
         let [a, b, c, d, e, f, g, h, i] = self.into_inner();
 
         RowMatrix([
@@ -125,11 +106,11 @@ impl RowMatrix {
     }
 
     pub(crate) fn inv(self) -> RowMatrix {
-        ColMatrix::from(self).inv()
+        self.to_col().inv()
     }
 
     pub(crate) fn det(self) -> f32 {
-        ColMatrix::from(self).det()
+        self.to_col().det()
     }
 
     /// Multiply with a homogeneous point.
@@ -162,12 +143,12 @@ impl RowMatrix {
         ])
     }
 
-    pub(crate) fn into_inner(self) -> [f32; 9] {
+    pub(crate) const fn into_inner(self) -> [f32; 9] {
         self.0
     }
 
     #[rustfmt::skip]
-    pub(crate) fn into_mat3x3_std140(self) -> [f32; 12] {
+    pub(crate) const fn into_mat3x3_std140(self) -> [f32; 12] {
         // std140, always pad components to 16 bytes.
         // matrix is an array of its columns.
         let matrix = self.into_inner();
@@ -178,27 +159,32 @@ impl RowMatrix {
             matrix[2], matrix[5], matrix[8], 0.0,
         ]
     }
-}
 
-#[rustfmt::skip]
-impl From<ColMatrix> for RowMatrix {
-    fn from(ColMatrix(m): ColMatrix) -> RowMatrix {
-        RowMatrix([
-            m[0][0], m[1][0], m[2][0],
-            m[0][1], m[1][1], m[2][1],
-            m[0][2], m[1][2], m[2][2],
-        ])
-    }
-}
+    #[rustfmt::skip]
+    pub(crate) const fn to_col(self) -> ColMatrix {
+        let RowMatrix(r) = self;
 
-#[rustfmt::skip]
-impl From<RowMatrix> for ColMatrix {
-    fn from(RowMatrix(r): RowMatrix) -> ColMatrix {
         ColMatrix([
             [r[0], r[3], r[6]],
             [r[1], r[4], r[7]],
             [r[2], r[5], r[8]],
         ])
+    }
+
+    pub(crate) fn mul_vec(&self, vec: [f32; 3]) -> [f32; 3] {
+        self.multiply_column(vec)
+    }
+}
+
+impl From<ColMatrix> for RowMatrix {
+    fn from(col: ColMatrix) -> RowMatrix {
+        col.to_row()
+    }
+}
+
+impl From<RowMatrix> for ColMatrix {
+    fn from(row: RowMatrix) -> ColMatrix {
+        row.to_col()
     }
 }
 

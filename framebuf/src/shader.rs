@@ -47,6 +47,7 @@ struct Info {
     /// The selected way to represent pixels in common parameter space.
     common_pixel: CommonPixel,
     /// The selected common color space, midpoint for conversion.
+    #[allow(unused)]
     common_color: CommonColor,
     /// The texel fetch we perform for input.
     /// Note that this is not necessarily the underlying texel as we throw away parts of
@@ -169,6 +170,17 @@ impl Converter {
         }
     }
 
+    fn recolor_ops(lhs: &FrameLayout, rhs: &FrameLayout) -> Option<RecolorOps> {
+        match (lhs.color.as_ref()?, rhs.color.as_ref()?) {
+            (c0, c1) if c0 == c1 => None,
+            // Some more special methods?
+            (_, _) => Some(RecolorOps {
+                from: CommonColor::cie_xyz_from_info,
+                into: CommonColor::cie_xyz_into_info,
+            }),
+        }
+    }
+
     pub fn run_on(&mut self, frame_in: &Frame, frame_out: &mut Frame) {
         let info = Info {
             in_layout: frame_in.layout().clone(),
@@ -188,7 +200,7 @@ impl Converter {
             out_index: Self::index_from_out_info,
             expand: CommonPixel::expand_from_info,
             // FIXME(color):
-            recolor: None,
+            recolor: Self::recolor_ops(frame_in.layout(), frame_out.layout()),
             join: CommonPixel::join_from_info,
         };
 
@@ -446,7 +458,7 @@ impl CommonPixel {
     fn expand_from_info(info: &Info, texel_buf: &TexelBuffer, pixel_buf: &mut TexelBuffer) {
         struct ExpandAction<'data, T> {
             expand: Texel<T>,
-            expand_fn: fn([u32; 4]) -> T,
+            expand_fn: fn([u32; 4], &[FromBits; 4]) -> T,
             bits: [FromBits; 4],
             texel_buf: &'data TexelBuffer,
             pixel_buf: &'data mut TexelBuffer,
@@ -460,7 +472,10 @@ impl CommonPixel {
                 // FIXME(color): block expansion to multiple pixels.
                 // FIXME(color): adjust the FromBits for multiple planes.
                 for (texbits, expand) in texel_slice.iter().zip(pixel_slice) {
-                    *expand = (self.expand_fn)(self.bits.map(|b| b.extract_as_lsb(texel, texbits)));
+                    *expand = (self.expand_fn)(
+                        self.bits.map(|b| b.extract_as_lsb(texel, texbits)),
+                        &self.bits,
+                    );
                 }
             }
         }
@@ -471,35 +486,54 @@ impl CommonPixel {
         let TexelBits { bits, parts, .. } = info.in_layout.texel;
         let bits = FromBits::new(bits, parts);
 
-        // FIXME(color): rescaling of channels, and their bit interpretation.
-        // Here we presume that everything is encoded as int. We should scale integers so that they
-        // occupy the full dynamic range, and scale floats to [0; 1.0) or the respective HDR upper
-        // bound, i.e. likely 100.0 to represent 10_000 cd/m².
         match info.common_pixel {
             CommonPixel::U8x4 => info.in_kind.action(ExpandAction {
                 expand: <[u8; 4]>::texel(),
-                expand_fn: |num| num.map(|x| x as u8),
+                expand_fn: |num, bits| {
+                    [0, 1, 2, 3].map(|idx| {
+                        let max_val = bits[idx].mask() as u64;
+                        ((num[idx] as u64) * 255 / max_val) as u8
+                    })
+                },
                 bits,
                 texel_buf,
                 pixel_buf,
             }),
             CommonPixel::U16x4 => info.in_kind.action(ExpandAction {
                 expand: <[u16; 4]>::texel(),
-                expand_fn: |num| num.map(|x| x as u16),
+                expand_fn: |num, bits| {
+                    [0, 1, 2, 3].map(|idx| {
+                        let max_val = bits[idx].mask() as u64;
+                        ((num[idx] as u64) * u16::MAX as u64 / max_val) as u16
+                    })
+                },
                 bits,
                 texel_buf,
                 pixel_buf,
             }),
             CommonPixel::U32x4 => info.in_kind.action(ExpandAction {
                 expand: <[u32; 4]>::texel(),
-                expand_fn: |num| num.map(|x| x as u32),
+                expand_fn: |num, bits| {
+                    [0, 1, 2, 3].map(|idx| {
+                        let max_val = bits[idx].mask() as u64;
+                        ((num[idx] as u64) * u32::MAX as u64 / max_val) as u32
+                    })
+                },
                 bits,
                 texel_buf,
                 pixel_buf,
             }),
+            // FIXME(color): rescaling of channels, and their bit interpretation.
+            // Should we scale so that they occupy the full dynamic range, and scale floats from [0;
+            // 1.0) or the respective HDR upper bound, i.e. likely 100.0 to represent 10_000 cd/m².
             CommonPixel::F32x4 => info.in_kind.action(ExpandAction {
                 expand: <[f32; 4]>::texel(),
-                expand_fn: |num| num.map(|x| x as f32),
+                expand_fn: |num, bits| {
+                    [0, 1, 2, 3].map(|idx| {
+                        let max_val = bits[idx].mask() as u64;
+                        num[idx] as f32 / max_val as f32
+                    })
+                },
                 bits,
                 texel_buf,
                 pixel_buf,
@@ -510,7 +544,7 @@ impl CommonPixel {
     fn join_from_info(info: &Info, pixel_buf: &TexelBuffer, texel_buf: &mut TexelBuffer) {
         struct JoinAction<'data, T> {
             join: Texel<T>,
-            join_fn: fn(T) -> [u32; 4],
+            join_fn: fn(T, &[FromBits; 4]) -> [u32; 4],
             bits: [FromBits; 4],
             texel_buf: &'data mut TexelBuffer,
             pixel_buf: &'data TexelBuffer,
@@ -524,7 +558,7 @@ impl CommonPixel {
                 // FIXME(color): block from multiple pixels—how to?
                 // FIXME(color): adjust the FromBits for multiple planes.
                 for (texbits, joined) in texel_slice.iter_mut().zip(pixel_slice) {
-                    let values = (self.join_fn)(self.join.copy_val(joined));
+                    let values = (self.join_fn)(self.join.copy_val(joined), &self.bits);
                     for (bits, value) in self.bits.iter().zip(values) {
                         bits.insert_as_lsb(texel, texbits, value);
                     }
@@ -538,36 +572,55 @@ impl CommonPixel {
         let TexelBits { bits, parts, .. } = info.out_layout.texel;
         let bits = FromBits::new(bits, parts);
 
-        // FIXME(color): rescaling of channels, and their bit interpretation.
-        // Here we presume that everything is encoded as int. We should scale integers so that they
-        // occupy the full dynamic range, and scale floats from [0; 1.0) or the respective HDR upper
-        // bound, i.e. likely 100.0 to represent 10_000 cd/m².
         match info.common_pixel {
             CommonPixel::U8x4 => info.out_kind.action(JoinAction {
                 join: <[u8; 4]>::texel(),
-                join_fn: |num| num.map(|x| x as u32),
+                join_fn: |num, bits| {
+                    [0, 1, 2, 3].map(|idx| {
+                        let max_val = bits[idx].mask();
+                        (num[idx] as u32) * max_val / 255
+                    })
+                },
                 bits,
                 texel_buf,
                 pixel_buf,
             }),
             CommonPixel::U16x4 => info.out_kind.action(JoinAction {
                 join: <[u16; 4]>::texel(),
-                join_fn: |num| num.map(|x| x as u32),
+                join_fn: |num, bits| {
+                    [0, 1, 2, 3].map(|idx| {
+                        let max_val = bits[idx].mask() as u64;
+                        ((num[idx] as u64) * max_val / (u16::MAX as u64)) as u32
+                    })
+                },
                 bits,
                 texel_buf,
                 pixel_buf,
             }),
             CommonPixel::U32x4 => info.out_kind.action(JoinAction {
                 join: <[u32; 4]>::texel(),
-                join_fn: |num| num.map(|x| x as u32),
+                join_fn: |num, bits| {
+                    [0, 1, 2, 3].map(|idx| {
+                        let max_val = bits[idx].mask() as u64;
+                        ((num[idx] as u64) * max_val / (u32::MAX as u64)) as u32
+                    })
+                },
                 bits,
                 texel_buf,
                 pixel_buf,
             }),
+            // FIXME(color): rescaling of channels, and their bit interpretation.
+            // Should we scale so that they occupy the full dynamic range, and scale floats from [0;
+            // 1.0) or the respective HDR upper bound, i.e. likely 100.0 to represent 10_000 cd/m².
             CommonPixel::F32x4 => info.out_kind.action(JoinAction {
                 join: <[f32; 4]>::texel(),
                 // FIXME: do the transform u32::from_ne_bytes(x.as_ne_bytes()) when appropriate.
-                join_fn: |num| num.map(|x| x as u32),
+                join_fn: |num, bits| {
+                    [0, 1, 2, 3].map(|idx| {
+                        let max_val = bits[idx].mask();
+                        (num[idx] * max_val as f32) as u32
+                    })
+                },
                 bits,
                 texel_buf,
                 pixel_buf,
@@ -581,6 +634,60 @@ impl CommonPixel {
             CommonPixel::U16x4 => action.run(<[u16; 4]>::texel()),
             CommonPixel::U32x4 => action.run(<[u32; 4]>::texel()),
             CommonPixel::F32x4 => action.run(<[f32; 4]>::texel()),
+        }
+    }
+}
+
+impl CommonColor {
+    fn cie_xyz_from_info(info: &Info, pixel: &TexelBuffer, xyz: &mut TexelBuffer) {
+        // If we do color conversion, we always choose [f32; 4] representation.
+        // Or, at least we should. Otherwise, do nothing..
+        if !matches!(info.common_pixel, CommonPixel::F32x4) {
+            // FIXME(color): report this error somehow?
+            return;
+        }
+
+        let texel = <[f32; 4]>::texel();
+        let pixel = pixel.as_texels(texel);
+        let xyz = xyz.as_mut_texels(texel);
+
+        let color = match info.in_layout.color.as_ref() {
+            None => {
+                assert_eq!(pixel.len(), xyz.len());
+                xyz.copy_from_slice(pixel);
+                return;
+            }
+            Some(color) => color,
+        };
+
+        for (src_pix, target_xyz) in pixel.iter().zip(xyz) {
+            *target_xyz = color.to_xyz(*src_pix)
+        }
+    }
+
+    fn cie_xyz_into_info(info: &Info, xyz: &TexelBuffer, pixel: &mut TexelBuffer) {
+        // If we do color conversion, we always choose [f32; 4] representation.
+        // Or, at least we should. Otherwise, do nothing..
+        if !matches!(info.common_pixel, CommonPixel::F32x4) {
+            // FIXME(color): report this error somehow?
+            return;
+        }
+
+        let texel = <[f32; 4]>::texel();
+        let xyz = xyz.as_texels(texel);
+        let pixel = pixel.as_mut_texels(texel);
+
+        let color = match info.in_layout.color.as_ref() {
+            None => {
+                assert_eq!(pixel.len(), xyz.len());
+                pixel.copy_from_slice(xyz);
+                return;
+            }
+            Some(color) => color,
+        };
+
+        for (target_pix, src_xyz) in pixel.iter_mut().zip(xyz) {
+            *target_pix = color.from_xyz(*src_xyz)
         }
     }
 }
@@ -635,6 +742,10 @@ impl FromBits {
         }
 
         vals
+    }
+
+    pub(crate) const fn mask(self) -> u32 {
+        ((-1i64 as u64) ^ u32::MAX as u64).rotate_left(self.len as u32) as u32
     }
 
     fn bits(bits: SampleBits) -> impl Iterator<Item = Self> {
@@ -698,9 +809,7 @@ impl FromBits {
 
         let val = u64::from_le_bytes(be_bytes) >> shift.min(63);
         // Start with a value where the 32-low bits are clear, high bits are set.
-        let mask = ((-1i64 as u64) ^ u32::MAX as u64).rotate_left((self.len as u32).min(32));
-
-        (val & mask) as u32
+        val as u32 & self.mask()
     }
 
     fn insert_as_lsb<T>(&self, texel: Texel<T>, val: &mut T, bits: u32) {
