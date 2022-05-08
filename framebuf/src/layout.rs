@@ -671,6 +671,27 @@ impl FrameLayout {
         (self.bytes.bytes_per_row as usize) * (self.bytes.height as usize)
     }
 
+    /// Set the color of the layout, if compatible with the texel.
+    pub fn set_color(&mut self, color: Color) -> Result<(), LayoutError> {
+        let model = color.model().ok_or(LayoutError::NO_INFO)?;
+
+        for (channel, idx) in self.texel.parts.channels() {
+            if let Some(channel) = channel {
+                let other_idx = match channel.canonical_index_in(model) {
+                    Some(idx) => idx,
+                    None => return Err(LayoutError::NO_INFO),
+                };
+
+                if other_idx != idx {
+                    return Err(LayoutError::NO_INFO);
+                }
+            }
+        }
+
+        self.color = Some(color);
+        Ok(())
+    }
+
     pub(crate) fn plane(&self, idx: u8) -> Option<PlaneBytes> {
         if !self.planes.is_empty() {
             // TODO: support.

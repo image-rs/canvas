@@ -347,10 +347,14 @@ impl Converter {
             in_pixels,
             out_pixels
         );
+
         let pixels = in_pixels.max(out_pixels);
         info.common_pixel
             .action(ResizeAction(&mut self.pixel_in_buffer, pixels));
+
         if let Some(_) = ops.recolor {
+            info.common_pixel
+                .action(ResizeAction(&mut self.neutral_color_buffer, pixels));
             info.common_pixel
                 .action(ResizeAction(&mut self.pixel_out_buffer, pixels));
         }
@@ -618,7 +622,7 @@ impl CommonPixel {
                 join_fn: |num, bits| {
                     [0, 1, 2, 3].map(|idx| {
                         let max_val = bits[idx].mask();
-                        (num[idx] * max_val as f32) as u32
+                        (num[idx] * max_val as f32).round() as u32
                     })
                 },
                 bits,
@@ -650,10 +654,14 @@ impl CommonColor {
         let texel = <[f32; 4]>::texel();
         let pixel = pixel.as_texels(texel);
         let xyz = xyz.as_mut_texels(texel);
+        assert_eq!(
+            pixel.len(),
+            xyz.len(),
+            "Setup create invalid conversion buffer"
+        );
 
         let color = match info.in_layout.color.as_ref() {
             None => {
-                assert_eq!(pixel.len(), xyz.len());
                 xyz.copy_from_slice(pixel);
                 return;
             }
@@ -676,10 +684,14 @@ impl CommonColor {
         let texel = <[f32; 4]>::texel();
         let xyz = xyz.as_texels(texel);
         let pixel = pixel.as_mut_texels(texel);
+        assert_eq!(
+            pixel.len(),
+            xyz.len(),
+            "Setup create invalid conversion buffer"
+        );
 
-        let color = match info.in_layout.color.as_ref() {
+        let color = match info.out_layout.color.as_ref() {
             None => {
-                assert_eq!(pixel.len(), xyz.len());
                 pixel.copy_from_slice(xyz);
                 return;
             }
