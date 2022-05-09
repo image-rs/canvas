@@ -297,19 +297,32 @@ impl Converter {
         sb_x: &SuperTexel,
         sb_y: &SuperTexel,
     ) {
+        fn is_trivial_super(sup: &SuperTexel) -> bool {
+            sup.in_super == 1 && sup.out_super == 1
+        }
+
         self.in_coords.clear();
         self.out_coords.clear();
 
-        let in_blocks = Self::blocks(0..sb_x.in_super, 0..sb_y.in_super);
-        let out_blocks = Self::blocks(0..sb_x.out_super, 0..sb_y.out_super);
-
-        for &TexelCoord(Coord(bx, by)) in self.super_blocks.iter() {
-            for TexelCoord(Coord(ix, iy)) in in_blocks.clone() {
-                self.in_coords.push(TexelCoord(Coord(bx + ix, by + iy)));
+        if is_trivial_super(sb_x) && is_trivial_super(sb_y) {
+            // Faster than rustc having to look through and special case the iteration/clones
+            // below. For some reason, it doesn't do well on `Range::zip()::flatten`.
+            for &TexelCoord(Coord(bx, by)) in self.super_blocks.iter() {
+                self.in_coords.push(TexelCoord(Coord(bx, by)));
+                self.out_coords.push(TexelCoord(Coord(bx, by)));
             }
+        } else {
+            let in_blocks = Self::blocks(0..sb_x.in_super, 0..sb_y.in_super);
+            let out_blocks = Self::blocks(0..sb_x.out_super, 0..sb_y.out_super);
 
-            for TexelCoord(Coord(ox, oy)) in out_blocks.clone() {
-                self.out_coords.push(TexelCoord(Coord(bx + ox, by + oy)));
+            for &TexelCoord(Coord(bx, by)) in self.super_blocks.iter() {
+                for TexelCoord(Coord(ix, iy)) in in_blocks.clone() {
+                    self.in_coords.push(TexelCoord(Coord(bx + ix, by + iy)));
+                }
+
+                for TexelCoord(Coord(ox, oy)) in out_blocks.clone() {
+                    self.out_coords.push(TexelCoord(Coord(bx + ox, by + oy)));
+                }
             }
         }
 
@@ -546,24 +559,28 @@ impl CommonPixel {
     }
 
     fn join_from_info(info: &Info, pixel_buf: &TexelBuffer, texel_buf: &mut TexelBuffer) {
-        struct JoinAction<'data, T> {
+        struct JoinAction<'data, T, F: FnMut(&T, &FromBits, u8) -> u32> {
             join: Texel<T>,
-            join_fn: fn(T, &[FromBits; 4]) -> [u32; 4],
+            join_fn: F,
             bits: [FromBits; 4],
             texel_buf: &'data mut TexelBuffer,
             pixel_buf: &'data TexelBuffer,
         }
 
-        impl<Expanded> GenericTexelAction<()> for JoinAction<'_, Expanded> {
-            fn run<T>(self, texel: Texel<T>) -> () {
+        impl<Expanded, F> GenericTexelAction<()> for JoinAction<'_, Expanded, F>
+        where
+            F: FnMut(&Expanded, &FromBits, u8) -> u32,
+        {
+            fn run<T>(mut self, texel: Texel<T>) -> () {
                 let texel_slice = self.texel_buf.as_mut_texels(texel);
                 let pixel_slice = self.pixel_buf.as_texels(self.join);
 
-                // FIXME(color): block from multiple pixels—how to?
-                // FIXME(color): adjust the FromBits for multiple planes.
-                for (texbits, joined) in texel_slice.iter_mut().zip(pixel_slice) {
-                    let values = (self.join_fn)(self.join.copy_val(joined), &self.bits);
-                    for (bits, value) in self.bits.iter().zip(values) {
+                for idx in [0u8, 1, 2, 3] {
+                    let bits = &self.bits[idx as usize];
+                    // FIXME(color): block from multiple pixels—how to?
+                    // FIXME(color): adjust the FromBits for multiple planes.
+                    for (texbits, joined) in texel_slice.iter_mut().zip(pixel_slice) {
+                        let value = (self.join_fn)(joined, bits, idx);
                         bits.insert_as_lsb(texel, texbits, value);
                     }
                 }
@@ -579,11 +596,9 @@ impl CommonPixel {
         match info.common_pixel {
             CommonPixel::U8x4 => info.out_kind.action(JoinAction {
                 join: <[u8; 4]>::texel(),
-                join_fn: |num, bits| {
-                    [0, 1, 2, 3].map(|idx| {
-                        let max_val = bits[idx].mask();
-                        (num[idx] as u32) * max_val / 255
-                    })
+                join_fn: |num, bits, idx| {
+                    let max_val = bits.mask();
+                    (num[(idx & 0x3) as usize] as u32) * max_val / 255
                 },
                 bits,
                 texel_buf,
@@ -591,11 +606,9 @@ impl CommonPixel {
             }),
             CommonPixel::U16x4 => info.out_kind.action(JoinAction {
                 join: <[u16; 4]>::texel(),
-                join_fn: |num, bits| {
-                    [0, 1, 2, 3].map(|idx| {
-                        let max_val = bits[idx].mask() as u64;
-                        ((num[idx] as u64) * max_val / (u16::MAX as u64)) as u32
-                    })
+                join_fn: |num, bits, idx| {
+                    let max_val = bits.mask() as u64;
+                    ((num[(idx & 0x3) as usize] as u64) * max_val / (u16::MAX as u64)) as u32
                 },
                 bits,
                 texel_buf,
@@ -603,11 +616,9 @@ impl CommonPixel {
             }),
             CommonPixel::U32x4 => info.out_kind.action(JoinAction {
                 join: <[u32; 4]>::texel(),
-                join_fn: |num, bits| {
-                    [0, 1, 2, 3].map(|idx| {
-                        let max_val = bits[idx].mask() as u64;
-                        ((num[idx] as u64) * max_val / (u32::MAX as u64)) as u32
-                    })
+                join_fn: |num, bits, idx| {
+                    let max_val = bits.mask() as u64;
+                    ((num[(idx & 0x3) as usize] as u64) * max_val / (u32::MAX as u64)) as u32
                 },
                 bits,
                 texel_buf,
@@ -619,11 +630,9 @@ impl CommonPixel {
             CommonPixel::F32x4 => info.out_kind.action(JoinAction {
                 join: <[f32; 4]>::texel(),
                 // FIXME: do the transform u32::from_ne_bytes(x.as_ne_bytes()) when appropriate.
-                join_fn: |num, bits| {
-                    [0, 1, 2, 3].map(|idx| {
-                        let max_val = bits[idx].mask();
-                        (num[idx] * max_val as f32).round() as u32
-                    })
+                join_fn: |num, bits, idx| {
+                    let max_val = bits.mask();
+                    (num[(idx & 0x3) as usize] * max_val as f32).round() as u32
                 },
                 bits,
                 texel_buf,

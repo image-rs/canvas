@@ -1,5 +1,5 @@
 use brunch::Bench;
-use image_framebuf::{Color, Frame, FrameLayout, LayoutError, SampleParts, Texel};
+use image_framebuf::{Color, Frame, FrameLayout, LayoutError, SampleParts, Texel, Whitepoint};
 
 struct Convert {
     texel_in: Texel,
@@ -147,6 +147,34 @@ fn main() {
             color_in: Color::SRGB,
             texel_out: Texel::new_f32(SampleParts::Lab),
             color_out: Color::Oklab,
+            sz: 128,
+        },
+        /* conversion to SRLAB2 */
+        Convert {
+            texel_in: Texel::new_u8(SampleParts::Rgb),
+            color_in: Color::SRGB,
+            texel_out: Texel::new_u8(SampleParts::Lab),
+            color_out: Color::SrLab2 {
+                whitepoint: Whitepoint::D65,
+            },
+            sz: 128,
+        },
+        Convert {
+            texel_in: Texel::new_u16(SampleParts::Rgb),
+            color_in: Color::SRGB,
+            texel_out: Texel::new_u16(SampleParts::Lab),
+            color_out: Color::SrLab2 {
+                whitepoint: Whitepoint::D65,
+            },
+            sz: 128,
+        },
+        Convert {
+            texel_in: Texel::new_f32(SampleParts::Rgb),
+            color_in: Color::SRGB,
+            texel_out: Texel::new_f32(SampleParts::Lab),
+            color_out: Color::SrLab2 {
+                whitepoint: Whitepoint::D65,
+            },
             sz: 128,
         },
     ];
