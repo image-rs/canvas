@@ -538,6 +538,7 @@ impl FrameLayout {
         }
 
         if layers.len() > 1 {
+            // FIXME(planar): should support validation of this.
             return Err(LayoutError::NO_INFO);
         }
 
@@ -663,7 +664,7 @@ impl FrameLayout {
 
     pub(crate) fn plane(&self, idx: u8) -> Option<PlaneBytes> {
         if !self.planes.is_empty() {
-            // TODO: support.
+            // FIXME(planar): should support returning layout of this.
             return None;
         }
 
@@ -715,6 +716,7 @@ impl FrameLayout {
             let spec = plane.matrix.spec();
             // TODO: should we require that planes are aligned to MAX_ALIGN?
             // Probably useful for some methods but that's something for planar layouts.
+            // FIXME(planar): decide on this issue.
             let offset = plane.offset_in_texels.checked_mul(spec.element.size())?;
             let plane_end = offset.checked_add(plane.matrix.byte_len())?;
 

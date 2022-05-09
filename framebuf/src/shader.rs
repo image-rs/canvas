@@ -258,8 +258,10 @@ impl Converter {
 
             self.generate_coords(info, ops, &sb_x, &sb_y);
             self.reserve_buffers(info, ops);
+            // FIXME(planar): should be repeated for all planes?
             self.read_texels(info, frame_in.as_ref());
             texel_conversion(self);
+            // FIXME(planar): should be repeated for all planes?
             self.write_texels(info, frame_out.as_mut());
         }
     }
@@ -381,6 +383,7 @@ impl Converter {
             texel: Texel<T>,
         ) {
             into.resize_for_texel(idx.len(), texel);
+            // FIXME(planar):
             // FIXME(color): multi-planar texel fetch.
             for (&index, into) in idx.iter().zip(into.as_mut_texels(texel)) {
                 if let Some(from) = from.as_texels(texel).get(index) {
@@ -415,6 +418,7 @@ impl Converter {
             from: &TexelBuffer,
             texel: Texel<T>,
         ) {
+            // FIXME(planar):
             // FIXME(color): multi-planar texel write.
             for (&index, from) in idx.iter().zip(from.as_texels(texel)) {
                 if let Some(into) = into.as_mut_texels(texel).get_mut(index) {
