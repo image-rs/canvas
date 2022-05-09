@@ -1,7 +1,8 @@
 //! A byte-buffer based image descriptor.
 use canvas::canvas::{CanvasMut, CanvasRef};
 
-use crate::layout::{ChannelLayout, FrameLayout, PlanarLayout, PlaneBytes};
+use crate::color::Color;
+use crate::layout::{ChannelLayout, FrameLayout, LayoutError, PlanarLayout, PlaneBytes};
 use crate::shader::Converter;
 
 /// A byte buffer with dynamic color contents.
@@ -219,6 +220,14 @@ impl Frame {
         Some(BytePlaneMut {
             inner: self.inner.as_mut().with_layout(layout)?,
         })
+    }
+
+    /// Set the color model.
+    ///
+    /// This never changes the physical layout of data and preserves all its bits. It returns an
+    /// error if the new color is not compatible with the texel's color channels.
+    pub fn set_color(&mut self, color: Color) -> Result<(), LayoutError> {
+        self.inner.layout_mut_unguarded().set_color(color)
     }
 
     /// Write into another frame, converting color representation between.

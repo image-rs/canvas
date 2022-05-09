@@ -215,6 +215,9 @@ macro_rules! sample_parts {
 }
 
 #[allow(non_upper_case_globals)]
+// We use items here just as a glob-import.
+// They are duplicated as constants to the struct then.
+#[allow(unused)]
 mod sample_parts {
     type Cc = super::ColorChannel;
     use super::ColorChannelModel;
@@ -491,37 +494,6 @@ impl SampleParts {
     }
 }
 
-impl Color {
-    pub fn model(&self) -> Option<ColorChannelModel> {
-        Some(match self {
-            Color::Rgb { .. } => ColorChannelModel::Rgb,
-            Color::Oklab => ColorChannelModel::Lab,
-            Color::Scalars { .. } => return None,
-        })
-    }
-
-    /// Check if this color space contains the sample parts.
-    ///
-    /// For example, an Xyz color is expressed in terms of a subset of Rgb while HSV color spaces
-    /// contains the Hsv parts (duh!) and CIECAM and similar spaces have a polar representation of
-    /// hue etc.
-    ///
-    /// Note that one can always combine a color space with an alpha component.
-    #[allow(non_upper_case_globals)]
-    pub fn is_consistent(&self, parts: SampleParts) -> bool {
-        use sample_parts::*;
-        matches!(
-            (self, parts),
-            (Color::Rgb { .. }, R | G | B | Rgb | RgbA)
-            //  | Rgb_ | _Rgb | Bgr_ | _Bgr
-            | (Color::Oklab, Lch | LchA)
-            // With scalars pseudo color, everything goes.
-            // Essentially, the user assigns which meaning each channel has.
-            | (Color::Scalars { .. }, _)
-        )
-    }
-}
-
 impl Block {
     pub fn width(&self) -> u32 {
         use Block::*;
@@ -666,6 +638,27 @@ impl FrameLayout {
     pub fn byte_len(&self) -> usize {
         // No overflow due to inner invariant.
         (self.bytes.bytes_per_row as usize) * (self.bytes.height as usize)
+    }
+
+    /// Set the color of the layout, if compatible with the texel.
+    pub fn set_color(&mut self, color: Color) -> Result<(), LayoutError> {
+        let model = color.model().ok_or(LayoutError::NO_INFO)?;
+
+        for (channel, idx) in self.texel.parts.channels() {
+            if let Some(channel) = channel {
+                let other_idx = match channel.canonical_index_in(model) {
+                    Some(idx) => idx,
+                    None => return Err(LayoutError::NO_INFO),
+                };
+
+                if other_idx != idx {
+                    return Err(LayoutError::NO_INFO);
+                }
+            }
+        }
+
+        self.color = Some(color);
+        Ok(())
     }
 
     pub(crate) fn plane(&self, idx: u8) -> Option<PlaneBytes> {
