@@ -660,16 +660,9 @@ impl CommonColor {
             "Setup create invalid conversion buffer"
         );
 
-        let color = match info.in_layout.color.as_ref() {
-            None => {
-                xyz.copy_from_slice(pixel);
-                return;
-            }
-            Some(color) => color,
-        };
-
-        for (src_pix, target_xyz) in pixel.iter().zip(xyz) {
-            *target_xyz = color.to_xyz(*src_pix)
+        match info.in_layout.color.as_ref() {
+            None => xyz.copy_from_slice(pixel),
+            Some(color) => color.to_xyz_slice(pixel, xyz),
         }
     }
 
@@ -690,16 +683,9 @@ impl CommonColor {
             "Setup create invalid conversion buffer"
         );
 
-        let color = match info.out_layout.color.as_ref() {
-            None => {
-                pixel.copy_from_slice(xyz);
-                return;
-            }
-            Some(color) => color,
-        };
-
-        for (target_pix, src_xyz) in pixel.iter_mut().zip(xyz) {
-            *target_pix = color.from_xyz(*src_xyz)
+        match info.out_layout.color.as_ref() {
+            None => pixel.copy_from_slice(xyz),
+            Some(color) => color.from_xyz_slice(xyz, pixel),
         }
     }
 }

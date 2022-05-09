@@ -5,3 +5,11 @@ edition = "2021"
 
 [dependencies]
 image-canvas = { path = "../" }
+
+[dev-dependencies]
+brunch = "0.2.5"
+
+[[bench]]
+name = "conversion"
+path = "benchmarks/conversion.rs"
+harness = false

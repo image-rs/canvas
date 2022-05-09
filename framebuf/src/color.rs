@@ -304,7 +304,57 @@ impl Color {
         whitepoint: Whitepoint::D65,
     };
 
-    pub(crate) fn to_xyz(&self, value: [f32; 4]) -> [f32; 4] {
+    pub(crate) fn to_xyz_slice(&self, pixel: &[[f32; 4]], xyz: &mut [[f32; 4]]) {
+        // We can do shared pre-processing.
+        if let Color::Rgb {
+            primary,
+            transfer,
+            whitepoint,
+            luminance: _,
+        } = self
+        {
+            let to_xyz = primary.to_xyz(*whitepoint);
+
+            for (src_pix, target_xyz) in pixel.iter().zip(xyz) {
+                let [r, g, b, a] = transfer.to_optical_display(*src_pix);
+                let [x, y, z] = to_xyz.mul_vec([r, g, b]);
+                *target_xyz = [x, y, z, a];
+            }
+
+            return;
+        }
+
+        // Fallback path in all cases.
+        for (src_pix, target_xyz) in pixel.iter().zip(xyz) {
+            *target_xyz = self.to_xyz_once(*src_pix)
+        }
+    }
+
+    pub(crate) fn from_xyz_slice(&self, xyz: &[[f32; 4]], pixel: &mut [[f32; 4]]) {
+        if let Color::Rgb {
+            primary,
+            transfer,
+            whitepoint,
+            luminance: _,
+        } = self
+        {
+            let from_xyz = primary.to_xyz(*whitepoint).inv();
+
+            for (target_pix, src_xyz) in pixel.iter_mut().zip(xyz) {
+                let [x, y, z, a] = *src_xyz;
+                let [r, g, b] = from_xyz.mul_vec([x, y, z]);
+                *target_pix = transfer.from_optical_display([r, g, b, a]);
+            }
+
+            return;
+        }
+
+        for (target_pix, src_xyz) in pixel.iter_mut().zip(xyz) {
+            *target_pix = self.from_xyz_once(*src_xyz)
+        }
+    }
+
+    pub(crate) fn to_xyz_once(&self, value: [f32; 4]) -> [f32; 4] {
         match self {
             Color::Oklab => oklab::oklab_to_xyz(value),
             Color::Rgb {
@@ -327,7 +377,7 @@ impl Color {
         }
     }
 
-    pub(crate) fn from_xyz(&self, value: [f32; 4]) -> [f32; 4] {
+    pub(crate) fn from_xyz_once(&self, value: [f32; 4]) -> [f32; 4] {
         match self {
             Color::Oklab => oklab::oklab_from_xyz(value),
             Color::Rgb {
