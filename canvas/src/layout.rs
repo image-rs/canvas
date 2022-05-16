@@ -161,9 +161,28 @@ pub enum Block {
 /// properly?
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct SampleParts {
-    parts: [Option<ColorChannel>; 4],
+    pub(crate) parts: [Option<ColorChannel>; 4],
     /// The position of each channel as a 2-bit number.
-    position: u8,
+    /// This is the index into which the channel is written.
+    pub(crate) color_index: u8,
+    /// How the samples are recovered from a texel.
+    pub(crate) pitch: SamplePitch,
+}
+
+/// Defines the method by which parts from a texel are expanded into bits.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum SamplePitch {
+    /// Parts are expanded by extracting bit fields from the texel.
+    PixelBits,
+    // Subsampled chroma, in order uyvy.
+    Yuv422,
+    // Like Yuv422 but yuyv.
+    Yuy2,
+    // Subsampled chroma, uyyvyy.
+    Yuv411,
+    // Subsampled blocks.
+    Yuv420,
+    Bc1,
 }
 
 macro_rules! sample_parts {
@@ -178,42 +197,46 @@ macro_rules! sample_parts {
         $(#[$attr])*
         pub const $name: SampleParts = SampleParts {
             parts: [Some($ch0), None, None, None],
-            position: (
+            color_index: (
                 $ch0.canonical_index_in_surely(ColorChannelModel::$color)
             ),
+            pitch: SamplePitch::PixelBits,
         };
     };
     (@$color:ident: $(#[$attr:meta])* $name:ident = $ch0:path,$ch1:path) => {
         $(#[$attr])*
         pub const $name: SampleParts = SampleParts {
             parts: [Some($ch0), Some($ch1), None, None],
-            position: (
+            color_index: (
                 $ch0.canonical_index_in_surely(ColorChannelModel::$color)
                 | $ch1.canonical_index_in_surely(ColorChannelModel::$color) << 2
             ),
+            pitch: SamplePitch::PixelBits,
         };
     };
     (@$color:ident: $(#[$attr:meta])* $name:ident = $ch0:path,$ch1:path,$ch2:path) => {
         $(#[$attr])*
         pub const $name: SampleParts = SampleParts {
             parts: [Some($ch0), Some($ch1), Some($ch2), None],
-            position: (
+            color_index: (
                 $ch0.canonical_index_in_surely(ColorChannelModel::$color)
                 | $ch1.canonical_index_in_surely(ColorChannelModel::$color) << 2
                 | $ch2.canonical_index_in_surely(ColorChannelModel::$color) << 4
             ),
+            pitch: SamplePitch::PixelBits,
         };
     };
     (@$color:ident: $(#[$attr:meta])* $name:ident = $ch0:path,$ch1:path,$ch2:path,$ch3:path) => {
         $(#[$attr])*
         pub const $name: SampleParts = SampleParts {
             parts: [Some($ch0), Some($ch1), Some($ch2), Some($ch3)],
-            position: (
+            color_index: (
                 $ch0.canonical_index_in_surely(ColorChannelModel::$color)
                 | $ch1.canonical_index_in_surely(ColorChannelModel::$color) << 2
                 | $ch2.canonical_index_in_surely(ColorChannelModel::$color) << 4
                 | $ch3.canonical_index_in_surely(ColorChannelModel::$color) << 6
             ),
+            pitch: SamplePitch::PixelBits,
         };
     };
 }
@@ -226,6 +249,7 @@ mod sample_parts {
     type Cc = super::ColorChannel;
     use super::ColorChannelModel;
     use super::SampleParts;
+    use super::SamplePitch;
 
     sample_parts! {
         /// A pure alpha part.
@@ -481,9 +505,19 @@ impl SampleParts {
     /// The order of parts will be remembered. All color channels must belong to a common color
     /// representation.
     pub fn new(parts: [Option<ColorChannel>; 4], model: ColorChannelModel) -> Option<Self> {
+        let color_index = Self::color_index(&parts, model)?;
+
+        Some(SampleParts {
+            parts,
+            color_index,
+            pitch: SamplePitch::PixelBits,
+        })
+    }
+
+    fn color_index(parts: &[Option<ColorChannel>; 4], model: ColorChannelModel) -> Option<u8> {
         let mut unused = [true; 4];
-        let mut position = [0; 4];
-        for (part, pos) in parts.into_iter().zip(&mut position) {
+        let mut color_index = [0; 4];
+        for (part, pos) in parts.into_iter().zip(&mut color_index) {
             if let Some(p) = part {
                 let idx = p.canonical_index_in(model)?;
                 if !core::mem::take(&mut unused[idx as usize]) {
@@ -493,24 +527,35 @@ impl SampleParts {
             }
         }
 
-        let position = position
+        let color_index = color_index
             .into_iter()
             .enumerate()
             .fold(0u8, |acc, (idx, pos)| acc | pos << (2 * idx));
 
-        Some(SampleParts { parts, position })
+        Some(color_index)
     }
 
     /// Create parts that describe 4:2:2 subsampled color channels.
-    pub fn with_subsampled_422(
+    ///
+    /// These parts represent a 1x2 block, with 4 channels total.
+    pub fn with_yuv_422(
         parts: [Option<ColorChannel>; 3],
         model: ColorChannelModel,
     ) -> Option<Self> {
-        todo!()
+        let parts = [parts[0], parts[1], parts[2], None];
+        let color_index = Self::color_index(&parts, model)?;
+
+        Some(SampleParts {
+            parts,
+            color_index,
+            pitch: SamplePitch::Yuv422,
+        })
     }
 
     /// Create parts that describe 4:1:1 subsampled color channels.
-    pub fn with_subsampled_411(
+    ///
+    /// These parts represent a 1x4 block, with 6 channels total.
+    pub fn with_yuv_411(
         parts: [Option<ColorChannel>; 3],
         model: ColorChannelModel,
     ) -> Option<Self> {
@@ -522,7 +567,7 @@ impl SampleParts {
     }
 
     pub(crate) fn channels(&self) -> impl '_ + Iterator<Item = (Option<ColorChannel>, u8)> {
-        (0..4).map(|i| (self.parts[i], (self.position >> (2 * i)) & 0x3))
+        (0..4).map(|i| (self.parts[i], (self.color_index >> (2 * i)) & 0x3))
     }
 }
 

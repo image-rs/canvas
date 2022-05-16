@@ -6,8 +6,10 @@ use core::ops::Range;
 use image_texel::image::{ImageMut, ImageRef};
 use image_texel::{image::Coord, AsTexel, Texel, TexelBuffer};
 
-use crate::frame::Canvas;
-use crate::layout::{CanvasLayout, SampleBits, SampleParts, Texel as TexelBits};
+use crate::layout_::{
+    Block, CanvasLayout, SampleBits, SampleParts, SamplePitch, Texel as TexelBits,
+};
+use crate::Canvas;
 
 /// A buffer for conversion.
 pub struct Converter {
@@ -473,6 +475,10 @@ impl Converter {
     }
 }
 
+trait ExpandYuvLike<const IN: usize, const OUT: usize> {
+    fn expand<T: Copy>(_: [T; IN], fill: T) -> [[T; 4]; OUT];
+}
+
 impl CommonPixel {
     /// Create pixels from our aggregated block information.
     ///
@@ -480,6 +486,43 @@ impl CommonPixel {
     /// convert their bit representation to the `CommonPixel` representation, then put them into
     /// the expected channel give by the color channel's normal form.
     fn expand_from_info(info: &Info, texel_buf: &TexelBuffer, pixel_buf: &mut TexelBuffer) {
+        // FIXME(perf): some bit/part combinations require no reordering of bits and could skip
+        // large parts of this phase, or be done vectorized, effectively amounting to a memcpy when
+        // the expanded value has the same representation as the texel.
+        let TexelBits { bits, parts, .. } = info.in_layout.texel;
+
+        match parts.pitch {
+            SamplePitch::PixelBits => {
+                Self::expand_bits(info, FromBits::for_pixel(bits, parts), texel_buf, pixel_buf)
+            }
+            SamplePitch::Yuv422 => {
+                debug_assert!(matches!(info.in_layout.texel.block, Block::Sub1x2));
+                debug_assert!(matches!(info.in_layout.texel.parts.num_components(), 3));
+                Self::expand_yuv422(info, texel_buf, pixel_buf);
+            }
+            SamplePitch::Yuy2 => {
+                debug_assert!(matches!(info.in_layout.texel.block, Block::Sub1x2));
+                debug_assert!(matches!(info.in_layout.texel.parts.num_components(), 3));
+                Self::expand_yuy2(info, texel_buf, pixel_buf);
+            }
+            SamplePitch::Yuv411 => {
+                debug_assert!(matches!(info.in_layout.texel.block, Block::Sub1x4));
+                debug_assert!(matches!(info.in_layout.texel.parts.num_components(), 3));
+                Self::expand_yuv411(info, texel_buf, pixel_buf);
+            }
+            // FIXME(color): BC1-6
+            other => {
+                debug_assert!(false, "{:?}", other);
+            }
+        }
+    }
+
+    fn expand_bits(
+        info: &Info,
+        bits: [FromBits; 4],
+        texel_buf: &TexelBuffer,
+        pixel_buf: &mut TexelBuffer,
+    ) {
         struct ExpandAction<'data, T> {
             expand: Texel<T>,
             expand_fn: fn([u32; 4], &[FromBits; 4]) -> T,
@@ -503,12 +546,6 @@ impl CommonPixel {
                 }
             }
         }
-
-        // FIXME(perf): some bit/part combinations require no reordering of bits and could skip
-        // large parts of this phase, or be done vectorized, effectively amounting to a memcpy when
-        // the expanded value has the same representation as the texel.
-        let TexelBits { bits, parts, .. } = info.in_layout.texel;
-        let bits = FromBits::new(bits, parts);
 
         match info.common_pixel {
             CommonPixel::U8x4 => info.in_kind.action(ExpandAction {
@@ -565,7 +602,287 @@ impl CommonPixel {
         }
     }
 
+    fn expand_yuv422(info: &Info, texel_buf: &TexelBuffer, pixel_buf: &mut TexelBuffer) {
+        struct ExpandYuv422;
+
+        impl ExpandYuvLike<4, 2> for ExpandYuv422 {
+            fn expand<T: Copy>(yuyv: [T; 4], fill: T) -> [[T; 4]; 2] {
+                let [u, y1, v, y2] = yuyv;
+
+                [[y1, u, v, fill], [y2, u, v, fill]]
+            }
+        }
+
+        Self::expand_yuv_like::<ExpandYuv422, 4, 2>(
+            info,
+            texel_buf,
+            pixel_buf,
+            <[u8; 4]>::texel(),
+            <[u16; 4]>::texel(),
+            <[f32; 4]>::texel(),
+        )
+    }
+
+    fn expand_yuy2(info: &Info, texel_buf: &TexelBuffer, pixel_buf: &mut TexelBuffer) {
+        struct ExpandYuy2;
+
+        impl ExpandYuvLike<4, 2> for ExpandYuy2 {
+            fn expand<T: Copy>(yuyv: [T; 4], fill: T) -> [[T; 4]; 2] {
+                let [y1, u, y2, v] = yuyv;
+
+                [[y1, u, v, fill], [y2, u, v, fill]]
+            }
+        }
+
+        Self::expand_yuv_like::<ExpandYuy2, 4, 2>(
+            info,
+            texel_buf,
+            pixel_buf,
+            <[u8; 4]>::texel(),
+            <[u16; 4]>::texel(),
+            <[f32; 4]>::texel(),
+        )
+    }
+
+    fn expand_yuv411(info: &Info, texel_buf: &TexelBuffer, pixel_buf: &mut TexelBuffer) {
+        struct ExpandYuv411;
+
+        impl ExpandYuvLike<6, 4> for ExpandYuv411 {
+            fn expand<T: Copy>(yuyv: [T; 6], fill: T) -> [[T; 4]; 4] {
+                let [u, y1, y2, v, y3, y4] = yuyv;
+
+                [
+                    [y1, u, v, fill],
+                    [y2, u, v, fill],
+                    [y3, u, v, fill],
+                    [y4, u, v, fill],
+                ]
+            }
+        }
+
+        Self::expand_yuv_like::<ExpandYuv411, 6, 4>(
+            info,
+            texel_buf,
+            pixel_buf,
+            <[u8; 6]>::texel(),
+            <[u16; 6]>::texel(),
+            <[f32; 6]>::texel(),
+        )
+    }
+
+    fn expand_yuv_like<F, const N: usize, const M: usize>(
+        info: &Info,
+        texel_buf: &TexelBuffer,
+        pixel_buf: &mut TexelBuffer,
+        tex_u8: Texel<[u8; N]>,
+        tex_u16: Texel<[u16; N]>,
+        tex_f32: Texel<[f32; N]>,
+    ) where
+        F: ExpandYuvLike<N, M>,
+    {
+        // FIXME(perf): it makes sense to loop-remove this match into `ops` construction?
+        // In particular, instruction cache if each case is treated separately should be decent..
+        match info.in_layout.texel.bits {
+            SampleBits::Int8x4 => {
+                let texels = texel_buf.as_texels(tex_u8).iter();
+                match info.common_pixel {
+                    CommonPixel::U8x4 => {
+                        let pixels = pixel_buf
+                            .as_mut_texels(<[u8; 4]>::texel())
+                            .chunks_exact_mut(2);
+                        debug_assert!(pixels.len() == texels.len());
+
+                        for (texel, pixel_chunk) in texels.zip(pixels) {
+                            let pixels: &mut [_; M] = pixel_chunk.try_into().unwrap();
+                            *pixels = F::expand(*texel, u8::MAX);
+                        }
+                    }
+                    CommonPixel::U16x4 => {
+                        let pixels = pixel_buf
+                            .as_mut_texels(<[u16; 4]>::texel())
+                            .chunks_exact_mut(M);
+                        debug_assert!(pixels.len() == texels.len());
+
+                        for (texel, pixel_chunk) in texels.zip(pixels) {
+                            let pixels: &mut [_; M] = pixel_chunk.try_into().unwrap();
+                            let expand = F::expand(*texel, u8::MAX);
+                            let remap = |v: u8| u16::from(v) * 257;
+                            *pixels = expand.map(|v| v.map(remap));
+                        }
+                    }
+                    CommonPixel::U32x4 => {
+                        let pixels = pixel_buf
+                            .as_mut_texels(<[u32; 4]>::texel())
+                            .chunks_exact_mut(M);
+                        debug_assert!(pixels.len() == texels.len());
+
+                        for (texel, pixel_chunk) in texels.zip(pixels) {
+                            let pixels: &mut [_; M] = pixel_chunk.try_into().unwrap();
+                            let expand = F::expand(*texel, u8::MAX);
+                            let remap = |v: u8| u32::from(v) * 257 * 65537;
+                            *pixels = expand.map(|v| v.map(remap));
+                        }
+                    }
+                    CommonPixel::F32x4 => {
+                        let pixels = pixel_buf
+                            .as_mut_texels(<[f32; 4]>::texel())
+                            .chunks_exact_mut(M);
+                        debug_assert!(pixels.len() == texels.len());
+
+                        for (texel, pixel_chunk) in texels.zip(pixels) {
+                            let pixels: &mut [_; M] = pixel_chunk.try_into().unwrap();
+                            let expand = F::expand(*texel, u8::MAX);
+                            let remap = |v: u8| (v as f32) / 255.0f32;
+                            *pixels = expand.map(|v| v.map(remap));
+                        }
+                    }
+                }
+            }
+            SampleBits::Int16x4 => {
+                let texels = texel_buf.as_texels(tex_u16).iter();
+                match info.common_pixel {
+                    CommonPixel::U8x4 => {
+                        let pixels = pixel_buf
+                            .as_mut_texels(<[u8; 4]>::texel())
+                            .chunks_exact_mut(M);
+                        debug_assert!(pixels.len() == texels.len());
+
+                        for (texel, pixel_chunk) in texels.zip(pixels) {
+                            let pixels: &mut [_; M] = pixel_chunk.try_into().unwrap();
+                            let expand = F::expand(*texel, u16::MAX);
+                            let remap = |v: u16| (v / 257) as u8;
+                            *pixels = expand.map(|v| v.map(remap));
+                        }
+                    }
+                    CommonPixel::U16x4 => {
+                        let pixels = pixel_buf
+                            .as_mut_texels(<[u16; 4]>::texel())
+                            .chunks_exact_mut(M);
+                        debug_assert!(pixels.len() == texels.len());
+
+                        for (texel, pixel_chunk) in texels.zip(pixels) {
+                            let pixels: &mut [_; M] = pixel_chunk.try_into().unwrap();
+                            *pixels = F::expand(*texel, u16::MAX);
+                        }
+                    }
+                    CommonPixel::U32x4 => {
+                        let pixels = pixel_buf
+                            .as_mut_texels(<[u32; 4]>::texel())
+                            .chunks_exact_mut(M);
+                        debug_assert!(pixels.len() == texels.len());
+
+                        for (texel, pixel_chunk) in texels.zip(pixels) {
+                            let pixels: &mut [_; M] = pixel_chunk.try_into().unwrap();
+                            let expand = F::expand(*texel, u16::MAX);
+                            let remap = |v: u16| u32::from(v) * 65537;
+                            *pixels = expand.map(|v| v.map(remap));
+                        }
+                    }
+                    CommonPixel::F32x4 => {
+                        let pixels = pixel_buf
+                            .as_mut_texels(<[f32; 4]>::texel())
+                            .chunks_exact_mut(M);
+                        debug_assert!(pixels.len() == texels.len());
+
+                        for (texel, pixel_chunk) in texels.zip(pixels) {
+                            let pixels: &mut [_; M] = pixel_chunk.try_into().unwrap();
+                            let expand = F::expand(*texel, u16::MAX);
+                            let remap = |v: u16| (v as f32) / 65535.0f32;
+                            *pixels = expand.map(|v| v.map(remap));
+                        }
+                    }
+                }
+            }
+            SampleBits::Float32x4 => {
+                let texels = texel_buf.as_texels(tex_f32).iter();
+                match info.common_pixel {
+                    CommonPixel::U8x4 => {
+                        let pixels = pixel_buf
+                            .as_mut_texels(<[u8; 4]>::texel())
+                            .chunks_exact_mut(M);
+                        debug_assert!(pixels.len() == texels.len());
+
+                        for (texel, pixel_chunk) in texels.zip(pixels) {
+                            let pixels: &mut [_; M] = pixel_chunk.try_into().unwrap();
+                            let expand = F::expand(*texel, 1.0);
+                            let remap = |v: f32| (v * 255f32) as u8;
+                            *pixels = expand.map(|v| v.map(remap));
+                        }
+                    }
+                    CommonPixel::U16x4 => {
+                        let pixels = pixel_buf
+                            .as_mut_texels(<[u16; 4]>::texel())
+                            .chunks_exact_mut(M);
+                        debug_assert!(pixels.len() == texels.len());
+
+                        for (texel, pixel_chunk) in texels.zip(pixels) {
+                            let pixels: &mut [_; M] = pixel_chunk.try_into().unwrap();
+                            let expand = F::expand(*texel, 1.0);
+                            let remap = |v: f32| (v * 65535f32) as u16;
+                            *pixels = expand.map(|v| v.map(remap));
+                        }
+                    }
+                    // FIXME(color): this isn't an accurate conversion.
+                    CommonPixel::U32x4 => {
+                        let pixels = pixel_buf
+                            .as_mut_texels(<[u32; 4]>::texel())
+                            .chunks_exact_mut(M);
+                        debug_assert!(pixels.len() == texels.len());
+
+                        for (texel, pixel_chunk) in texels.zip(pixels) {
+                            let pixels: &mut [_; M] = pixel_chunk.try_into().unwrap();
+                            let expand = F::expand(*texel, 1.0);
+                            let remap = |v: f32| (v * 65535f32 * 65537f32) as u32;
+                            *pixels = expand.map(|v| v.map(remap));
+                        }
+                    }
+                    CommonPixel::F32x4 => {
+                        let pixels = pixel_buf
+                            .as_mut_texels(<[f32; 4]>::texel())
+                            .chunks_exact_mut(2);
+                        debug_assert!(pixels.len() == texels.len());
+
+                        for (texel, pixel_chunk) in texels.zip(pixels) {
+                            let pixels: &mut [_; M] = pixel_chunk.try_into().unwrap();
+                            *pixels = F::expand(*texel, 1.0);
+                        }
+                    }
+                }
+            }
+            other => {
+                debug_assert!(false, "Bad YUV spec {:?}", other);
+            }
+        }
+    }
+
     fn join_from_info(info: &Info, pixel_buf: &TexelBuffer, texel_buf: &mut TexelBuffer) {
+        // FIXME(perf): some bit/part combinations require no reordering of bits and could skip
+        // large parts of this phase, or be done vectorized, effectively amounting to a memcpy when
+        // the expanded value had the same representation as the texel.
+        let TexelBits { bits, parts, .. } = info.out_layout.texel;
+
+        match parts.pitch {
+            SamplePitch::PixelBits => {
+                Self::join_bits(info, FromBits::for_pixel(bits, parts), pixel_buf, texel_buf)
+            }
+            SamplePitch::Yuv422 => {
+                // Debug assert: common_pixel
+                debug_assert!(matches!(info.out_layout.texel.block, Block::Sub1x2));
+                debug_assert!(matches!(info.out_layout.texel.parts.num_components(), 3));
+                Self::join_yuv422(info, pixel_buf, texel_buf)
+            }
+            other => {
+                debug_assert!(false, "{:?}", other);
+            }
+        }
+    }
+
+    fn join_bits(
+        info: &Info,
+        bits: [FromBits; 4],
+        pixel_buf: &TexelBuffer,
+        texel_buf: &mut TexelBuffer,
+    ) {
         struct JoinAction<'data, T, F: FnMut(&T, &FromBits, u8) -> u32> {
             join: Texel<T>,
             join_fn: F,
@@ -593,12 +910,6 @@ impl CommonPixel {
                 }
             }
         }
-
-        // FIXME(perf): some bit/part combinations require no reordering of bits and could skip
-        // large parts of this phase, or be done vectorized, effectively amounting to a memcpy when
-        // the expanded value had the same representation as the texel.
-        let TexelBits { bits, parts, .. } = info.out_layout.texel;
-        let bits = FromBits::new(bits, parts);
 
         match info.common_pixel {
             CommonPixel::U8x4 => info.out_kind.action(JoinAction {
@@ -646,6 +957,11 @@ impl CommonPixel {
                 pixel_buf,
             }),
         }
+    }
+
+    fn join_yuv422(info: &Info, pixel_buf: &TexelBuffer, texel_buf: &mut TexelBuffer) {
+        // FIXME(color): actually implement this..
+        debug_assert!(false);
     }
 
     fn action<R>(self, action: impl GenericTexelAction<R>) -> R {
@@ -760,7 +1076,8 @@ impl FromBits {
         }
     }
 
-    pub(crate) fn new(bits: SampleBits, parts: SampleParts) -> [Self; 4] {
+    pub(crate) fn for_pixel(bits: SampleBits, parts: SampleParts) -> [Self; 4] {
+        assert_eq!(parts.pitch, SamplePitch::PixelBits);
         let mut vals = [Self::NO_BITS; 4];
 
         let bits = Self::bits(bits);
@@ -937,7 +1254,7 @@ impl From<SampleBits> for TexelKind {
 
 #[test]
 fn from_bits() {
-    let bits = FromBits::new(SampleBits::Int332, SampleParts::Rgb);
+    let bits = FromBits::for_pixel(SampleBits::Int332, SampleParts::Rgb);
     let (texel, value) = (u8::texel(), &0b01010110);
     assert_eq!(bits[0].extract_as_lsb(texel, value), 0b110);
     assert_eq!(bits[1].extract_as_lsb(texel, value), 0b010);
@@ -947,7 +1264,7 @@ fn from_bits() {
 
 #[test]
 fn to_bits() {
-    let bits = FromBits::new(SampleBits::Int332, SampleParts::Rgb);
+    let bits = FromBits::for_pixel(SampleBits::Int332, SampleParts::Rgb);
     let (texel, ref mut value) = (u8::texel(), 0);
     bits[0].insert_as_lsb(texel, value, 0b110);
     bits[1].insert_as_lsb(texel, value, 0b010);
