@@ -76,14 +76,17 @@ pub enum TexelKind {
     U8x2,
     U8x3,
     U8x4,
+    U8x6,
     U16,
     U16x2,
     U16x3,
     U16x4,
+    U16x6,
     F32,
     F32x2,
     F32x3,
     F32x4,
+    F32x6,
 }
 
 pub(crate) trait GenericTexelAction<R = ()> {
@@ -710,16 +713,18 @@ macro_rules! from_bits {
         }
     };
     (@ $v0:expr) => {
-        [Some(FromBits::from_range($v0)), None, None, None]
+        [Some(FromBits::from_range($v0)), None, None, None, None, None]
     };
     (@ $v0:expr; $v1:expr) => {
-        [Some(FromBits::from_range($v0)), Some(FromBits::from_range($v1)), None, None]
+        [Some(FromBits::from_range($v0)), Some(FromBits::from_range($v1)), None, None, None, None]
     };
     (@ $v0:expr; $v1:expr; $v2:expr) => {
         [
             Some(FromBits::from_range($v0)),
             Some(FromBits::from_range($v1)),
             Some(FromBits::from_range($v2)),
+            None,
+            None,
             None
         ]
     };
@@ -729,6 +734,18 @@ macro_rules! from_bits {
             Some(FromBits::from_range($v1)),
             Some(FromBits::from_range($v2)),
             Some(FromBits::from_range($v3)),
+            None,
+            None
+        ]
+    };
+    (@ $v0:expr; $v1:expr; $v2:expr; $v3:expr; $v4:expr; $v5:expr) => {
+        [
+            Some(FromBits::from_range($v0)),
+            Some(FromBits::from_range($v1)),
+            Some(FromBits::from_range($v2)),
+            Some(FromBits::from_range($v3)),
+            Some(FromBits::from_range($v4)),
+            Some(FromBits::from_range($v5)),
         ]
     };
 }
@@ -746,7 +763,10 @@ impl FromBits {
     pub(crate) fn new(bits: SampleBits, parts: SampleParts) -> [Self; 4] {
         let mut vals = [Self::NO_BITS; 4];
 
-        for (bits, (channel, pos)) in Self::bits(bits).zip(parts.channels()) {
+        let bits = Self::bits(bits);
+        let channels = parts.channels();
+
+        for (bits, (channel, pos)) in bits.zip(channels) {
             if let Some(_) = channel {
                 vals[pos as usize] = bits;
             }
@@ -761,7 +781,7 @@ impl FromBits {
 
     fn bits(bits: SampleBits) -> impl Iterator<Item = Self> {
         use SampleBits::*;
-        let filled: [Option<Self>; 4] = from_bits!(bits = {
+        let filled: [Option<Self>; 6] = from_bits!(bits = {
             Int8 => 0..8;
             Int332 => 0..3 3..6 6..8;
             Int233 => 0..2 2..5 5..8;
@@ -773,9 +793,11 @@ impl FromBits {
             Int8x2 => 0..8 8..16;
             Int8x3 => 0..8 8..16 16..24;
             Int8x4 => 0..8 8..16 16..24 24..32;
+            Int8x6 => 0..8 8..16 16..24 24..32 32..40 40..48;
             Int16x2 => 0..16 16..32;
             Int16x3 => 0..16 16..32 32..48;
             Int16x4 => 0..16 16..32 32..48 48..64;
+            Int16x6 => 0..16 16..32 32..48 48..64 64..80 80..96;
             Int1010102 => 0..10 10..20 20..30 30..32;
             Int2101010 => 0..2 2..12 12..22 22..32;
             Int101010_ => 0..10 10..20 20..30;
@@ -784,7 +806,8 @@ impl FromBits {
             Float32 => 0..32;
             Float32x2 => 0..32 32..64;
             Float32x3 => 0..32 32..64 64..96;
-            Float32x4 => 0..32 32..64 64..96 96..128
+            Float32x4 => 0..32 32..64 64..96 96..128;
+            Float32x6 => 0..32 32..64 64..96 96..128 128..160 160..192
         });
 
         filled.into_iter().filter_map(|x| x)
@@ -854,38 +877,23 @@ impl FromBits {
 }
 
 impl TexelKind {
-    fn byte_len(&self) -> usize {
-        use TexelKind::*;
-        match self {
-            U8 => 1,
-            U8x2 => 2,
-            U8x3 => 3,
-            U8x4 => 4,
-            U16 => 2,
-            U16x2 => 4,
-            U16x3 => 6,
-            U16x4 => 8,
-            F32 => 4,
-            F32x2 => 8,
-            F32x3 => 12,
-            F32x4 => 16,
-        }
-    }
-
     pub(crate) fn action<R>(self, action: impl GenericTexelAction<R>) -> R {
         match self {
             TexelKind::U8 => action.run(u8::texel()),
             TexelKind::U8x2 => action.run(<[u8; 2]>::texel()),
             TexelKind::U8x3 => action.run(<[u8; 3]>::texel()),
             TexelKind::U8x4 => action.run(<[u8; 4]>::texel()),
+            TexelKind::U8x6 => action.run(<[u8; 6]>::texel()),
             TexelKind::U16 => action.run(<[u16; 1]>::texel()),
             TexelKind::U16x2 => action.run(<[u16; 2]>::texel()),
             TexelKind::U16x3 => action.run(<[u16; 3]>::texel()),
             TexelKind::U16x4 => action.run(<[u16; 4]>::texel()),
+            TexelKind::U16x6 => action.run(<[u16; 6]>::texel()),
             TexelKind::F32 => action.run(<[f32; 1]>::texel()),
             TexelKind::F32x2 => action.run(<[f32; 2]>::texel()),
             TexelKind::F32x3 => action.run(<[f32; 3]>::texel()),
             TexelKind::F32x4 => action.run(<[f32; 4]>::texel()),
+            TexelKind::F32x6 => action.run(<[f32; 6]>::texel()),
         }
     }
 }
@@ -908,9 +916,11 @@ impl From<SampleBits> for TexelKind {
             SampleBits::Int8x2 => TexelKind::U8x2,
             SampleBits::Int8x3 => TexelKind::U8x3,
             SampleBits::Int8x4 => TexelKind::U8x4,
+            SampleBits::Int8x6 => TexelKind::U8x6,
             SampleBits::Int16x2 => TexelKind::U16x2,
             SampleBits::Int16x3 => TexelKind::U16x3,
             SampleBits::Int16x4 => TexelKind::U16x4,
+            SampleBits::Int16x6 => TexelKind::U16x6,
             SampleBits::Int1010102
             | SampleBits::Int2101010
             | SampleBits::Int101010_
@@ -920,6 +930,7 @@ impl From<SampleBits> for TexelKind {
             SampleBits::Float32x2 => TexelKind::F32x2,
             SampleBits::Float32x3 => TexelKind::F32x3,
             SampleBits::Float32x4 => TexelKind::F32x4,
+            SampleBits::Float32x6 => TexelKind::F32x6,
         }
     }
 }

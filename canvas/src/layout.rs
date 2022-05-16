@@ -292,12 +292,16 @@ pub enum SampleBits {
     Int8x3,
     /// Four 8-bit integer.
     Int8x4,
+    /// Six 8-bit integer.
+    Int8x6,
     /// Two 16-bit integers.
     Int16x2,
     /// Three 16-bit integer.
     Int16x3,
     /// Four 16-bit integer.
     Int16x4,
+    /// Six 16-bit integer.
+    Int16x6,
     /// Four packed integer.
     Int1010102,
     /// Four packed integer.
@@ -316,6 +320,8 @@ pub enum SampleBits {
     Float32x3,
     /// Four floats.
     Float32x4,
+    /// Six floats.
+    Float32x6,
 }
 
 /// Error that occurs when constructing a layout.
@@ -429,10 +435,11 @@ impl SampleBits {
             Int8x2 | Int16 | Int565 | Int4x4 | Int444_ | Int_444 => 2,
             Int8x3 => 3,
             Int8x4 | Int16x2 | Int1010102 | Int2101010 | Int101010_ | Int_101010 | Float32 => 4,
-            Int16x3 => 6,
+            Int8x6 | Int16x3 => 6,
             Int16x4 | Float16x4 | Float32x2 => 8,
-            Float32x3 => 12,
+            Int16x6 | Float32x3 => 12,
             Float32x4 => 16,
+            Float32x6 => 24,
         }
     }
 
@@ -440,9 +447,11 @@ impl SampleBits {
         use image_texel::AsTexel;
         use SampleBits::*;
         Some(match self {
-            Int8 | Int8x2 | Int8x3 | Int8x4 => (u8::texel().into(), self.bytes() as u8),
-            Int16 | Int16x2 | Int16x3 | Int16x4 => (u16::texel().into(), self.bytes() as u8 / 2),
-            Float32 | Float32x2 | Float32x3 | Float32x4 => {
+            Int8 | Int8x2 | Int8x3 | Int8x4 | Int8x6 => (u8::texel().into(), self.bytes() as u8),
+            Int16 | Int16x2 | Int16x3 | Int16x4 | Int16x6 => {
+                (u16::texel().into(), self.bytes() as u8 / 2)
+            }
+            Float32 | Float32x2 | Float32x3 | Float32x4 | Float32x6 => {
                 (u32::texel().into(), self.bytes() as u8 / 4)
             }
             _ => return None,
@@ -466,6 +475,9 @@ impl SampleBits {
 impl SampleParts {
     /// Create from up to four color channels.
     ///
+    /// This is suitable for describing the channels of a single pixel, and relating it to the bit
+    /// parts in the corresponding texel.
+    ///
     /// The order of parts will be remembered. All color channels must belong to a common color
     /// representation.
     pub fn new(parts: [Option<ColorChannel>; 4], model: ColorChannelModel) -> Option<Self> {
@@ -487,6 +499,22 @@ impl SampleParts {
             .fold(0u8, |acc, (idx, pos)| acc | pos << (2 * idx));
 
         Some(SampleParts { parts, position })
+    }
+
+    /// Create parts that describe 4:2:2 subsampled color channels.
+    pub fn with_subsampled_422(
+        parts: [Option<ColorChannel>; 3],
+        model: ColorChannelModel,
+    ) -> Option<Self> {
+        todo!()
+    }
+
+    /// Create parts that describe 4:1:1 subsampled color channels.
+    pub fn with_subsampled_411(
+        parts: [Option<ColorChannel>; 3],
+        model: ColorChannelModel,
+    ) -> Option<Self> {
+        todo!()
     }
 
     pub fn num_components(self) -> u8 {
