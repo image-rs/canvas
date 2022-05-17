@@ -1,2 +1,2 @@
 [workspace]
-members = [".", "drm", "framebuf", "texel"]
+members = [".", "canvas", "drm", "texel"]
