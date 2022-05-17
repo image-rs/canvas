@@ -46,7 +46,7 @@ pub use crate::stride::{ByteCanvasMut, ByteCanvasRef};
 ///
 /// ```
 /// # fn test() -> Option<()> {
-/// use canvas::{Canvas, Matrix};
+/// use image_texel::{Canvas, Matrix};
 ///
 /// let mut canvas = Canvas::from(Matrix::<[u8; 4]>::with_width_and_height(400, 400));
 ///
@@ -216,7 +216,7 @@ impl<L: Layout> Canvas<L> {
     /// The common layouts define ways to decay into a dynamically typed variant.
     ///
     /// ```
-    /// # use canvas::{Canvas, Matrix, layout};
+    /// # use image_texel::{Canvas, Matrix, layout};
     /// let matrix = Matrix::<u8>::with_width_and_height(400, 400);
     /// let canvas: Canvas<layout::Matrix<u8>> = Canvas::from(matrix);
     ///
@@ -232,7 +232,7 @@ impl<L: Layout> Canvas<L> {
     /// container type. For example, to use a uniform type as an allocated buffer waiting on reuse.
     ///
     /// ```
-    /// # use canvas::{Canvas, Matrix, layout};
+    /// # use image_texel::{Canvas, Matrix, layout};
     /// let matrix = Matrix::<u8>::with_width_and_height(400, 400);
     ///
     /// // Can always decay to a byte buffer.

@@ -73,7 +73,7 @@ pub struct Matrix<P> {
 /// which does not require the interpretation as a full image.
 ///
 /// ```
-/// # use canvas::{Matrix, layout, TexelBuffer};
+/// # use image_texel::{Matrix, layout, TexelBuffer};
 /// let buffer = TexelBuffer::<u8>::new(16);
 /// let allocation = buffer.as_bytes().as_ptr();
 ///
@@ -106,7 +106,7 @@ pub struct MatrixReuseError<P> {
 /// allocations.
 ///
 /// ```
-/// # use canvas::Matrix;
+/// # use image_texel::Matrix;
 /// # let canvas = Matrix::<u8>::with_width_and_height(2, 2);
 /// # struct RequiredAllocationTooLarge;
 ///

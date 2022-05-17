@@ -25,7 +25,7 @@
 //!
 //! ```
 //! # fn send_over_network(_: &[u8]) { };
-//! use canvas::Matrix;
+//! use image_texel::Matrix;
 //! let mut canvas = Matrix::<[u8; 4]>::with_width_and_height(400, 400);
 //!
 //! // Draw a bright red line.

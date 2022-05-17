@@ -88,8 +88,8 @@ pub struct ByteCanvasRef<'data> {
 /// Here is an example of filling a matrix-like canvas with a constant value.
 ///
 /// ```
-/// use canvas::layout::Matrix;
-/// use canvas::canvas::{ByteCanvasRef, ByteCanvasMut, Canvas};
+/// use image_texel::layout::Matrix;
+/// use image_texel::canvas::{ByteCanvasRef, ByteCanvasMut, Canvas};
 ///
 /// let layout = Matrix::<u32>::width_and_height(4, 4).unwrap();
 /// let mut canvas = Canvas::new(layout);

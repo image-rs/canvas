@@ -606,8 +606,8 @@ impl<L: Layout> Decay<L> for Box<L> {
 /// example, the following comparison all hold:
 ///
 /// ```
-/// # use canvas::texels::{U8, U16};
-/// # use canvas::layout::TexelLayout;
+/// # use image_texel::texels::{U8, U16};
+/// # use image_texel::layout::TexelLayout;
 /// let u8 = TexelLayout::from(U8);
 /// let u8x2 = TexelLayout::from(U8.array::<2>());
 /// let u8x3 = TexelLayout::from(U8.array::<3>());

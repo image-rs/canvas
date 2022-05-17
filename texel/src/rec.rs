@@ -26,7 +26,7 @@ pub struct TexelBuffer<P = u8> {
 /// texel type.
 ///
 /// ```
-/// # use canvas::TexelBuffer;
+/// # use image_texel::TexelBuffer;
 /// let mut buffer = TexelBuffer::<u16>::new(16);
 ///
 /// let err = match buffer.reuse(buffer.capacity() + 1) {
@@ -181,7 +181,7 @@ impl<P> TexelBuffer<P> {
     /// never deallocate memory.
     ///
     /// ```
-    /// # use canvas::TexelBuffer;
+    /// # use image_texel::TexelBuffer;
     /// // Initial allocation may panic due to allocation error for now.
     /// let mut buffer: TexelBuffer<u16> = TexelBuffer::new(100);
     /// buffer.reuse(0)
@@ -226,7 +226,7 @@ impl<P> TexelBuffer<P> {
     /// interpreted as a different type may change.
     ///
     /// ```
-    /// # use canvas::TexelBuffer;
+    /// # use image_texel::TexelBuffer;
     /// let buf_u8 = TexelBuffer::<u8>::new(7);
     /// assert_eq!(buf_u8.len(), 7);
     ///
