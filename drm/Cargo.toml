@@ -1,5 +1,5 @@
 [package]
-name = "image-canvas-drm"
+name = "image-drm"
 version = "0.0.0"
 edition = "2021"
 

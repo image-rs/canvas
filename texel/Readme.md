@@ -1,4 +1,4 @@
-# Canvas [![docs.rs: image-canvas](https://docs.rs/image-canvas/badge.svg)](https://docs.rs/image-canvas) [![Build Status](https://github.com/image-rs/canvas/workflows/Rust%20CI/badge.svg)](https://github.com/image-rs/canvas/actions) 
+# image-texel [![docs.rs: image-texel](https://docs.rs/image-texel/badge.svg)](https://docs.rs/image-texel) [![Build Status](https://github.com/image-rs/canvas/workflows/Rust%20CI/badge.svg)](https://github.com/image-rs/canvas/actions) 
 
 An allocated buffer suitable for image data. Compared to a `Vec` of all
 samples, it restricts the possible data types but on the other hand focusses on
@@ -20,11 +20,17 @@ built.
 
 After [some discussion](https://github.com/image-rs/image/pull/885) it
 was concluded that there is likely no safe way to reinterpret the allocation of
-a `Vec<T>` for a different `Vec<U>`, except in a very restricted set of cases.
+a `Vec<T>` for a different `Vec<U>`, except in a very restricted set of cases¹.
 This includes grouping samples in logic pixel structs, even if those are
 annotated `#[repr(C)]` or alike. This is hardly the fault of `Vec<_>`, as
 images and the necessary transmutations of the representative binary data are
 *far* from general but `Vec` must be.
+
+¹This was slightly relaxed in Rust 1.61 where few casts such as `Vec<[u8; 3]>`
+to `Vec<u8>` are now permitted, and the reverse under a restricted set of
+circumstances. This may provide us a good 'out' to perform zero-allocation
+conversion into and from a standard vector. It's still far from flexible enough
+for most high-performance needs.
 
 ## What it is not
 
@@ -38,4 +44,5 @@ other needs.
 
 ## Todo
 
-* Use alignment for SIMD iteration/transmutation/map-operation
+* Safely wrap SIMD iteration/transmutation/map-operation that are sound under
+  the alignment guarantees of the buffer and slice types provided.

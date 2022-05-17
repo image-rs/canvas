@@ -1,11 +1,12 @@
 [package]
 name = "image-texel"
-description = "An texel type and allocated buffers suitable for image data."
 version = "0.1.0"
-authors = ["Andreas Molzer <andreas.molzer@gmx.de>"]
 edition = "2018"
+
+description = "A texel type and allocated buffers suitable for image data."
+authors = ["Andreas Molzer <andreas.molzer@gmx.de>"]
 license = "MIT"
-readme = "README.md"
+readme = "Readme.md"
 documentation = "https://docs.rs/image-texel"
 repository = "https://github.com/image-rs/canvas"
 categories = ["multimedia::images"]
