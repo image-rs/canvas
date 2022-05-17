@@ -19,7 +19,7 @@ use crate::layout::{
 };
 use crate::{BufferReuseError, Texel, TexelBuffer};
 
-pub use crate::stride::{ByteCanvasMut, ByteCanvasRef};
+pub use crate::stride::{StridedBufferMut, StridedBufferRef};
 
 /// A container of allocated bytes, parameterized over the layout.
 ///

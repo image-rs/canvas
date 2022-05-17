@@ -40,7 +40,7 @@ pub struct StrideSpec {
 /// The invariants are that the whole layout fits into memory, additionally ensuring that all
 /// indices within have proper indices into the byte slice containing the data.
 ///
-/// The related containers [`ByteCanvasRef`] and [`ByteCanvasMut`] can be utilized to setup
+/// The related containers [`StridedBufferRef`] and [`StridedBufferMut`] can be utilized to setup
 /// efficient initialization of data from different stride sources. Since they require only the
 /// alignment according to their elements, not according to the maximum alignment, they may be used
 /// for external data that is copied to an image.
@@ -65,6 +65,9 @@ pub struct Strides<T> {
 /// Error that occurs when a [`StrideSpec`] is invalid.
 #[derive(Debug)]
 pub struct BadStrideError {
+    /// The inner reason for the error.
+    /// Note: used for `Debug` but nowhere else.
+    #[allow(dead_code)]
     kind: BadStrideKind,
 }
 
@@ -77,7 +80,7 @@ enum BadStrideKind {
 }
 
 /// A reference to byte of a strided matrix.
-pub struct ByteCanvasRef<'data> {
+pub struct StridedBufferRef<'data> {
     layout: StridedBytes,
     data: &'data [u8],
 }
@@ -94,17 +97,17 @@ pub struct ByteCanvasRef<'data> {
 ///
 /// ```
 /// use image_texel::layout::Matrix;
-/// use image_texel::image::{ByteCanvasRef, ByteCanvasMut, Image};
+/// use image_texel::image::{StridedBufferRef, StridedBufferMut, Image};
 ///
 /// let layout = Matrix::<u32>::width_and_height(4, 4).unwrap();
 /// let mut image = Image::new(layout);
 ///
-/// let fill = ByteCanvasRef::with_repeated_element(&0x42u32, 4, 4);
-/// ByteCanvasMut::new(&mut image).copy_from_image(fill);
+/// let fill = StridedBufferRef::with_repeated_element(&0x42u32, 4, 4);
+/// StridedBufferMut::new(&mut image).copy_from_image(fill);
 ///
 /// assert_eq!(image.as_slice(), &[0x42; 16]);
 /// ```
-pub struct ByteCanvasMut<'data> {
+pub struct StridedBufferMut<'data> {
     layout: StridedBytes,
     data: &'data mut [u8],
 }
@@ -315,12 +318,12 @@ impl<T> Strides<T> {
     }
 }
 
-impl<'data> ByteCanvasRef<'data> {
+impl<'data> StridedBufferRef<'data> {
     /// Construct a reference to a strided image buffer.
     pub fn new(image: &'data Image<impl StridedLayout>) -> Self {
         let layout = image.layout().strided();
         let data = &image.as_bytes()[..layout.total];
-        ByteCanvasRef { layout, data }
+        StridedBufferRef { layout, data }
     }
 
     /// View bytes under a certain strided layout.
@@ -331,14 +334,14 @@ impl<'data> ByteCanvasRef<'data> {
         let data = content
             .get(..layout.total)
             .filter(|data| data.as_ptr() as usize % layout.spec.element.align() == 0)?;
-        Some(ByteCanvasRef { layout, data })
+        Some(StridedBufferRef { layout, data })
     }
 
     pub fn with_repeated_element<T: AsTexel>(el: &'data T, width: usize, height: usize) -> Self {
         let texel = T::texel();
         let layout = StridedBytes::with_repeated_width_and_height(texel.into(), width, height);
         let data = texel.to_bytes(core::slice::from_ref(el));
-        ByteCanvasRef { layout, data }
+        StridedBufferRef { layout, data }
     }
 
     /// Shrink the element's size or alignment.
@@ -348,20 +351,20 @@ impl<'data> ByteCanvasRef<'data> {
     }
 
     /// Borrow this as a reference to a strided byte matrix.
-    pub fn as_ref(&self) -> ByteCanvasRef<'_> {
-        ByteCanvasRef {
+    pub fn as_ref(&self) -> StridedBufferRef<'_> {
+        StridedBufferRef {
             layout: self.layout,
             data: &*self.data,
         }
     }
 }
 
-impl<'data> ByteCanvasMut<'data> {
+impl<'data> StridedBufferMut<'data> {
     /// Construct a mutable reference to a strided image buffer.
     pub fn new(image: &'data mut Image<impl StridedLayout>) -> Self {
         let layout = image.layout().strided();
         let data = &mut image.as_bytes_mut()[..layout.total];
-        ByteCanvasMut { layout, data }
+        StridedBufferMut { layout, data }
     }
 
     /// View bytes mutably under a certain strided layout.
@@ -372,7 +375,7 @@ impl<'data> ByteCanvasMut<'data> {
         let data = content
             .get_mut(..layout.total)
             .filter(|data| data.as_ptr() as usize % layout.spec.element.align() == 0)?;
-        Some(ByteCanvasMut { layout, data })
+        Some(StridedBufferMut { layout, data })
     }
 
     /// Shrink the element's size or alignment.
@@ -384,7 +387,7 @@ impl<'data> ByteCanvasMut<'data> {
     /// Copy the bytes from another image.
     ///
     /// The source must have the same width, height, and element size.
-    pub fn copy_from_image(&mut self, source: ByteCanvasRef<'_>) {
+    pub fn copy_from_image(&mut self, source: StridedBufferRef<'_>) {
         assert!(self.layout.matches(&source.layout), "Mismatching layouts.");
         // FIXME: Special case copying for 100% contiguous layouts.
 
@@ -418,16 +421,16 @@ impl<'data> ByteCanvasMut<'data> {
     }
 
     /// Borrow this as a reference to an immutable byte matrix.
-    pub fn as_ref(&self) -> ByteCanvasRef<'_> {
-        ByteCanvasRef {
+    pub fn as_ref(&self) -> StridedBufferRef<'_> {
+        StridedBufferRef {
             layout: self.layout,
             data: &*self.data,
         }
     }
 
     /// Convert this into a reference to an immutable byte matrix.
-    pub fn into_ref(self) -> ByteCanvasRef<'data> {
-        ByteCanvasRef {
+    pub fn into_ref(self) -> StridedBufferRef<'data> {
+        StridedBufferRef {
             layout: self.layout,
             data: self.data,
         }
@@ -546,11 +549,11 @@ fn image_copies() {
     let src = Image::with_bytes(row_layout, &[0u8, 1, 2, 3]);
 
     let mut dst = Image::new(row_layout);
-    ByteCanvasMut::new(&mut dst).copy_from_image(ByteCanvasRef::new(&src));
+    StridedBufferMut::new(&mut dst).copy_from_image(StridedBufferRef::new(&src));
     assert_eq!(dst.as_bytes(), &[0u8, 1, 2, 3], "Still in same order");
 
     let mut dst = Image::new(col_layout);
-    ByteCanvasMut::new(&mut dst).copy_from_image(ByteCanvasRef::new(&src));
+    StridedBufferMut::new(&mut dst).copy_from_image(StridedBufferRef::new(&src));
     assert_eq!(
         dst.as_bytes(),
         &[0u8, 2, 1, 3],
