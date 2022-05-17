@@ -1,6 +1,6 @@
 # image-canvas
 
-Provides a planar, colored, convertible frame buffer based on `image-canvas`.
+Provides a planar, colored, convertible frame buffer based on `image-texel`.
 
 **Work-In-Progress**: Do not use in production yet. The version is above
 `0.0.*` incidentally, the API may change rapidly. That said, we will adhere to
@@ -15,6 +15,12 @@ representations at various bit depths, that can be effectively and efficiently
 semantically manipulated on a CPU. Provide a lingua franca for passing portions
 of an image to other routines. At some point, we will wrap this into `image`
 as a decoding buffer.
+
+The goal for a `1.0` version is further to provide the *same* bit-by-bit
+reproducible results on all platforms and ISA combinations for all
+representation and conversion functionality. Not sure how feasible this is
+while reaching best-in-class performance but we'll try. Not being at the mercy
+of hardware texel/shading/interpolation units should have some benefit, right?
 
 This isn't definitive yet, should be considered a rough idea.
 

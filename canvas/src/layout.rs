@@ -156,6 +156,9 @@ pub enum Block {
 /// canonical encodings to use. For example, `CIELAB` may be represented as `Lab` (Lightness,
 /// red/green, blue/yellow) or `LCh` (Lightness, Chroma, Hue; the polar cooordinate form of the
 /// previous).
+///
+/// FIXME(color): describe YUV, ASTC and BC block formats? Other? We surely can handle planar data
+/// properly?
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct SampleParts {
     parts: [Option<ColorChannel>; 4],
