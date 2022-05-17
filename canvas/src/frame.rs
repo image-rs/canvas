@@ -51,7 +51,8 @@ impl Canvas {
     /// # Usage
     ///
     /// ```
-    /// use image_canvas::{Canvas, CanvasLayout, SampleParts, Texel};
+    /// use image_canvas::Canvas;
+    /// use image_canvas::layout::{CanvasLayout, SampleParts, Texel};
     ///
     /// // Define what type of color we want to store...
     /// let texel = Texel::new_u8(SampleParts::RgbA);
@@ -59,7 +60,7 @@ impl Canvas {
     /// let layout = CanvasLayout::with_texel(&texel, 32, 32)?;
     ///
     /// let frame = Canvas::new(layout);
-    /// # use image_canvas::LayoutError;
+    /// # use image_canvas::layout::LayoutError;
     /// # Ok::<(), LayoutError>(())
     /// ```
     pub fn new(layout: CanvasLayout) -> Self {

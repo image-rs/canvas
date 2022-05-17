@@ -13,15 +13,16 @@
 //! 3. Allocating the frame utilizing the layout
 //!
 //! ```
-//! use image_canvas::{Frame, FrameLayout, SampleParts, Texel};
+//! use image_canvas::Canvas;
+//! use image_canvas::layout::{CanvasLayout, SampleParts, Texel};
 //!
 //! // Define what type of color we want to store...
 //! let texel = Texel::new_u8(SampleParts::RgbA);
 //! // and which dimensions to use, chooses a stride for us.
-//! let layout = FrameLayout::with_texel(&texel, 32, 32)?;
+//! let layout = CanvasLayout::with_texel(&texel, 32, 32)?;
 //!
-//! let frame = Frame::new(layout);
-//! # use image_canvas::LayoutError;
+//! let frame = Canvas::new(layout);
+//! # use image_canvas::layout::LayoutError;
 //! # Ok::<(), LayoutError>(())
 //! ```
 //!
@@ -30,14 +31,16 @@
 //! 2. Call the conversion method.
 //!
 //! ```
-//! use image_canvas::{Color, Frame, FrameLayout, SampleParts, Texel};
+//! use image_canvas::Canvas;
+//! use image_canvas::color::Color;
+//! use image_canvas::layout::{CanvasLayout, SampleParts, Texel};
 //!
-//! let layout = FrameLayout::with_texel(&Texel::new_u8(SampleParts::Lab), 32, 32)?;
-//! let mut from = Frame::new(layout.clone());
+//! let layout = CanvasLayout::with_texel(&Texel::new_u8(SampleParts::Lab), 32, 32)?;
+//! let mut from = Canvas::new(layout.clone());
 //! from.set_color(Color::Oklab)?;
 //!
-//! let layout = FrameLayout::with_texel(&Texel::new_u8(SampleParts::Rgb), 32, 32)?;
-//! let mut into = Frame::new(layout);
+//! let layout = CanvasLayout::with_texel(&Texel::new_u8(SampleParts::Rgb), 32, 32)?;
+//! let mut into = Canvas::new(layout);
 //! into.set_color(Color::SRGB)?;
 //!
 //! // … omitted: some pixel initialization
@@ -46,7 +49,7 @@
 //!// Now read the sRGB frame, e.g. to initialize an HTTP canvas
 //! into.as_bytes();
 //!
-//! # use image_canvas::LayoutError;
+//! # use image_canvas::layout::LayoutError;
 //! # Ok::<(), LayoutError>(())
 //! ```
 
