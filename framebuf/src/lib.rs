@@ -13,7 +13,7 @@
 //! 3. Allocating the frame utilizing the layout
 //!
 //! ```
-//! use image_framebuf::{Frame, FrameLayout, SampleParts, Texel};
+//! use image_canvas::{Frame, FrameLayout, SampleParts, Texel};
 //!
 //! // Define what type of color we want to store...
 //! let texel = Texel::new_u8(SampleParts::RgbA);
@@ -21,7 +21,7 @@
 //! let layout = FrameLayout::with_texel(&texel, 32, 32)?;
 //!
 //! let frame = Frame::new(layout);
-//! # use image_framebuf::LayoutError;
+//! # use image_canvas::LayoutError;
 //! # Ok::<(), LayoutError>(())
 //! ```
 //!
@@ -30,7 +30,7 @@
 //! 2. Call the conversion method.
 //!
 //! ```
-//! use image_framebuf::{Color, Frame, FrameLayout, SampleParts, Texel};
+//! use image_canvas::{Color, Frame, FrameLayout, SampleParts, Texel};
 //!
 //! let layout = FrameLayout::with_texel(&Texel::new_u8(SampleParts::Lab), 32, 32)?;
 //! let mut from = Frame::new(layout.clone());
@@ -46,7 +46,7 @@
 //!// Now read the sRGB frame, e.g. to initialize an HTTP canvas
 //! into.as_bytes();
 //!
-//! # use image_framebuf::LayoutError;
+//! # use image_canvas::LayoutError;
 //! # Ok::<(), LayoutError>(())
 //! ```
 

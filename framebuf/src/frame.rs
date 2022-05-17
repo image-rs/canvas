@@ -51,7 +51,7 @@ impl Frame {
     /// # Usage
     ///
     /// ```
-    /// use image_framebuf::{Frame, FrameLayout, SampleParts, Texel};
+    /// use image_canvas::{Frame, FrameLayout, SampleParts, Texel};
     ///
     /// // Define what type of color we want to store...
     /// let texel = Texel::new_u8(SampleParts::RgbA);
@@ -59,7 +59,7 @@ impl Frame {
     /// let layout = FrameLayout::with_texel(&texel, 32, 32)?;
     ///
     /// let frame = Frame::new(layout);
-    /// # use image_framebuf::LayoutError;
+    /// # use image_canvas::LayoutError;
     /// # Ok::<(), LayoutError>(())
     /// ```
     pub fn new(layout: FrameLayout) -> Self {
