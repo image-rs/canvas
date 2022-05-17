@@ -1,8 +1,9 @@
 //! Defines layout and buffer of our images.
 use crate::color::*;
 
-use canvas::layout::{
-    Decay, Layout as ImageLayout, MatrixBytes, Raster, StrideSpec, StridedBytes, StridedTexels,
+use image_texel::image::{Coord, ImageRef};
+use image_texel::layout::{
+    Decay, Layout as ImageLayout, MatrixBytes, Raster, StrideSpec, StridedBytes, Strides,
     TexelLayout,
 };
 
@@ -75,7 +76,7 @@ pub struct ChannelBytes {
 /// A typed layout with uniform spaced (color) channels.
 #[derive(Clone, PartialEq)]
 pub struct ChannelLayout<T> {
-    pub(crate) channel: canvas::Texel<T>,
+    pub(crate) channel: image_texel::Texel<T>,
     pub(crate) inner: ChannelBytes,
 }
 
@@ -99,7 +100,7 @@ pub struct PlanarLayout<T> {
     /// Offset within the image in bytes.
     offset_in_texels: usize,
     /// The matrix descriptor of this plane.
-    matrix: StridedTexels<T>,
+    matrix: Strides<T>,
 }
 
 /// Describe a row-major rectangular matrix layout.
@@ -433,7 +434,7 @@ impl SampleBits {
     }
 
     fn as_array(self) -> Option<(TexelLayout, u8)> {
-        use canvas::AsTexel;
+        use image_texel::AsTexel;
         use SampleBits::*;
         Some(match self {
             Int8 | Int8x2 | Int8x3 | Int8x4 => (u8::texel().into(), self.bytes() as u8),
@@ -450,7 +451,7 @@ impl SampleBits {
         struct ToLayout;
 
         impl GenericTexelAction<TexelLayout> for ToLayout {
-            fn run<T>(self, texel: canvas::Texel<T>) -> TexelLayout {
+            fn run<T>(self, texel: image_texel::Texel<T>) -> TexelLayout {
                 texel.into()
             }
         }
@@ -753,8 +754,8 @@ impl PlaneBytes {
         })
     }
 
-    pub(crate) fn is_compatible<T>(&self, texel: canvas::Texel<T>) -> Option<PlanarLayout<T>> {
-        use canvas::layout::TryMend;
+    pub(crate) fn is_compatible<T>(&self, texel: image_texel::Texel<T>) -> Option<PlanarLayout<T>> {
+        use image_texel::layout::TryMend;
         Some(PlanarLayout {
             texel: self.texel.clone(),
             offset_in_texels: self.offset_in_texels,
@@ -764,7 +765,10 @@ impl PlaneBytes {
 }
 
 impl ChannelBytes {
-    pub(crate) fn is_compatible<T>(&self, texel: canvas::Texel<T>) -> Option<ChannelLayout<T>> {
+    pub(crate) fn is_compatible<T>(
+        &self,
+        texel: image_texel::Texel<T>,
+    ) -> Option<ChannelLayout<T>> {
         if self.channel_stride == texel.size() {
             Some(ChannelLayout {
                 channel: texel,
@@ -803,7 +807,7 @@ impl LayoutError {
         Self::NO_INFO
     }
 
-    fn stride_error(_: canvas::layout::BadStrideError) -> Self {
+    fn stride_error(_: image_texel::layout::BadStrideError) -> Self {
         Self::NO_INFO
     }
 }
@@ -827,7 +831,7 @@ impl ImageLayout for PlaneBytes {
 }
 
 impl<T> Raster<T> for PlanarLayout<T> {
-    fn dimensions(&self) -> canvas::canvas::Coord {
+    fn dimensions(&self) -> Coord {
         let StrideSpec { width, height, .. } = self.matrix.spec();
         // The PlanarLayout should only be constructed from u32 width and height, guaranteeing that
         // this conversion works. If it doesn't, these should be traced to the constructor.
@@ -837,10 +841,10 @@ impl<T> Raster<T> for PlanarLayout<T> {
             "Invalid dimension: {}",
             height
         );
-        canvas::canvas::Coord(width as u32, height as u32)
+        Coord(width as u32, height as u32)
     }
 
-    fn get(from: canvas::canvas::CanvasRef<&Self>, at: canvas::canvas::Coord) -> Option<T> {
+    fn get(from: ImageRef<&Self>, at: Coord) -> Option<T> {
         let (x, y) = at.xy();
         let layout = from.layout();
         let matrix = &layout.matrix;

@@ -4,7 +4,7 @@ version = "0.2.0"
 edition = "2021"
 
 [dependencies]
-canvas = { path = "../texel", package = "image-texel" }
+image-texel = { path = "../texel" }
 
 [dev-dependencies]
 brunch = "0.2.5"

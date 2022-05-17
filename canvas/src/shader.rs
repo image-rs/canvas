@@ -2,9 +2,9 @@
 //!
 //! Takes quite a lot of inspiration from how GPUs work. We have a primitive sampler unit, a
 //! fragment unit, and pipeline multiple texels in parallel.
-use canvas::canvas::{CanvasMut, CanvasRef};
-use canvas::{canvas::Coord, AsTexel, Texel, TexelBuffer};
 use core::ops::Range;
+use image_texel::image::{ImageMut, ImageRef};
+use image_texel::{image::Coord, AsTexel, Texel, TexelBuffer};
 
 use crate::frame::Canvas;
 use crate::layout::{CanvasLayout, SampleBits, SampleParts, Texel as TexelBits};
@@ -118,8 +118,8 @@ enum CommonColor {
     CieXyz,
 }
 
-type PlaneSource<'data, 'layout> = CanvasRef<'data, &'layout CanvasLayout>;
-type PlaneTarget<'data, 'layout> = CanvasMut<'data, &'layout mut CanvasLayout>;
+type PlaneSource<'data, 'layout> = ImageRef<'data, &'layout CanvasLayout>;
+type PlaneTarget<'data, 'layout> = ImageMut<'data, &'layout mut CanvasLayout>;
 
 /// The function pointers doing the conversion.
 ///

@@ -19,14 +19,14 @@ fn simple_conversion() -> Result<(), LayoutError> {
     let mut from = Canvas::new(source_layout);
     let mut into = Canvas::new(target_layout);
 
-    from.as_texels_mut(<[u8; 4] as canvas::AsTexel>::texel())
+    from.as_texels_mut(<[u8; 4] as image_texel::AsTexel>::texel())
         .iter_mut()
         .for_each(|b| *b = [0xff, 0xff, 0x0, 0xff]);
 
     // Expecting conversion [0xff, 0xff, 0x0, 0xff] to 0–ff—ff
     from.convert(&mut into);
 
-    into.as_texels_mut(<u16 as canvas::AsTexel>::texel())
+    into.as_texels_mut(<u16 as image_texel::AsTexel>::texel())
         .iter()
         .enumerate()
         .for_each(|(idx, b)| assert_eq!(*b, 0xffe0, "at {}", idx));
@@ -63,7 +63,7 @@ fn color_no_conversion() -> Result<(), LayoutError> {
     let mut from = Canvas::new(layout.clone());
     from.set_color(Color::SRGB)?;
 
-    from.as_texels_mut(<[u8; 3] as canvas::AsTexel>::texel())
+    from.as_texels_mut(<[u8; 3] as image_texel::AsTexel>::texel())
         .iter_mut()
         .for_each(|b| *b = [0xff, 0xff, 0x20]);
 
@@ -72,7 +72,7 @@ fn color_no_conversion() -> Result<(), LayoutError> {
 
     from.convert(&mut into);
 
-    into.as_texels(<[u8; 3] as canvas::AsTexel>::texel())
+    into.as_texels(<[u8; 3] as image_texel::AsTexel>::texel())
         .iter()
         .enumerate()
         .for_each(|(idx, b)| assert_eq!(*b, [0xff, 0xff, 0x20], "at {}", idx));
@@ -91,13 +91,13 @@ fn color_conversion() -> Result<(), LayoutError> {
     into.set_color(Color::Oklab)?;
 
     let mut check_color_pair = |rgb: [u8; 3], lab: [u8; 3]| {
-        from.as_texels_mut(<[u8; 3] as canvas::AsTexel>::texel())
+        from.as_texels_mut(<[u8; 3] as image_texel::AsTexel>::texel())
             .iter_mut()
             .for_each(|b| *b = rgb);
 
         from.convert(&mut into);
 
-        into.as_texels_mut(<[u8; 3] as canvas::AsTexel>::texel())
+        into.as_texels_mut(<[u8; 3] as image_texel::AsTexel>::texel())
             .iter()
             .enumerate()
             .for_each(|(idx, b)| assert_eq!(*b, lab, "at {}", idx));
