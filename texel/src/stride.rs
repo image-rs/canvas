@@ -1,4 +1,4 @@
-//! Byte-based, stride operations on a canvas.
+//! Byte-based, stride operations on an image.
 //!
 //! This is the most general, uniform source of pixel data. The design allows pixels to alias each
 //! other even for mutable operations. The result is always as if performing pixel wise operations
@@ -6,10 +6,10 @@
 //!
 //! In comparison to the standard `Canvas`, the reference types do not need to rely on the
 //! container and can be constructed from (suitably aligned) byte data. This makes it possible
-//! initialize a canvas, for example. They internally contain a simple byte slice which allows
+//! initialize an image, for example. They internally contain a simple byte slice which allows
 //! viewing any source buffer as a strided matrix even when it was not allocated with the special
 //! allocator.
-use crate::canvas::Canvas;
+use crate::image::Image;
 use crate::layout;
 use crate::layout::{Layout, MismatchedPixelError, TexelLayout, TryMend};
 use crate::texel::{AsTexel, Texel};
@@ -43,7 +43,7 @@ pub struct StrideSpec {
 /// The related containers [`ByteCanvasRef`] and [`ByteCanvasMut`] can be utilized to setup
 /// efficient initialization of data from different stride sources. Since they require only the
 /// alignment according to their elements, not according to the maximum alignment, they may be used
-/// for external data that is copied to a canvas.
+/// for external data that is copied to an image.
 #[derive(Clone, Copy, PartialEq, Eq)]
 pub struct StridedBytes {
     spec: StrideSpec,
@@ -79,25 +79,25 @@ pub struct ByteCanvasRef<'data> {
 
 /// A reference to mutable byte of a strided matrix.
 ///
-/// This can be constructed from a mutably borrowed canvas that is currently set to a strided
+/// This can be constructed from a mutably borrowed image that is currently set to a strided
 /// layout such as a matrix. It can be regarded as a generalization to the standard matrix layout.
 /// Alternatively, it can be constructed directly from a mutable reference to raw bytes.
 ///
 /// # Usage
 ///
-/// Here is an example of filling a matrix-like canvas with a constant value.
+/// Here is an example of filling a matrix-like image with a constant value.
 ///
 /// ```
 /// use image_texel::layout::Matrix;
-/// use image_texel::canvas::{ByteCanvasRef, ByteCanvasMut, Canvas};
+/// use image_texel::image::{ByteCanvasRef, ByteCanvasMut, Image};
 ///
 /// let layout = Matrix::<u32>::width_and_height(4, 4).unwrap();
-/// let mut canvas = Canvas::new(layout);
+/// let mut image = Image::new(layout);
 ///
 /// let fill = ByteCanvasRef::with_repeated_element(&0x42u32, 4, 4);
-/// ByteCanvasMut::new(&mut canvas).copy_from_canvas(fill);
+/// ByteCanvasMut::new(&mut image).copy_from_image(fill);
 ///
-/// assert_eq!(canvas.as_slice(), &[0x42; 16]);
+/// assert_eq!(image.as_slice(), &[0x42; 16]);
 /// ```
 pub struct ByteCanvasMut<'data> {
     layout: StridedBytes,
@@ -311,16 +311,16 @@ impl<T> StridedTexels<T> {
 }
 
 impl<'data> ByteCanvasRef<'data> {
-    /// Construct a reference to a strided canvas buffer.
-    pub fn new(canvas: &'data Canvas<impl StridedLayout>) -> Self {
-        let layout = canvas.layout().strided();
-        let data = &canvas.as_bytes()[..layout.total];
+    /// Construct a reference to a strided image buffer.
+    pub fn new(image: &'data Image<impl StridedLayout>) -> Self {
+        let layout = image.layout().strided();
+        let data = &image.as_bytes()[..layout.total];
         ByteCanvasRef { layout, data }
     }
 
     /// View bytes under a certain strided layout.
     ///
-    /// Unlike a canvas, the data need only be aligned to the `element` mentioned in the layout and
+    /// Unlike an image, the data need only be aligned to the `element` mentioned in the layout and
     /// not to the maximum alignment.
     pub fn with_bytes(layout: StridedBytes, content: &'data [u8]) -> Option<Self> {
         let data = content
@@ -352,16 +352,16 @@ impl<'data> ByteCanvasRef<'data> {
 }
 
 impl<'data> ByteCanvasMut<'data> {
-    /// Construct a mutable reference to a strided canvas buffer.
-    pub fn new(canvas: &'data mut Canvas<impl StridedLayout>) -> Self {
-        let layout = canvas.layout().strided();
-        let data = &mut canvas.as_bytes_mut()[..layout.total];
+    /// Construct a mutable reference to a strided image buffer.
+    pub fn new(image: &'data mut Image<impl StridedLayout>) -> Self {
+        let layout = image.layout().strided();
+        let data = &mut image.as_bytes_mut()[..layout.total];
         ByteCanvasMut { layout, data }
     }
 
     /// View bytes mutably under a certain strided layout.
     ///
-    /// Unlike a canvas, the data need only be aligned to the `element` mentioned in the layout and
+    /// Unlike an image, the data need only be aligned to the `element` mentioned in the layout and
     /// not to the maximum alignment.
     pub fn with_bytes(layout: StridedBytes, content: &'data mut [u8]) -> Option<Self> {
         let data = content
@@ -376,10 +376,10 @@ impl<'data> ByteCanvasMut<'data> {
         self.layout.spec.element
     }
 
-    /// Copy the bytes from another canvas.
+    /// Copy the bytes from another image.
     ///
     /// The source must have the same width, height, and element size.
-    pub fn copy_from_canvas(&mut self, source: ByteCanvasRef<'_>) {
+    pub fn copy_from_image(&mut self, source: ByteCanvasRef<'_>) {
         assert!(self.layout.matches(&source.layout), "Mismatching layouts.");
         // FIXME: Special case copying for 100% contiguous layouts.
 
@@ -532,20 +532,20 @@ fn align_validation() {
 }
 
 #[test]
-fn canvas_copies() {
+fn image_copies() {
     let matrix = layout::MatrixBytes::from_width_height(TexelLayout::from_pixel::<u8>(), 2, 2)
         .expect("Valid matrix");
     let row_layout = StridedBytes::with_row_major(matrix);
     let col_layout = StridedBytes::with_column_major(matrix);
 
-    let src = Canvas::with_bytes(row_layout, &[0u8, 1, 2, 3]);
+    let src = Image::with_bytes(row_layout, &[0u8, 1, 2, 3]);
 
-    let mut dst = Canvas::new(row_layout);
-    ByteCanvasMut::new(&mut dst).copy_from_canvas(ByteCanvasRef::new(&src));
+    let mut dst = Image::new(row_layout);
+    ByteCanvasMut::new(&mut dst).copy_from_image(ByteCanvasRef::new(&src));
     assert_eq!(dst.as_bytes(), &[0u8, 1, 2, 3], "Still in same order");
 
-    let mut dst = Canvas::new(col_layout);
-    ByteCanvasMut::new(&mut dst).copy_from_canvas(ByteCanvasRef::new(&src));
+    let mut dst = Image::new(col_layout);
+    ByteCanvasMut::new(&mut dst).copy_from_image(ByteCanvasRef::new(&src));
     assert_eq!(
         dst.as_bytes(),
         &[0u8, 2, 1, 3],

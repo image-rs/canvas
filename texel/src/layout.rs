@@ -9,7 +9,7 @@ use core::{alloc, cmp};
 
 mod matrix;
 
-use crate::canvas::{CanvasMut, CanvasRef, Coord};
+use crate::image::{Coord, ImageMut, ImageRef};
 pub use crate::stride::{BadStrideError, StrideSpec, StridedBytes, StridedLayout, StridedTexels};
 
 /// A byte layout that only describes the user bytes.
@@ -216,7 +216,7 @@ pub trait SliceLayout: Layout {
 /// filling curve, etc. Also, multiple pixels may form one group of subsampled channels.
 pub trait Raster<Pixel>: Layout + Sized {
     fn dimensions(&self) -> Coord;
-    fn get(from: CanvasRef<&Self>, at: Coord) -> Option<Pixel>;
+    fn get(from: ImageRef<&Self>, at: Coord) -> Option<Pixel>;
 }
 
 /// A raster layout where one can change pixel values independently.
@@ -228,16 +228,16 @@ pub trait Raster<Pixel>: Layout + Sized {
 /// filling curve, etc. but subsampled images are not easily possible as pixels can not be written
 /// to independently.
 pub trait RasterMut<Pixel>: Raster<Pixel> {
-    fn put(into: CanvasMut<&mut Self>, at: Coord, val: Pixel);
+    fn put(into: ImageMut<&mut Self>, at: Coord, val: Pixel);
 
     /// Evaluate a function on each texel of the raster image.
-    fn shade(mut canvas: CanvasMut<&mut Self>, mut f: impl FnMut(u32, u32, &mut Pixel)) {
-        let Coord(bx, by) = canvas.layout().dimensions();
+    fn shade(mut image: ImageMut<&mut Self>, mut f: impl FnMut(u32, u32, &mut Pixel)) {
+        let Coord(bx, by) = image.layout().dimensions();
         for y in 0..by {
             for x in 0..bx {
-                let mut pixel = Self::get(canvas.as_ref().as_deref(), Coord(x, y)).unwrap();
+                let mut pixel = Self::get(image.as_ref().as_deref(), Coord(x, y)).unwrap();
                 f(x, y, &mut pixel);
-                Self::put(canvas.as_mut().as_deref_mut(), Coord(x, y), pixel);
+                Self::put(image.as_mut().as_deref_mut(), Coord(x, y), pixel);
             }
         }
     }
@@ -692,7 +692,7 @@ impl<P> Raster<P> for Matrix<P> {
         Coord(width, height)
     }
 
-    fn get(from: CanvasRef<&Self>, Coord(x, y): Coord) -> Option<P> {
+    fn get(from: ImageRef<&Self>, Coord(x, y): Coord) -> Option<P> {
         if from.layout().in_bounds(x as usize, y as usize) {
             let index = from.layout().index_of(x as usize, y as usize);
             let texel = from.layout().sample();
@@ -704,7 +704,7 @@ impl<P> Raster<P> for Matrix<P> {
 }
 
 impl<P> RasterMut<P> for Matrix<P> {
-    fn put(into: CanvasMut<&mut Self>, Coord(x, y): Coord, val: P) {
+    fn put(into: ImageMut<&mut Self>, Coord(x, y): Coord, val: P) {
         if into.layout().in_bounds(x as usize, y as usize) {
             let index = into.layout().index_of(x as usize, y as usize);
             if let Some(dst) = into.into_mut_slice().get_mut(index) {
