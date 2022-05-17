@@ -3,7 +3,7 @@
 // Copyright (c) 2019, 2020 The `image-rs` developers
 //! # Matrix
 //!
-//! An image canvas compatible with transmuting its byte content.
+//! An image compatible with transmuting its byte content.
 //!
 //! This library is strictly `no_std`, and aims to offer utilities to represent and share image
 //! buffers between platforms, byte representations, and processing methods. It acknowledges that,
@@ -25,17 +25,17 @@
 //!
 //! ```
 //! # fn send_over_network(_: &[u8]) { };
-//! use canvas::Matrix;
-//! let mut canvas = Matrix::<[u8; 4]>::with_width_and_height(400, 400);
+//! use image_texel::Matrix;
+//! let mut image = Matrix::<[u8; 4]>::with_width_and_height(400, 400);
 //!
 //! // Draw a bright red line.
 //! for i in 0..400 {
 //!     // Assign color as u8-RGBA
-//!     canvas[(i, i)] = [0xFF, 0x00, 0x00, 0xFF];
+//!     image[(i, i)] = [0xFF, 0x00, 0x00, 0xFF];
 //! }
 //!
 //! // Encode to network endian.
-//! let mut encoded = canvas.transmute::<u32>();
+//! let mut encoded = image.transmute::<u32>();
 //! encoded
 //!     .as_mut_slice()
 //!     .iter_mut()
@@ -52,14 +52,14 @@
 extern crate alloc;
 
 mod buf;
-pub mod canvas;
+pub mod image;
 pub mod layout;
 mod matrix;
 mod rec;
 mod stride;
 mod texel;
 
-pub use self::canvas::Canvas;
+pub use self::image::Image;
 pub use self::matrix::{Matrix, MatrixReuseError};
 pub use self::rec::{BufferReuseError, TexelBuffer};
 pub use self::texel::{AsTexel, Texel};

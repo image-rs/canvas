@@ -1,0 +1,23 @@
+[package]
+name = "image-canvas"
+version = "0.2.0"
+edition = "2021"
+
+description = "A color-aware texel buffer."
+authors = ["Andreas Molzer <andreas.molzer@gmx.de>"]
+license = "MIT"
+readme = "Readme.md"
+documentation = "https://docs.rs/image-canvas"
+repository = "https://github.com/image-rs/canvas"
+categories = ["multimedia::images"]
+
+[dependencies]
+image-texel = { path = "../texel", version = "0.1.0" }
+
+[dev-dependencies]
+brunch = "0.2.5"
+
+[[bench]]
+name = "conversion"
+path = "benchmarks/conversion.rs"
+harness = false

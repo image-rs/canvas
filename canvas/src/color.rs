@@ -213,25 +213,33 @@ pub enum Transfer {
     /// Linear color in display luminance.
     Linear,
     /// Non-linear electrical data of Srgb
+    ///
+    /// Technically, we're implementing scRGB since we handle negative primaries just well enough.
     Srgb,
     /// Non-linear electrical data of Bt2020 that was 10-bit quantized
     Bt2020_10bit,
     /// Non-linear electrical data of Bt2020 that was 12-bit quantized
+    /// FIXME(color): not yet supported, panics on use.
     Bt2020_12bit,
     /// Non-linear electrical data of Smpte-2048
     Smpte2084,
     /// Another name for Smpte2084.
+    /// FIXME(color): not yet supported, panics on use.
     Bt2100Pq,
     /// Non-linear electrical data of Bt2100 Hybrid-Log-Gamma.
+    /// FIXME(color): not yet supported, panics on use.
     Bt2100Hlg,
     /// Linear color in scene luminance of Bt2100.
     /// This is perfect for an artistic composition pipeline. The rest of the type system will
     /// ensure this is not accidentally and unwittingly mixed with `Linear` but otherwise this is
     /// treated as `Linear`. You might always transmute.
+    /// FIXME(color): not yet supported, panics on use.
     Bt2100Scene,
 }
 
 /// The reference brightness of the color specification.
+///
+/// FIXME(color): scaling to reference luminance doesn't have an interface yet.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 #[non_exhaustive]
 pub enum Luminance {
@@ -244,17 +252,32 @@ pub enum Luminance {
     AdobeRgb,
 }
 
-/// The relative stimuli of the three corners of a triangular gamut.
+/// The relative stimuli of the three corners of a triangular RGBish gamut.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 #[non_exhaustive]
 pub enum Primaries {
     /// The CIE XYZ 'primaries'.
+    /// FIXME(color): does this really make sense?
     Xyz,
+    /// First set of primaries specified in Bt/Rec.601.
+    ///
+    /// These are actually the same as in SMPTE240M.
     Bt601_525,
+    /// Second set of primaries specified in Bt/Rec.601.
     Bt601_625,
+    /// Primaries specified in Bt/Rec.709.
     Bt709,
+    /// Primaries specified in SMPTE240-M.
+    ///
+    /// There are actually the same as BT.601.
     Smpte240,
+    /// Primaries specified in Bt/Rec.2020.
+    ///
+    /// Also known as Wide Color Gamut.
     Bt2020,
+    /// Primaries specified in Bt/Rec.2100.
+    ///
+    /// Also known as Wide Color Gamut. See Bt.2020.
     Bt2100,
 }
 
@@ -508,6 +531,15 @@ impl Whitepoint {
 
 #[rustfmt::skip]
 impl Primaries {
+    /// Convert to XYZ, or back if you invert the matrix.
+    ///
+    /// This is done with the 'wrong' van Kries transform, under given illuminant, where the CIE
+    /// XYZ are scaled to match the whitepoint individually. This is in accordance to the
+    /// specification for sRGB et.al even though it isn't very correct in a perceptual sense.
+    ///
+    /// See: Mark D. Fairchild, Color Appearance Models, 2nd Edition,
+    /// Or: SRLAB2 <https://www.magnetkern.de/srlab2.html> for a color model that is perceptually
+    /// more correct with regards to illuminants, or the complex CIECAM02.
     pub(crate) fn to_xyz(self, white: Whitepoint) -> RowMatrix {
         use Primaries::*;
         // Rec.BT.601

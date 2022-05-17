@@ -5,7 +5,7 @@ use core::ops::{Index, IndexMut};
 use core::{cmp, fmt};
 
 use crate::buf::Buffer;
-use crate::canvas::{Canvas, RawCanvas};
+use crate::image::{Image, RawImage};
 use crate::layout::Matrix as Layout;
 use crate::{layout, AsTexel, BufferReuseError, Texel, TexelBuffer};
 
@@ -16,7 +16,7 @@ use crate::{layout, AsTexel, BufferReuseError, Texel, TexelBuffer};
 /// Instead, it will always store the data in a row-major layout without holes.
 ///
 /// There are two levels of control over the allocation behaviour of a `Matrix`. The direct
-/// methods, currently `with_width_and_height` only, lead to a canvas without intermediate steps
+/// methods, currently `with_width_and_height` only, lead to an image without intermediate steps
 /// but may panic due to an invalid layout. Manually using the intermediate [`Layout`] gives custom
 /// error handling options and additional offers inspection of the details of the to-be-allocated
 /// buffer. A third option is currently not available and depends on support from the Rust standard
@@ -60,10 +60,10 @@ use crate::{layout, AsTexel, BufferReuseError, Texel, TexelBuffer};
 /// [`Layout`]: ./struct.Layout.html
 #[derive(Clone, PartialEq, Eq)]
 pub struct Matrix<P> {
-    inner: RawCanvas<Buffer, Layout<P>>,
+    inner: RawImage<Buffer, Layout<P>>,
 }
 
-/// Error representation for a failed buffer reuse for a canvas.
+/// Error representation for a failed buffer reuse for an image.
 ///
 /// Emitted as a result of [`Matrix::from_buffer`] when the buffer capacity is not large enough to
 /// serve as an image of requested layout with causing a reallocation.
@@ -73,7 +73,7 @@ pub struct Matrix<P> {
 /// which does not require the interpretation as a full image.
 ///
 /// ```
-/// # use canvas::{Matrix, layout, TexelBuffer};
+/// # use image_texel::{Matrix, layout, TexelBuffer};
 /// let buffer = TexelBuffer::<u8>::new(16);
 /// let allocation = buffer.as_bytes().as_ptr();
 ///
@@ -95,7 +95,7 @@ pub struct MatrixReuseError<P> {
     layout: Layout<P>,
 }
 
-/// The canvas could not be mapped to another pixel type without reuse.
+/// The image could not be mapped to another pixel type without reuse.
 ///
 /// This may be caused since the layout would be invalid or due to the layout being too large for
 /// the current buffer allocation.
@@ -106,19 +106,19 @@ pub struct MatrixReuseError<P> {
 /// allocations.
 ///
 /// ```
-/// # use canvas::Matrix;
-/// # let canvas = Matrix::<u8>::with_width_and_height(2, 2);
+/// # use image_texel::Matrix;
+/// # let image = Matrix::<u8>::with_width_and_height(2, 2);
 /// # struct RequiredAllocationTooLarge;
 ///
-/// match canvas.map_reuse(f32::from) {
+/// match image.map_reuse(f32::from) {
 ///     // Everything worked fine.
-///     Ok(canvas) => Ok(canvas),
+///     Ok(image) => Ok(image),
 ///     Err(error) => {
 ///         // Manually validate if this reallocation should be allowed?
 ///         match error.layout() {
 ///             // Accept an allocation only if its smaller than a page
 ///             Some(layout) if layout.byte_len() <= (1 << 12)
-///                 => Ok(error.into_canvas().map(f32::from)),
+///                 => Ok(error.into_image().map(f32::from)),
 ///             _ => Err(RequiredAllocationTooLarge),
 ///         }
 ///     },
@@ -133,7 +133,7 @@ pub struct MapReuseError<P, Q> {
 }
 
 impl<P> Matrix<P> {
-    /// Allocate a canvas with specified layout.
+    /// Allocate a image with specified layout.
     ///
     /// # Panics
     /// When allocation of memory fails.
@@ -142,7 +142,7 @@ impl<P> Matrix<P> {
         Self::new_raw(rec, layout)
     }
 
-    /// Directly try to allocate a canvas from width and height.
+    /// Directly try to allocate an image from width and height.
     ///
     /// # Panics
     /// This panics when the layout described by `width` and `height` can not be allocated, for
@@ -157,7 +157,7 @@ impl<P> Matrix<P> {
         Self::with_layout(layout)
     }
 
-    /// Interpret an existing buffer as a pixel canvas.
+    /// Interpret an existing buffer as a pixel image.
     ///
     /// The data already contained within the buffer is not modified so that prior initialization
     /// can be performed or one array of samples reinterpreted for an image of other sample type.
@@ -172,13 +172,13 @@ impl<P> Matrix<P> {
         Self::new_raw(buffer, layout)
     }
 
-    /// Reuse an existing buffer for a pixel canvas.
+    /// Reuse an existing buffer for a pixel image.
     ///
     /// Similar to `from_buffer` but this function will never reallocate the inner buffer. Instead, it
     /// will return the `TexelBuffer` unmodified if the creation fails. See [`MatrixReuseError`] for
     /// further information on the error and retrieving the buffer.
     ///
-    /// [`MatrixReuseError`]: ./struct.CanvasReuseError.html
+    /// [`MatrixReuseError`]: ./struct.MatrixReuseError.html
     pub fn from_reused_buffer(
         mut buffer: TexelBuffer<P>,
         layout: Layout<P>,
@@ -193,7 +193,7 @@ impl<P> Matrix<P> {
     fn new_raw(inner: TexelBuffer<P>, layout: Layout<P>) -> Self {
         assert_eq!(inner.len(), layout.len(), "Texel count agrees with buffer");
         Matrix {
-            inner: RawCanvas::from_buffer(inner, layout),
+            inner: RawImage::from_buffer(inner, layout),
         }
     }
 
@@ -473,7 +473,7 @@ impl<P> MatrixReuseError<P> {
 
 impl<P, Q> MapReuseError<P, Q> {
     /// Unwrap the original buffer.
-    pub fn into_canvas(self) -> Matrix<P> {
+    pub fn into_image(self) -> Matrix<P> {
         self.buffer
     }
 
@@ -486,19 +486,19 @@ impl<P, Q> MapReuseError<P, Q> {
     }
 }
 
-impl<P> From<Canvas<Layout<P>>> for Matrix<P> {
-    fn from(canvas: Canvas<Layout<P>>) -> Self {
-        let layout = *canvas.layout();
-        let rec = canvas.into_buffer();
+impl<P> From<Image<Layout<P>>> for Matrix<P> {
+    fn from(image: Image<Layout<P>>) -> Self {
+        let layout = *image.layout();
+        let rec = image.into_buffer();
         Self::new_raw(rec, layout)
     }
 }
 
-impl<P> From<Matrix<P>> for Canvas<Layout<P>> {
+impl<P> From<Matrix<P>> for Image<Layout<P>> {
     fn from(matrix: Matrix<P>) -> Self {
         let layout = matrix.layout();
         let rec = matrix.into_buffer();
-        Canvas::from_buffer(rec, layout)
+        Image::from_buffer(rec, layout)
     }
 }
 
@@ -614,11 +614,11 @@ impl<P, Q> fmt::Debug for MapReuseError<P, Q> {
         match self.layout {
             Some(layout) => write!(
                 f,
-                "Mapping canvas requires {} bytes but current buffer has a capacity of {}",
+                "Mapping image requires {} bytes but current buffer has a capacity of {}",
                 layout.byte_len(),
                 self.buffer.inner.as_capacity_bytes().len(),
             ),
-            None => write!(f, "Mapped canvas can not be allocated"),
+            None => write!(f, "Mapped image can not be allocated"),
         }
     }
 }
@@ -632,13 +632,13 @@ mod tests {
         let rec = TexelBuffer::<u8>::new(4);
         assert!(rec.capacity() >= 4);
         let layout = Layout::width_and_height(2, 2).unwrap();
-        let mut canvas =
+        let mut image =
             Matrix::from_reused_buffer(rec, layout).expect("Rec is surely large enough");
-        canvas
+        image
             .reuse(Layout::width_and_height(1, 1).unwrap())
             .expect("Can scale down the image");
-        canvas.resize(Layout::width_and_height(0, 0).unwrap());
-        canvas
+        image.resize(Layout::width_and_height(0, 0).unwrap());
+        image
             .reuse(layout)
             .expect("Can still reuse original allocation");
     }
