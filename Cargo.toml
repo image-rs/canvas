@@ -1,20 +1,2 @@
-[package]
-name = "image-canvas"
-description = "An allocated buffer suitable for image data."
-version = "0.1.0"
-authors = ["Andreas Molzer <andreas.molzer@gmx.de>"]
-edition = "2018"
-license = "MIT"
-readme = "README.md"
-documentation = "https://docs.rs/image-canvas"
-repository = "https://github.com/image-rs/canvas"
-categories = ["multimedia::images"]
-
-[lib]
-name = "canvas"
-
-[dependencies]
-bytemuck = "1.3"
-
 [workspace]
-members = [".", "drm", "framebuf"]
+members = [".", "drm", "framebuf", "texel"]
