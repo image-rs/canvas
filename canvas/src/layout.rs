@@ -2,7 +2,7 @@
 use crate::color::*;
 
 use canvas::layout::{
-    Decay, Layout as CanvasLayout, MatrixBytes, Raster, StrideSpec, StridedBytes, StridedTexels,
+    Decay, Layout as ImageLayout, MatrixBytes, Raster, StrideSpec, StridedBytes, StridedTexels,
     TexelLayout,
 };
 
@@ -23,7 +23,7 @@ pub(crate) struct ByteLayout {
 
 /// The layout of a full frame, with all planes and color.
 #[derive(Clone, Debug, PartialEq)]
-pub struct FrameLayout {
+pub struct CanvasLayout {
     // TODO: planarity..
     /// The primary layout descriptor of the image itself.
     /// When no explicit planes are given then this describes the sole plane as well.
@@ -108,8 +108,8 @@ pub struct PlanarLayout<T> {
 /// texels. It assumes a row-major layout without space between texels of a row as that is the most
 /// efficient and common such layout.
 ///
-/// For usage as an actual image buffer, to convert it to a `FrameLayout` by calling
-/// [`FrameLayout::with_row_layout`].
+/// For usage as an actual image buffer, to convert it to a `CanvasLayout` by calling
+/// [`CanvasLayout::with_row_layout`].
 #[derive(Clone, Debug, PartialEq)]
 pub struct RowLayoutDescription {
     pub width: u32,
@@ -514,12 +514,12 @@ impl Block {
     }
 }
 
-impl FrameLayout {
+impl CanvasLayout {
     /// Construct a full frame from a single plane.
     pub fn with_plane(bytes: PlaneBytes) -> Self {
         let stride = bytes.matrix.spec();
 
-        FrameLayout {
+        CanvasLayout {
             bytes: ByteLayout {
                 width: stride.width as u32,
                 height: stride.height as u32,
@@ -546,7 +546,7 @@ impl FrameLayout {
         let width = spec.width.try_into().map_err(LayoutError::width_error)?;
         let height = spec.height.try_into().map_err(LayoutError::height_error)?;
 
-        Self::validate(FrameLayout {
+        Self::validate(CanvasLayout {
             bytes: ByteLayout {
                 width,
                 height,
@@ -808,19 +808,19 @@ impl LayoutError {
     }
 }
 
-impl CanvasLayout for FrameLayout {
+impl ImageLayout for CanvasLayout {
     fn byte_len(&self) -> usize {
-        FrameLayout::byte_len(self)
+        CanvasLayout::byte_len(self)
     }
 }
 
-impl<T> CanvasLayout for PlanarLayout<T> {
+impl<T> ImageLayout for PlanarLayout<T> {
     fn byte_len(&self) -> usize {
         self.matrix.byte_len()
     }
 }
 
-impl CanvasLayout for PlaneBytes {
+impl ImageLayout for PlaneBytes {
     fn byte_len(&self) -> usize {
         self.matrix.byte_len()
     }
@@ -872,13 +872,13 @@ impl<T> Decay<PlanarLayout<T>> for PlaneBytes {
     }
 }
 
-impl<T> CanvasLayout for ChannelLayout<T> {
+impl<T> ImageLayout for ChannelLayout<T> {
     fn byte_len(&self) -> usize {
         self.inner.byte_len()
     }
 }
 
-impl CanvasLayout for ChannelBytes {
+impl ImageLayout for ChannelBytes {
     fn byte_len(&self) -> usize {
         self.inner.byte_len()
     }

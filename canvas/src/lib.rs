@@ -51,23 +51,24 @@
 //! ```
 
 /// Putting it all together with a buffer type.
-mod color;
+pub mod color;
 mod color_matrix;
 /// The main frame module.
 mod frame;
 /// The complex layout implementation.
-mod layout;
+#[path = "layout.rs"]
+mod layout_;
 /// Conversion operation.
 mod shader;
 
 #[cfg(test)]
 mod tests;
 
-pub use self::color::{
-    Color, ColorChannel, ColorChannelModel, Luminance, Primaries, Transfer, Whitepoint,
-};
-pub use self::frame::{Frame, Plane, PlaneMut, PlaneRef};
-pub use self::layout::{
-    Block, ChannelLayout, FrameLayout, LayoutError, PlanarLayout, PlaneBytes, RowLayoutDescription,
-    SampleBits, SampleParts, Texel,
-};
+pub use self::frame::{Canvas, Plane, PlaneMut, PlaneRef};
+
+pub mod layout {
+    pub use crate::layout_::{
+        Block, CanvasLayout, ChannelLayout, LayoutError, PlanarLayout, PlaneBytes,
+        RowLayoutDescription, SampleBits, SampleParts, Texel,
+    };
+}

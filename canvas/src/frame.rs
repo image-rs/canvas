@@ -2,17 +2,17 @@
 use canvas::canvas::{CanvasMut, CanvasRef};
 
 use crate::color::Color;
-use crate::layout::{ChannelLayout, FrameLayout, LayoutError, PlanarLayout, PlaneBytes};
+use crate::layout::{CanvasLayout, ChannelLayout, LayoutError, PlanarLayout, PlaneBytes};
 use crate::shader::Converter;
 
 /// A byte buffer with dynamic color contents.
-pub struct Frame {
-    inner: canvas::Canvas<FrameLayout>,
+pub struct Canvas {
+    inner: canvas::Canvas<CanvasLayout>,
 }
 
 /// A byte buffer containing a single plane.
 pub struct Plane {
-    inner: canvas::Canvas<FrameLayout>,
+    inner: canvas::Canvas<CanvasLayout>,
 }
 
 /// Represents a single matrix like layer of an image.
@@ -45,42 +45,42 @@ pub struct ChannelsMut<'data, T> {
     inner: CanvasMut<'data, ChannelLayout<T>>,
 }
 
-impl Frame {
+impl Canvas {
     /// Create a frame by its layout.
     ///
     /// # Usage
     ///
     /// ```
-    /// use image_canvas::{Frame, FrameLayout, SampleParts, Texel};
+    /// use image_canvas::{Canvas, CanvasLayout, SampleParts, Texel};
     ///
     /// // Define what type of color we want to store...
     /// let texel = Texel::new_u8(SampleParts::RgbA);
     /// // and which dimensions to use, chooses a stride for us.
-    /// let layout = FrameLayout::with_texel(&texel, 32, 32)?;
+    /// let layout = CanvasLayout::with_texel(&texel, 32, 32)?;
     ///
-    /// let frame = Frame::new(layout);
+    /// let frame = Canvas::new(layout);
     /// # use image_canvas::LayoutError;
     /// # Ok::<(), LayoutError>(())
     /// ```
-    pub fn new(layout: FrameLayout) -> Self {
-        Frame {
+    pub fn new(layout: CanvasLayout) -> Self {
+        Canvas {
             inner: canvas::Canvas::new(layout),
         }
     }
 
     /// Get a reference to the layout of this frame.
-    pub fn layout(&self) -> &FrameLayout {
+    pub fn layout(&self) -> &CanvasLayout {
         self.inner.layout()
     }
 
     /// Overwrite the layout, allocate if necessary, and clear the image.
-    pub fn set_layout(&mut self, layout: FrameLayout) {
+    pub fn set_layout(&mut self, layout: CanvasLayout) {
         self.set_layout_conservative(layout);
         self.inner.as_bytes_mut().fill(0);
     }
 
     /// Overwrite the layout, allocate if necessary, _do not_ clear the image.
-    pub fn set_layout_conservative(&mut self, layout: FrameLayout) {
+    pub fn set_layout_conservative(&mut self, layout: CanvasLayout) {
         *self.inner.layout_mut_unguarded() = layout;
         self.inner.ensure_layout();
     }
@@ -235,11 +235,11 @@ impl Frame {
         Converter::new().run_on(self, into)
     }
 
-    pub(crate) fn as_ref(&self) -> CanvasRef<'_, &'_ FrameLayout> {
+    pub(crate) fn as_ref(&self) -> CanvasRef<'_, &'_ CanvasLayout> {
         self.inner.as_ref()
     }
 
-    pub(crate) fn as_mut(&mut self) -> CanvasMut<'_, &'_ mut FrameLayout> {
+    pub(crate) fn as_mut(&mut self) -> CanvasMut<'_, &'_ mut CanvasLayout> {
         self.inner.as_mut()
     }
 }

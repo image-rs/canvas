@@ -6,8 +6,8 @@ use canvas::canvas::{CanvasMut, CanvasRef};
 use canvas::{canvas::Coord, AsTexel, Texel, TexelBuffer};
 use core::ops::Range;
 
-use crate::frame::Frame;
-use crate::layout::{FrameLayout, SampleBits, SampleParts, Texel as TexelBits};
+use crate::frame::Canvas;
+use crate::layout::{CanvasLayout, SampleBits, SampleParts, Texel as TexelBits};
 
 /// A buffer for conversion.
 pub struct Converter {
@@ -41,9 +41,9 @@ struct TexelCoord(Coord);
 
 struct Info {
     /// Layout of the input frame.
-    in_layout: FrameLayout,
+    in_layout: CanvasLayout,
     /// Layout of the output frame.
-    out_layout: FrameLayout,
+    out_layout: CanvasLayout,
     /// The selected way to represent pixels in common parameter space.
     common_pixel: CommonPixel,
     /// The selected common color space, midpoint for conversion.
@@ -118,8 +118,8 @@ enum CommonColor {
     CieXyz,
 }
 
-type PlaneSource<'data, 'layout> = CanvasRef<'data, &'layout FrameLayout>;
-type PlaneTarget<'data, 'layout> = CanvasMut<'data, &'layout mut FrameLayout>;
+type PlaneSource<'data, 'layout> = CanvasRef<'data, &'layout CanvasLayout>;
+type PlaneTarget<'data, 'layout> = CanvasMut<'data, &'layout mut CanvasLayout>;
 
 /// The function pointers doing the conversion.
 ///
@@ -170,7 +170,7 @@ impl Converter {
         }
     }
 
-    fn recolor_ops(lhs: &FrameLayout, rhs: &FrameLayout) -> Option<RecolorOps> {
+    fn recolor_ops(lhs: &CanvasLayout, rhs: &CanvasLayout) -> Option<RecolorOps> {
         match (lhs.color.as_ref()?, rhs.color.as_ref()?) {
             (c0, c1) if c0 == c1 => None,
             // Some more special methods?
@@ -181,7 +181,7 @@ impl Converter {
         }
     }
 
-    pub fn run_on(&mut self, frame_in: &Frame, frame_out: &mut Frame) {
+    pub fn run_on(&mut self, frame_in: &Canvas, frame_out: &mut Canvas) {
         let info = Info {
             in_layout: frame_in.layout().clone(),
             out_layout: frame_out.layout().clone(),
@@ -237,8 +237,8 @@ impl Converter {
         mut texel_conversion: impl FnMut(&mut Self),
         info: &Info,
         ops: &ConvertOps,
-        frame_in: &Frame,
-        frame_out: &mut Frame,
+        frame_in: &Canvas,
+        frame_out: &mut Canvas,
     ) {
         // We use a notion of 'supertexels', the common multiple of input and output texel blocks.
         // That is, if the input is a 2-by-2 pixel block and the output is single pixels then we
@@ -462,7 +462,7 @@ impl Converter {
         Self::index_from_layer(&info.out_layout, texel, idx)
     }
 
-    fn index_from_layer(info: &FrameLayout, texel: &[TexelCoord], idx: &mut [usize]) {
+    fn index_from_layer(info: &CanvasLayout, texel: &[TexelCoord], idx: &mut [usize]) {
         // FIXME(perf): review performance. Could probably be vectorized by hand.
         for (&TexelCoord(Coord(x, y)), idx) in texel.iter().zip(idx) {
             *idx = info.texel_index(x, y) as usize;
