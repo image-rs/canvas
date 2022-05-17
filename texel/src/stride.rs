@@ -4,7 +4,7 @@
 //! other even for mutable operations. The result is always as if performing pixel wise operations
 //! row-for-row and column-by-column, except where otherwise noted.
 //!
-//! In comparison to the standard `Canvas`, the reference types do not need to rely on the
+//! In comparison to the standard `Image`, the reference types do not need to rely on the
 //! container and can be constructed from (suitably aligned) byte data. This makes it possible
 //! initialize an image, for example. They internally contain a simple byte slice which allows
 //! viewing any source buffer as a strided matrix even when it was not allocated with the special
@@ -51,8 +51,13 @@ pub struct StridedBytes {
     total: usize,
 }
 
+/// A validated layout of a rectangular matrix of texels.
+///
+/// Similar to [`StridedBytes`] but with a strong type associated to the texel, instead of a mere
+/// layout descriptor for it. This type is still flexible, i.e. you can relax the layout to a pure
+/// byte layout and upgrade to a different texel, for example.
 #[derive(Clone, Copy, PartialEq, Eq)]
-pub struct StridedTexels<T> {
+pub struct Strides<T> {
     inner: StridedBytes,
     texel: Texel<T>,
 }
@@ -286,13 +291,13 @@ impl StridedBytes {
     }
 }
 
-impl<T> StridedTexels<T> {
+impl<T> Strides<T> {
     /// Upgrade a byte specification to a strong typed texel one.
     ///
     /// Requires that the element is _exactly_ equivalent to the provided texel.
     pub fn with_texel(texel: Texel<T>, bytes: StridedBytes) -> Option<Self> {
         if TexelLayout::from(texel) == bytes.spec.element {
-            Some(StridedTexels {
+            Some(Strides {
                 inner: bytes,
                 texel,
             })
@@ -478,13 +483,13 @@ impl<P: AsTexel> StridedLayout for layout::Matrix<P> {
     }
 }
 
-impl<P> Layout for StridedTexels<P> {
+impl<P> Layout for Strides<P> {
     fn byte_len(&self) -> usize {
         self.inner.total
     }
 }
 
-impl<P> StridedLayout for StridedTexels<P> {
+impl<P> StridedLayout for Strides<P> {
     fn strided(&self) -> StridedBytes {
         self.inner.clone()
     }
@@ -504,11 +509,11 @@ impl From<&'_ StridedBytes> for StrideSpec {
 
 /// Try to use the matrix with a specific pixel type.
 impl<P> TryMend<StridedBytes> for Texel<P> {
-    type Into = StridedTexels<P>;
+    type Into = Strides<P>;
     type Err = MismatchedPixelError;
 
-    fn try_mend(self, matrix: &StridedBytes) -> Result<StridedTexels<P>, Self::Err> {
-        StridedTexels::with_texel(self, *matrix).ok_or_else(MismatchedPixelError::default)
+    fn try_mend(self, matrix: &StridedBytes) -> Result<Strides<P>, Self::Err> {
+        Strides::with_texel(self, *matrix).ok_or_else(MismatchedPixelError::default)
     }
 }
 

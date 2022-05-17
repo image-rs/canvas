@@ -10,7 +10,7 @@ use core::{alloc, cmp};
 mod matrix;
 
 use crate::image::{Coord, ImageMut, ImageRef};
-pub use crate::stride::{BadStrideError, StrideSpec, StridedBytes, StridedLayout, StridedTexels};
+pub use crate::stride::{BadStrideError, StrideSpec, StridedBytes, StridedLayout, Strides};
 
 /// A byte layout that only describes the user bytes.
 ///
@@ -283,7 +283,7 @@ pub trait MatrixLayout: Layout {
     /// The valid matrix specification of this layout.
     ///
     /// This call should not fail, or panic. Otherwise, prefer an optional getter for the
-    /// `StridedBytes` and have the caller decay their own buffer.
+    /// [`StridedBytes`] and have the caller decay their own buffer.
     fn matrix(&self) -> MatrixBytes;
 }
 
