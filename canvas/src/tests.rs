@@ -8,7 +8,7 @@ fn simple_conversion() -> Result<(), LayoutError> {
     let source_layout = CanvasLayout::with_texel(&texel, 32, 32)?;
     let target_layout = CanvasLayout::with_texel(
         &Texel {
-            bits: SampleBits::Int565,
+            bits: SampleBits::UInt565,
             parts: SampleParts::Bgr,
             ..texel
         },

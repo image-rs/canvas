@@ -7,7 +7,7 @@ use image_texel::image::{ImageMut, ImageRef};
 use image_texel::{image::Coord, AsTexel, Texel, TexelBuffer};
 
 use crate::layout_::{
-    Block, CanvasLayout, SampleBits, SampleParts, SamplePitch, Texel as TexelBits,
+    BitEncoding, Block, CanvasLayout, SampleBits, SampleParts, SamplePitch, Texel as TexelBits,
 };
 use crate::Canvas;
 
@@ -446,8 +446,8 @@ impl Converter {
 
         info.out_kind.action(WriteUnit {
             into,
-            idx: &self.in_index,
-            from: &mut self.out_texels,
+            idx: &self.out_index,
+            from: &self.out_texels,
         });
     }
 
@@ -518,6 +518,24 @@ impl CommonPixel {
     }
 
     fn expand_bits(
+        info: &Info,
+        bits: [FromBits; 4],
+        texel_buf: &TexelBuffer,
+        pixel_buf: &mut TexelBuffer,
+    ) {
+        let (encoding, len) = info.in_layout.texel.bits.bit_encoding();
+
+        if encoding[..len as usize] == [BitEncoding::UInt; 6][..len as usize] {
+            return Self::expand_ints(info, bits, texel_buf, pixel_buf);
+        } else if encoding[..len as usize] == [BitEncoding::Float; 6][..len as usize] {
+            return Self::expand_floats(info, bits, texel_buf, pixel_buf);
+        } else {
+            // FIXME(color): error treatment..
+            debug_assert!(false, "{:?}", &encoding[..len as usize]);
+        }
+    }
+
+    fn expand_ints(
         info: &Info,
         bits: [FromBits; 4],
         texel_buf: &TexelBuffer,
@@ -602,6 +620,40 @@ impl CommonPixel {
         }
     }
 
+    fn expand_floats(
+        info: &Info,
+        bits: [FromBits; 4],
+        texel_buf: &TexelBuffer,
+        pixel_buf: &mut TexelBuffer,
+    ) {
+        debug_assert!(
+            matches!(info.common_pixel, CommonPixel::F32x4),
+            "Improper common choices {:?}",
+            info.common_pixel
+        );
+        let destination = pixel_buf.as_mut_texels(<[f32; 4]>::texel());
+
+        // FIXME(color): Assumes that we only read f32 channels..
+        let pitch = info.in_kind.size() / 4;
+
+        for (&ch, ch_idx) in bits.iter().zip(0..4) {
+            match ch.len {
+                0 => continue,
+                32 => {}
+                // FIXME(color): half-floats?
+                _ => continue,
+            }
+
+            let position = ch.begin / 32;
+            let texels = texel_buf.as_texels(<f32>::texel());
+            let pitched = texels[position..].chunks(pitch);
+
+            for (pix, texel) in destination.iter_mut().zip(pitched) {
+                pix[ch_idx] = texel[0];
+            }
+        }
+    }
+
     fn expand_yuv422(info: &Info, texel_buf: &TexelBuffer, pixel_buf: &mut TexelBuffer) {
         struct ExpandYuv422;
 
@@ -683,7 +735,7 @@ impl CommonPixel {
         // FIXME(perf): it makes sense to loop-remove this match into `ops` construction?
         // In particular, instruction cache if each case is treated separately should be decent..
         match info.in_layout.texel.bits {
-            SampleBits::Int8x4 => {
+            SampleBits::UInt8x4 => {
                 let texels = texel_buf.as_texels(tex_u8).iter();
                 match info.common_pixel {
                     CommonPixel::U8x4 => {
@@ -738,7 +790,7 @@ impl CommonPixel {
                     }
                 }
             }
-            SampleBits::Int16x4 => {
+            SampleBits::UInt16x4 => {
                 let texels = texel_buf.as_texels(tex_u16).iter();
                 match info.common_pixel {
                     CommonPixel::U8x4 => {
@@ -883,6 +935,25 @@ impl CommonPixel {
         pixel_buf: &TexelBuffer,
         texel_buf: &mut TexelBuffer,
     ) {
+        let (encoding, len) = info.out_layout.texel.bits.bit_encoding();
+
+        if encoding[..len as usize] == [BitEncoding::UInt; 6][..len as usize] {
+            return Self::join_ints(info, bits, pixel_buf, texel_buf);
+        } else if encoding[..len as usize] == [BitEncoding::Float; 6][..len as usize] {
+            return Self::join_floats(info, bits, pixel_buf, texel_buf);
+        } else {
+            // FIXME(color): error treatment..
+            debug_assert!(false, "{:?}", &encoding[..len as usize]);
+        }
+    }
+
+    // FIXME(color): int component bias
+    fn join_ints(
+        info: &Info,
+        bits: [FromBits; 4],
+        pixel_buf: &TexelBuffer,
+        texel_buf: &mut TexelBuffer,
+    ) {
         struct JoinAction<'data, T, F: FnMut(&T, &FromBits, u8) -> u32> {
             join: Texel<T>,
             join_fn: F,
@@ -950,12 +1021,46 @@ impl CommonPixel {
                 // FIXME: do the transform u32::from_ne_bytes(x.as_ne_bytes()) when appropriate.
                 join_fn: |num, bits, idx| {
                     let max_val = bits.mask();
-                    (num[(idx & 0x3) as usize] * max_val as f32).round() as u32
+                    let raw = (num[(idx & 0x3) as usize] * max_val as f32).round() as u32;
+                    raw.min(max_val)
                 },
                 bits,
                 texel_buf,
                 pixel_buf,
             }),
+        }
+    }
+
+    fn join_floats(
+        info: &Info,
+        bits: [FromBits; 4],
+        pixel_buf: &TexelBuffer,
+        texel_buf: &mut TexelBuffer,
+    ) {
+        debug_assert!(
+            matches!(info.common_pixel, CommonPixel::F32x4),
+            "Improper common choices {:?}",
+            info.common_pixel
+        );
+        let source = pixel_buf.as_texels(<[f32; 4]>::texel());
+        // Assume that we only write floating channels..
+        let pitch = info.out_kind.size() / 4;
+
+        for (&ch, ch_idx) in bits.iter().zip(0..4) {
+            match ch.len {
+                0 => continue,
+                32 => {}
+                // FIXME(color): half-floats?
+                _ => continue,
+            }
+
+            let position = ch.begin / 32;
+            let texels = texel_buf.as_mut_texels(<f32>::texel());
+            let pitched = texels[position..].chunks_mut(pitch);
+
+            for (pix, texel) in source.iter().zip(pitched) {
+                texel[0] = pix[ch_idx];
+            }
         }
     }
 
@@ -1099,26 +1204,26 @@ impl FromBits {
     fn bits(bits: SampleBits) -> impl Iterator<Item = Self> {
         use SampleBits::*;
         let filled: [Option<Self>; 6] = from_bits!(bits = {
-            Int8 => 0..8;
-            Int332 => 0..3 3..6 6..8;
-            Int233 => 0..2 2..5 5..8;
-            Int16 => 0..16;
-            Int4x4 => 0..4 4..8 8..12 12..16;
-            Int_444 => 4..8 8..12 12..16;
-            Int444_ => 0..4 4..8 8..12;
-            Int565 => 0..5 5..11 11..16;
-            Int8x2 => 0..8 8..16;
-            Int8x3 => 0..8 8..16 16..24;
-            Int8x4 => 0..8 8..16 16..24 24..32;
-            Int8x6 => 0..8 8..16 16..24 24..32 32..40 40..48;
-            Int16x2 => 0..16 16..32;
-            Int16x3 => 0..16 16..32 32..48;
-            Int16x4 => 0..16 16..32 32..48 48..64;
-            Int16x6 => 0..16 16..32 32..48 48..64 64..80 80..96;
-            Int1010102 => 0..10 10..20 20..30 30..32;
-            Int2101010 => 0..2 2..12 12..22 22..32;
-            Int101010_ => 0..10 10..20 20..30;
-            Int_101010 => 2..12 12..22 22..32;
+            Int8 | UInt8 => 0..8;
+            UInt332 => 0..3 3..6 6..8;
+            UInt233 => 0..2 2..5 5..8;
+            Int16 | UInt16 => 0..16;
+            UInt4x4 => 0..4 4..8 8..12 12..16;
+            UInt_444 => 4..8 8..12 12..16;
+            UInt444_ => 0..4 4..8 8..12;
+            UInt565 => 0..5 5..11 11..16;
+            Int8x2 | UInt8x2 => 0..8 8..16;
+            Int8x3 | UInt8x3 => 0..8 8..16 16..24;
+            Int8x4 | UInt8x4 => 0..8 8..16 16..24 24..32;
+            UInt8x6 => 0..8 8..16 16..24 24..32 32..40 40..48;
+            Int16x2 | UInt16x2 => 0..16 16..32;
+            Int16x3 | UInt16x3 => 0..16 16..32 32..48;
+            Int16x4 | UInt16x4 => 0..16 16..32 32..48 48..64;
+            UInt16x6 => 0..16 16..32 32..48 48..64 64..80 80..96;
+            UInt1010102 => 0..10 10..20 20..30 30..32;
+            UInt2101010 => 0..2 2..12 12..22 22..32;
+            UInt101010_ => 0..10 10..20 20..30;
+            UInt_101010 => 2..12 12..22 22..32;
             Float16x4 => 0..16 16..32 32..48 48..64;
             Float32 => 0..32;
             Float32x2 => 0..32 32..64;
@@ -1213,6 +1318,18 @@ impl TexelKind {
             TexelKind::F32x6 => action.run(<[f32; 6]>::texel()),
         }
     }
+
+    fn size(self) -> usize {
+        struct ToSize;
+
+        impl GenericTexelAction<usize> for ToSize {
+            fn run<T>(self, texel: image_texel::Texel<T>) -> usize {
+                image_texel::layout::TexelLayout::from(texel).size()
+            }
+        }
+
+        TexelKind::from(self).action(ToSize)
+    }
 }
 
 impl From<TexelBits> for TexelKind {
@@ -1223,38 +1340,33 @@ impl From<TexelBits> for TexelKind {
 
 impl From<SampleBits> for TexelKind {
     fn from(bits: SampleBits) -> Self {
+        use SampleBits::*;
+        // We only need to match size and align here.
         match bits {
-            SampleBits::Int8 | SampleBits::Int332 | SampleBits::Int233 => TexelKind::U8,
-            SampleBits::Int16
-            | SampleBits::Int4x4
-            | SampleBits::Int_444
-            | SampleBits::Int444_
-            | SampleBits::Int565 => TexelKind::U16,
-            SampleBits::Int8x2 => TexelKind::U8x2,
-            SampleBits::Int8x3 => TexelKind::U8x3,
-            SampleBits::Int8x4 => TexelKind::U8x4,
-            SampleBits::Int8x6 => TexelKind::U8x6,
-            SampleBits::Int16x2 => TexelKind::U16x2,
-            SampleBits::Int16x3 => TexelKind::U16x3,
-            SampleBits::Int16x4 => TexelKind::U16x4,
-            SampleBits::Int16x6 => TexelKind::U16x6,
-            SampleBits::Int1010102
-            | SampleBits::Int2101010
-            | SampleBits::Int101010_
-            | SampleBits::Int_101010 => TexelKind::U16x2,
-            SampleBits::Float16x4 => TexelKind::U16x4,
-            SampleBits::Float32 => TexelKind::F32,
-            SampleBits::Float32x2 => TexelKind::F32x2,
-            SampleBits::Float32x3 => TexelKind::F32x3,
-            SampleBits::Float32x4 => TexelKind::F32x4,
-            SampleBits::Float32x6 => TexelKind::F32x6,
+            Int8 | UInt8 | UInt332 | UInt233 => TexelKind::U8,
+            Int16 | UInt16 | UInt4x4 | UInt_444 | UInt444_ | UInt565 => TexelKind::U16,
+            Int8x2 | UInt8x2 => TexelKind::U8x2,
+            Int8x3 | UInt8x3 => TexelKind::U8x3,
+            Int8x4 | UInt8x4 => TexelKind::U8x4,
+            UInt8x6 => TexelKind::U8x6,
+            Int16x2 | UInt16x2 => TexelKind::U16x2,
+            Int16x3 | UInt16x3 => TexelKind::U16x3,
+            Int16x4 | UInt16x4 => TexelKind::U16x4,
+            UInt16x6 => TexelKind::U16x6,
+            UInt1010102 | UInt2101010 | UInt101010_ | UInt_101010 => TexelKind::U16x2,
+            Float16x4 => TexelKind::U16x4,
+            Float32 => TexelKind::F32,
+            Float32x2 => TexelKind::F32x2,
+            Float32x3 => TexelKind::F32x3,
+            Float32x4 => TexelKind::F32x4,
+            Float32x6 => TexelKind::F32x6,
         }
     }
 }
 
 #[test]
 fn from_bits() {
-    let bits = FromBits::for_pixel(SampleBits::Int332, SampleParts::Rgb);
+    let bits = FromBits::for_pixel(SampleBits::UInt332, SampleParts::Rgb);
     let (texel, value) = (u8::texel(), &0b01010110);
     assert_eq!(bits[0].extract_as_lsb(texel, value), 0b110);
     assert_eq!(bits[1].extract_as_lsb(texel, value), 0b010);
@@ -1264,7 +1376,7 @@ fn from_bits() {
 
 #[test]
 fn to_bits() {
-    let bits = FromBits::for_pixel(SampleBits::Int332, SampleParts::Rgb);
+    let bits = FromBits::for_pixel(SampleBits::UInt332, SampleParts::Rgb);
     let (texel, ref mut value) = (u8::texel(), 0);
     bits[0].insert_as_lsb(texel, value, 0b110);
     bits[1].insert_as_lsb(texel, value, 0b010);
