@@ -581,3 +581,10 @@ impl Primaries {
         ])
     }
 }
+
+#[test]
+fn inverse() {
+    const RGBA: [f32; 4] = [1.0, 1.0, 0.0, 1.0];
+    let color = Color::SRGB;
+    let rgba = color.from_xyz_once(color.to_xyz_once(RGBA));
+}

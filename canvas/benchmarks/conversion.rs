@@ -1,5 +1,8 @@
 use brunch::Bench;
-use image_framebuf::{Color, Frame, FrameLayout, LayoutError, SampleParts, Texel, Whitepoint};
+
+use image_canvas::color::{Color, Whitepoint};
+use image_canvas::layout::{CanvasLayout, LayoutError, SampleParts, Texel};
+use image_canvas::Canvas;
 
 struct Convert {
     texel_in: Texel,
@@ -18,12 +21,12 @@ impl Convert {
     }
 
     fn prepare(self) -> Result<impl FnMut(), LayoutError> {
-        let layout = FrameLayout::with_texel(&self.texel_in, self.sz, self.sz)?;
-        let mut from = Frame::new(layout.clone());
+        let layout = CanvasLayout::with_texel(&self.texel_in, self.sz, self.sz)?;
+        let mut from = Canvas::new(layout.clone());
         from.set_color(self.color_in)?;
 
-        let layout = FrameLayout::with_texel(&self.texel_out, self.sz, self.sz)?;
-        let mut into = Frame::new(layout);
+        let layout = CanvasLayout::with_texel(&self.texel_out, self.sz, self.sz)?;
+        let mut into = Canvas::new(layout);
         into.set_color(self.color_out)?;
 
         Ok(move || from.convert(&mut into))

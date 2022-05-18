@@ -161,9 +161,28 @@ pub enum Block {
 /// properly?
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct SampleParts {
-    parts: [Option<ColorChannel>; 4],
+    pub(crate) parts: [Option<ColorChannel>; 4],
     /// The position of each channel as a 2-bit number.
-    position: u8,
+    /// This is the index into which the channel is written.
+    pub(crate) color_index: u8,
+    /// How the samples are recovered from a texel.
+    pub(crate) pitch: SamplePitch,
+}
+
+/// Defines the method by which parts from a texel are expanded into bits.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum SamplePitch {
+    /// Parts are expanded by extracting bit fields from the texel.
+    PixelBits,
+    // Subsampled chroma, in order uyvy.
+    Yuv422,
+    // Like Yuv422 but yuyv.
+    Yuy2,
+    // Subsampled chroma, uyyvyy.
+    Yuv411,
+    // Subsampled blocks.
+    Yuv420,
+    Bc1,
 }
 
 macro_rules! sample_parts {
@@ -178,42 +197,46 @@ macro_rules! sample_parts {
         $(#[$attr])*
         pub const $name: SampleParts = SampleParts {
             parts: [Some($ch0), None, None, None],
-            position: (
+            color_index: (
                 $ch0.canonical_index_in_surely(ColorChannelModel::$color)
             ),
+            pitch: SamplePitch::PixelBits,
         };
     };
     (@$color:ident: $(#[$attr:meta])* $name:ident = $ch0:path,$ch1:path) => {
         $(#[$attr])*
         pub const $name: SampleParts = SampleParts {
             parts: [Some($ch0), Some($ch1), None, None],
-            position: (
+            color_index: (
                 $ch0.canonical_index_in_surely(ColorChannelModel::$color)
                 | $ch1.canonical_index_in_surely(ColorChannelModel::$color) << 2
             ),
+            pitch: SamplePitch::PixelBits,
         };
     };
     (@$color:ident: $(#[$attr:meta])* $name:ident = $ch0:path,$ch1:path,$ch2:path) => {
         $(#[$attr])*
         pub const $name: SampleParts = SampleParts {
             parts: [Some($ch0), Some($ch1), Some($ch2), None],
-            position: (
+            color_index: (
                 $ch0.canonical_index_in_surely(ColorChannelModel::$color)
                 | $ch1.canonical_index_in_surely(ColorChannelModel::$color) << 2
                 | $ch2.canonical_index_in_surely(ColorChannelModel::$color) << 4
             ),
+            pitch: SamplePitch::PixelBits,
         };
     };
     (@$color:ident: $(#[$attr:meta])* $name:ident = $ch0:path,$ch1:path,$ch2:path,$ch3:path) => {
         $(#[$attr])*
         pub const $name: SampleParts = SampleParts {
             parts: [Some($ch0), Some($ch1), Some($ch2), Some($ch3)],
-            position: (
+            color_index: (
                 $ch0.canonical_index_in_surely(ColorChannelModel::$color)
                 | $ch1.canonical_index_in_surely(ColorChannelModel::$color) << 2
                 | $ch2.canonical_index_in_surely(ColorChannelModel::$color) << 4
                 | $ch3.canonical_index_in_surely(ColorChannelModel::$color) << 6
             ),
+            pitch: SamplePitch::PixelBits,
         };
     };
 }
@@ -226,6 +249,7 @@ mod sample_parts {
     type Cc = super::ColorChannel;
     use super::ColorChannelModel;
     use super::SampleParts;
+    use super::SamplePitch;
 
     sample_parts! {
         /// A pure alpha part.
@@ -270,22 +294,34 @@ mod sample_parts {
 #[allow(non_camel_case_types)]
 #[repr(u8)]
 pub enum SampleBits {
-    /// A single 8-bit integer.
+    /// A single 8-bit signed integer.
     Int8,
+    /// A single 8-bit integer.
+    UInt8,
     /// Three packed integer.
-    Int332,
+    UInt332,
     /// Three packed integer.
-    Int233,
-    /// A single 16-bit integer.
+    UInt233,
+    /// A single 8-bit signed integer.
     Int16,
+    /// A single 16-bit integer.
+    UInt16,
     /// Four packed integer.
-    Int4x4,
+    UInt4x4,
     /// Four packed integer, one component ignored.
-    Int_444,
+    UInt_444,
     /// Four packed integer, one component ignored.
-    Int444_,
+    UInt444_,
     /// Three packed integer.
-    Int565,
+    UInt565,
+    /// Two 8-bit integers.
+    UInt8x2,
+    /// Three 8-bit integer.
+    UInt8x3,
+    /// Four 8-bit integer.
+    UInt8x4,
+    /// Six 8-bit integer.
+    UInt8x6,
     /// Two 8-bit integers.
     Int8x2,
     /// Three 8-bit integer.
@@ -293,19 +329,27 @@ pub enum SampleBits {
     /// Four 8-bit integer.
     Int8x4,
     /// Two 16-bit integers.
+    UInt16x2,
+    /// Three 16-bit integer.
+    UInt16x3,
+    /// Four 16-bit integer.
+    UInt16x4,
+    /// Two 16-bit signed integers.
     Int16x2,
     /// Three 16-bit integer.
     Int16x3,
     /// Four 16-bit integer.
     Int16x4,
+    /// Six 16-bit integer.
+    UInt16x6,
     /// Four packed integer.
-    Int1010102,
+    UInt1010102,
     /// Four packed integer.
-    Int2101010,
+    UInt2101010,
     /// Three packed integer, one component ignored.
-    Int101010_,
+    UInt101010_,
     /// Three packed integer, one component ignored.
-    Int_101010,
+    UInt_101010,
     /// Four half-floats.
     Float16x4,
     /// A single floating-point channel.
@@ -316,6 +360,16 @@ pub enum SampleBits {
     Float32x3,
     /// Four floats.
     Float32x4,
+    /// Six floats.
+    Float32x6,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum BitEncoding {
+    Opaque,
+    UInt,
+    Int,
+    Float,
 }
 
 /// Error that occurs when constructing a layout.
@@ -327,12 +381,12 @@ pub struct LayoutError {
 impl Texel {
     pub fn new_u8(parts: SampleParts) -> Self {
         use SampleBits::*;
-        Self::pixel_from_bits(parts, [Int8, Int8x2, Int8x3, Int8x4])
+        Self::pixel_from_bits(parts, [UInt8, UInt8x2, UInt8x3, UInt8x4])
     }
 
     pub fn new_u16(parts: SampleParts) -> Self {
         use SampleBits::*;
-        Self::pixel_from_bits(parts, [Int16, Int16x2, Int16x3, Int16x4])
+        Self::pixel_from_bits(parts, [UInt16, UInt16x2, UInt16x3, UInt16x4])
     }
 
     pub fn new_f32(parts: SampleParts) -> Self {
@@ -372,7 +426,7 @@ impl Texel {
             _ => return None,
         };
         let bits = match self.bits {
-            Int8 | Int8x3 | Int8x4 => Int8,
+            UInt8 | UInt8x3 | UInt8x4 => UInt8,
             _ => return None,
         };
         let block = match self.block {
@@ -425,14 +479,16 @@ impl SampleBits {
         use SampleBits::*;
         #[allow(non_upper_case_globals)]
         match self {
-            Int8 | Int332 | Int233 => 1,
-            Int8x2 | Int16 | Int565 | Int4x4 | Int444_ | Int_444 => 2,
-            Int8x3 => 3,
-            Int8x4 | Int16x2 | Int1010102 | Int2101010 | Int101010_ | Int_101010 | Float32 => 4,
-            Int16x3 => 6,
-            Int16x4 | Float16x4 | Float32x2 => 8,
-            Float32x3 => 12,
+            Int8 | UInt8 | UInt332 | UInt233 => 1,
+            Int8x2 | UInt8x2 | Int16 | UInt16 | UInt565 | UInt4x4 | UInt444_ | UInt_444 => 2,
+            Int8x3 | UInt8x3 => 3,
+            Int8x4 | UInt8x4 | Int16x2 | UInt16x2 | UInt1010102 | UInt2101010 | UInt101010_
+            | UInt_101010 | Float32 => 4,
+            UInt8x6 | Int16x3 | UInt16x3 => 6,
+            Int16x4 | UInt16x4 | Float16x4 | Float32x2 => 8,
+            UInt16x6 | Float32x3 => 12,
             Float32x4 => 16,
+            Float32x6 => 24,
         }
     }
 
@@ -440,9 +496,15 @@ impl SampleBits {
         use image_texel::AsTexel;
         use SampleBits::*;
         Some(match self {
-            Int8 | Int8x2 | Int8x3 | Int8x4 => (u8::texel().into(), self.bytes() as u8),
-            Int16 | Int16x2 | Int16x3 | Int16x4 => (u16::texel().into(), self.bytes() as u8 / 2),
-            Float32 | Float32x2 | Float32x3 | Float32x4 => {
+            UInt8 | UInt8x2 | UInt8x3 | UInt8x4 | UInt8x6 => {
+                (u8::texel().into(), self.bytes() as u8)
+            }
+            Int8 | Int8x2 | Int8x3 | Int8x4 => (i8::texel().into(), self.bytes() as u8),
+            UInt16 | UInt16x2 | UInt16x3 | UInt16x4 | UInt16x6 => {
+                (u16::texel().into(), self.bytes() as u8 / 2)
+            }
+            Int16 | Int16x2 | Int16x3 | Int16x4 => (i16::texel().into(), self.bytes() as u8 / 2),
+            Float32 | Float32x2 | Float32x3 | Float32x4 | Float32x6 => {
                 (u32::texel().into(), self.bytes() as u8 / 4)
             }
             _ => return None,
@@ -461,17 +523,53 @@ impl SampleBits {
 
         TexelKind::from(self).action(ToLayout)
     }
+
+    pub(crate) fn bit_encoding(self) -> ([BitEncoding; 6], u8) {
+        use SampleBits::*;
+        match self {
+            UInt8 | UInt8x2 | UInt8x3 | UInt8x4 | UInt8x6 => {
+                ([BitEncoding::UInt; 6], self.bytes() as u8)
+            }
+            Int8 | Int8x2 | Int8x3 | Int8x4 => ([BitEncoding::Int; 6], self.bytes() as u8),
+            UInt16 | UInt16x2 | UInt16x3 | UInt16x4 | UInt16x6 => {
+                ([BitEncoding::UInt; 6], self.bytes() as u8 / 2)
+            }
+            Int16 | Int16x2 | Int16x3 | Int16x4 => ([BitEncoding::Int; 6], self.bytes() as u8 / 2),
+            Float32 | Float32x2 | Float32x3 | Float32x4 | Float32x6 => {
+                ([BitEncoding::Float; 6], self.bytes() as u8 / 4)
+            }
+            UInt332 | UInt233 | UInt565 => ([BitEncoding::UInt; 6], 3),
+            SampleBits::UInt4x4 => ([BitEncoding::UInt; 6], 4),
+            SampleBits::UInt_444 | SampleBits::UInt444_ => ([BitEncoding::UInt; 6], 3),
+            SampleBits::UInt101010_ | UInt_101010 => ([BitEncoding::Float; 6], 3),
+            SampleBits::UInt1010102 | UInt2101010 => ([BitEncoding::Float; 6], 4),
+            SampleBits::Float16x4 => ([BitEncoding::Float; 6], 4),
+        }
+    }
 }
 
 impl SampleParts {
     /// Create from up to four color channels.
     ///
+    /// This is suitable for describing the channels of a single pixel, and relating it to the bit
+    /// parts in the corresponding texel.
+    ///
     /// The order of parts will be remembered. All color channels must belong to a common color
     /// representation.
     pub fn new(parts: [Option<ColorChannel>; 4], model: ColorChannelModel) -> Option<Self> {
+        let color_index = Self::color_index(&parts, model)?;
+
+        Some(SampleParts {
+            parts,
+            color_index,
+            pitch: SamplePitch::PixelBits,
+        })
+    }
+
+    fn color_index(parts: &[Option<ColorChannel>; 4], model: ColorChannelModel) -> Option<u8> {
         let mut unused = [true; 4];
-        let mut position = [0; 4];
-        for (part, pos) in parts.into_iter().zip(&mut position) {
+        let mut color_index = [0; 4];
+        for (part, pos) in parts.into_iter().zip(&mut color_index) {
             if let Some(p) = part {
                 let idx = p.canonical_index_in(model)?;
                 if !core::mem::take(&mut unused[idx as usize]) {
@@ -481,12 +579,39 @@ impl SampleParts {
             }
         }
 
-        let position = position
+        let color_index = color_index
             .into_iter()
             .enumerate()
             .fold(0u8, |acc, (idx, pos)| acc | pos << (2 * idx));
 
-        Some(SampleParts { parts, position })
+        Some(color_index)
+    }
+
+    /// Create parts that describe 4:2:2 subsampled color channels.
+    ///
+    /// These parts represent a 1x2 block, with 4 channels total.
+    pub fn with_yuv_422(
+        parts: [Option<ColorChannel>; 3],
+        model: ColorChannelModel,
+    ) -> Option<Self> {
+        let parts = [parts[0], parts[1], parts[2], None];
+        let color_index = Self::color_index(&parts, model)?;
+
+        Some(SampleParts {
+            parts,
+            color_index,
+            pitch: SamplePitch::Yuv422,
+        })
+    }
+
+    /// Create parts that describe 4:1:1 subsampled color channels.
+    ///
+    /// These parts represent a 1x4 block, with 6 channels total.
+    pub fn with_yuv_411(
+        parts: [Option<ColorChannel>; 3],
+        model: ColorChannelModel,
+    ) -> Option<Self> {
+        todo!()
     }
 
     pub fn num_components(self) -> u8 {
@@ -494,7 +619,7 @@ impl SampleParts {
     }
 
     pub(crate) fn channels(&self) -> impl '_ + Iterator<Item = (Option<ColorChannel>, u8)> {
-        (0..4).map(|i| (self.parts[i], (self.position >> (2 * i)) & 0x3))
+        (0..4).map(|i| (self.parts[i], (self.color_index >> (2 * i)) & 0x3))
     }
 }
 
@@ -603,8 +728,8 @@ impl CanvasLayout {
     /// Returns the index of a texel in a slice of planar image data.
     pub fn texel_index(&self, x: u32, y: u32) -> u64 {
         let bytes_per_texel = self.texel.bits.bytes();
-        let byte_index = u64::from(y) * u64::from(self.bytes.bytes_per_row)
-            + u64::from(x) * u64::from(bytes_per_texel);
+        let byte_index = u64::from(x) * u64::from(self.bytes.bytes_per_row)
+            + u64::from(y) * u64::from(bytes_per_texel);
         byte_index / u64::from(bytes_per_texel)
     }
 

@@ -113,6 +113,30 @@ pub(crate) mod constants {
         }
     }
 
+    impl<T: AsTexel> AsTexel for [T; 5] {
+        fn texel() -> Texel<[T; 5]> {
+            T::texel().array::<5>()
+        }
+    }
+
+    impl<T: AsTexel> AsTexel for [T; 6] {
+        fn texel() -> Texel<[T; 6]> {
+            T::texel().array::<6>()
+        }
+    }
+
+    impl<T: AsTexel> AsTexel for [T; 7] {
+        fn texel() -> Texel<[T; 7]> {
+            T::texel().array::<7>()
+        }
+    }
+
+    impl<T: AsTexel> AsTexel for [T; 8] {
+        fn texel() -> Texel<[T; 8]> {
+            T::texel().array::<8>()
+        }
+    }
+
     impl<T: AsTexel> AsTexel for ::core::num::Wrapping<T> {
         fn texel() -> Texel<::core::num::Wrapping<T>> {
             T::texel().num_wrapping()

@@ -16,6 +16,10 @@ image-texel = { path = "../texel", version = "0.1.0" }
 
 [dev-dependencies]
 brunch = "0.2.5"
+[dev-dependencies.image]
+version = "0.24"
+default-features = false
+features = ["png"]
 
 [[bench]]
 name = "conversion"

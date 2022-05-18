@@ -8,7 +8,7 @@ fn simple_conversion() -> Result<(), LayoutError> {
     let source_layout = CanvasLayout::with_texel(&texel, 32, 32)?;
     let target_layout = CanvasLayout::with_texel(
         &Texel {
-            bits: SampleBits::Int565,
+            bits: SampleBits::UInt565,
             parts: SampleParts::Bgr,
             ..texel
         },
@@ -90,6 +90,10 @@ fn color_conversion() -> Result<(), LayoutError> {
     let mut into = Canvas::new(layout);
     into.set_color(Color::Oklab)?;
 
+    let layout = CanvasLayout::with_texel(&Texel::new_f32(SampleParts::Lab), 32, 32)?;
+    let mut rt = Canvas::new(layout);
+    rt.set_color(Color::Oklab)?;
+
     let mut check_color_pair = |rgb: [u8; 3], lab: [u8; 3]| {
         from.as_texels_mut(<[u8; 3] as image_texel::AsTexel>::texel())
             .iter_mut()
@@ -101,6 +105,14 @@ fn color_conversion() -> Result<(), LayoutError> {
             .iter()
             .enumerate()
             .for_each(|(idx, b)| assert_eq!(*b, lab, "at {}", idx));
+
+        from.convert(&mut rt);
+        rt.convert(&mut from);
+
+        from.as_texels_mut(<[u8; 3] as image_texel::AsTexel>::texel())
+            .iter()
+            .enumerate()
+            .for_each(|(idx, b)| assert_eq!(*b, rgb, "at {}", idx));
     };
 
     // colorio says this should be: array([246.83446829, -18.2111931 ,  50.6162153 ])
