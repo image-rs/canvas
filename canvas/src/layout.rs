@@ -348,6 +348,14 @@ pub enum SampleBits {
     Float32x6,
 }
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum BitEncoding {
+    Opaque,
+    UInt,
+    Int,
+    Float,
+}
+
 /// Error that occurs when constructing a layout.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct LayoutError {
@@ -493,6 +501,27 @@ impl SampleBits {
         }
 
         TexelKind::from(self).action(ToLayout)
+    }
+
+    fn bit_encoding(self) -> ([BitEncoding; 6], u8) {
+        use SampleBits::*;
+        match self {
+            Int8 | Int8x2 | Int8x3 | Int8x4 | Int8x6 => {
+                ([BitEncoding::UInt; 6], self.bytes() as u8)
+            }
+            Int16 | Int16x2 | Int16x3 | Int16x4 | Int16x6 => {
+                ([BitEncoding::UInt; 6], self.bytes() as u8 / 2)
+            }
+            Float32 | Float32x2 | Float32x3 | Float32x4 | Float32x6 => {
+                ([BitEncoding::Float; 6], self.bytes() as u8 / 4)
+            }
+            Int332 | Int233 | Int565 => ([BitEncoding::UInt; 6], 3),
+            SampleBits::Int4x4 => ([BitEncoding::UInt; 6], 4),
+            SampleBits::Int_444 | SampleBits::Int444_ => ([BitEncoding::UInt; 6], 3),
+            SampleBits::Int101010_ | Int_101010 => ([BitEncoding::Float; 6], 3),
+            SampleBits::Int1010102 | Int2101010 => ([BitEncoding::Float; 6], 4),
+            SampleBits::Float16x4 => ([BitEncoding::Float; 6], 4),
+        }
     }
 }
 
