@@ -16,6 +16,6 @@ layout abstractions, and a color aware, flexible buffer on top.
 ## I just want to see the goods
 
 ```bash
-cargo run --examples show-oklab
+cargo run --example --release show-oklab
 # Writes an image test.png
 ```
