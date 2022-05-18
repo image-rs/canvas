@@ -12,3 +12,10 @@ layout abstractions, and a color aware, flexible buffer on top.
 - `drm` contains `image-drm`, a work-in-progress to provide native Rust types
   mirroring each of those available through `libdrm` with the goal of
   simplifying frame buffer interaction.
+
+## I just want to see the goods
+
+```bash
+cargo run --examples show-oklab
+# Writes an image test.png
+```

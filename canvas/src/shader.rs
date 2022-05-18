@@ -112,9 +112,6 @@ struct FromBits {
 /// we want to be able to represent those?
 #[derive(Clone, Copy, Debug)]
 enum CommonPixel {
-    U8x4,
-    U16x4,
-    U32x4,
     F32x4,
 }
 
@@ -566,42 +563,6 @@ impl CommonPixel {
         }
 
         match info.common_pixel {
-            CommonPixel::U8x4 => info.in_kind.action(ExpandAction {
-                expand: <[u8; 4]>::texel(),
-                expand_fn: |num, bits| {
-                    [0, 1, 2, 3].map(|idx| {
-                        let max_val = bits[idx].mask() as u64;
-                        ((num[idx] as u64) * 255 / max_val) as u8
-                    })
-                },
-                bits,
-                texel_buf,
-                pixel_buf,
-            }),
-            CommonPixel::U16x4 => info.in_kind.action(ExpandAction {
-                expand: <[u16; 4]>::texel(),
-                expand_fn: |num, bits| {
-                    [0, 1, 2, 3].map(|idx| {
-                        let max_val = bits[idx].mask() as u64;
-                        ((num[idx] as u64) * u16::MAX as u64 / max_val) as u16
-                    })
-                },
-                bits,
-                texel_buf,
-                pixel_buf,
-            }),
-            CommonPixel::U32x4 => info.in_kind.action(ExpandAction {
-                expand: <[u32; 4]>::texel(),
-                expand_fn: |num, bits| {
-                    [0, 1, 2, 3].map(|idx| {
-                        let max_val = bits[idx].mask() as u64;
-                        ((num[idx] as u64) * u32::MAX as u64 / max_val) as u32
-                    })
-                },
-                bits,
-                texel_buf,
-                pixel_buf,
-            }),
             // FIXME(color): rescaling of channels, and their bit interpretation.
             // Should we scale so that they occupy the full dynamic range, and scale floats from [0;
             // 1.0) or the respective HDR upper bound, i.e. likely 100.0 to represent 10_000 cd/m².
@@ -738,43 +699,6 @@ impl CommonPixel {
             SampleBits::UInt8x4 => {
                 let texels = texel_buf.as_texels(tex_u8).iter();
                 match info.common_pixel {
-                    CommonPixel::U8x4 => {
-                        let pixels = pixel_buf
-                            .as_mut_texels(<[u8; 4]>::texel())
-                            .chunks_exact_mut(2);
-                        debug_assert!(pixels.len() == texels.len());
-
-                        for (texel, pixel_chunk) in texels.zip(pixels) {
-                            let pixels: &mut [_; M] = pixel_chunk.try_into().unwrap();
-                            *pixels = F::expand(*texel, u8::MAX);
-                        }
-                    }
-                    CommonPixel::U16x4 => {
-                        let pixels = pixel_buf
-                            .as_mut_texels(<[u16; 4]>::texel())
-                            .chunks_exact_mut(M);
-                        debug_assert!(pixels.len() == texels.len());
-
-                        for (texel, pixel_chunk) in texels.zip(pixels) {
-                            let pixels: &mut [_; M] = pixel_chunk.try_into().unwrap();
-                            let expand = F::expand(*texel, u8::MAX);
-                            let remap = |v: u8| u16::from(v) * 257;
-                            *pixels = expand.map(|v| v.map(remap));
-                        }
-                    }
-                    CommonPixel::U32x4 => {
-                        let pixels = pixel_buf
-                            .as_mut_texels(<[u32; 4]>::texel())
-                            .chunks_exact_mut(M);
-                        debug_assert!(pixels.len() == texels.len());
-
-                        for (texel, pixel_chunk) in texels.zip(pixels) {
-                            let pixels: &mut [_; M] = pixel_chunk.try_into().unwrap();
-                            let expand = F::expand(*texel, u8::MAX);
-                            let remap = |v: u8| u32::from(v) * 257 * 65537;
-                            *pixels = expand.map(|v| v.map(remap));
-                        }
-                    }
                     CommonPixel::F32x4 => {
                         let pixels = pixel_buf
                             .as_mut_texels(<[f32; 4]>::texel())
@@ -793,43 +717,6 @@ impl CommonPixel {
             SampleBits::UInt16x4 => {
                 let texels = texel_buf.as_texels(tex_u16).iter();
                 match info.common_pixel {
-                    CommonPixel::U8x4 => {
-                        let pixels = pixel_buf
-                            .as_mut_texels(<[u8; 4]>::texel())
-                            .chunks_exact_mut(M);
-                        debug_assert!(pixels.len() == texels.len());
-
-                        for (texel, pixel_chunk) in texels.zip(pixels) {
-                            let pixels: &mut [_; M] = pixel_chunk.try_into().unwrap();
-                            let expand = F::expand(*texel, u16::MAX);
-                            let remap = |v: u16| (v / 257) as u8;
-                            *pixels = expand.map(|v| v.map(remap));
-                        }
-                    }
-                    CommonPixel::U16x4 => {
-                        let pixels = pixel_buf
-                            .as_mut_texels(<[u16; 4]>::texel())
-                            .chunks_exact_mut(M);
-                        debug_assert!(pixels.len() == texels.len());
-
-                        for (texel, pixel_chunk) in texels.zip(pixels) {
-                            let pixels: &mut [_; M] = pixel_chunk.try_into().unwrap();
-                            *pixels = F::expand(*texel, u16::MAX);
-                        }
-                    }
-                    CommonPixel::U32x4 => {
-                        let pixels = pixel_buf
-                            .as_mut_texels(<[u32; 4]>::texel())
-                            .chunks_exact_mut(M);
-                        debug_assert!(pixels.len() == texels.len());
-
-                        for (texel, pixel_chunk) in texels.zip(pixels) {
-                            let pixels: &mut [_; M] = pixel_chunk.try_into().unwrap();
-                            let expand = F::expand(*texel, u16::MAX);
-                            let remap = |v: u16| u32::from(v) * 65537;
-                            *pixels = expand.map(|v| v.map(remap));
-                        }
-                    }
                     CommonPixel::F32x4 => {
                         let pixels = pixel_buf
                             .as_mut_texels(<[f32; 4]>::texel())
@@ -848,46 +735,6 @@ impl CommonPixel {
             SampleBits::Float32x4 => {
                 let texels = texel_buf.as_texels(tex_f32).iter();
                 match info.common_pixel {
-                    CommonPixel::U8x4 => {
-                        let pixels = pixel_buf
-                            .as_mut_texels(<[u8; 4]>::texel())
-                            .chunks_exact_mut(M);
-                        debug_assert!(pixels.len() == texels.len());
-
-                        for (texel, pixel_chunk) in texels.zip(pixels) {
-                            let pixels: &mut [_; M] = pixel_chunk.try_into().unwrap();
-                            let expand = F::expand(*texel, 1.0);
-                            let remap = |v: f32| (v * 255f32) as u8;
-                            *pixels = expand.map(|v| v.map(remap));
-                        }
-                    }
-                    CommonPixel::U16x4 => {
-                        let pixels = pixel_buf
-                            .as_mut_texels(<[u16; 4]>::texel())
-                            .chunks_exact_mut(M);
-                        debug_assert!(pixels.len() == texels.len());
-
-                        for (texel, pixel_chunk) in texels.zip(pixels) {
-                            let pixels: &mut [_; M] = pixel_chunk.try_into().unwrap();
-                            let expand = F::expand(*texel, 1.0);
-                            let remap = |v: f32| (v * 65535f32) as u16;
-                            *pixels = expand.map(|v| v.map(remap));
-                        }
-                    }
-                    // FIXME(color): this isn't an accurate conversion.
-                    CommonPixel::U32x4 => {
-                        let pixels = pixel_buf
-                            .as_mut_texels(<[u32; 4]>::texel())
-                            .chunks_exact_mut(M);
-                        debug_assert!(pixels.len() == texels.len());
-
-                        for (texel, pixel_chunk) in texels.zip(pixels) {
-                            let pixels: &mut [_; M] = pixel_chunk.try_into().unwrap();
-                            let expand = F::expand(*texel, 1.0);
-                            let remap = |v: f32| (v * 65535f32 * 65537f32) as u32;
-                            *pixels = expand.map(|v| v.map(remap));
-                        }
-                    }
                     CommonPixel::F32x4 => {
                         let pixels = pixel_buf
                             .as_mut_texels(<[f32; 4]>::texel())
@@ -983,36 +830,6 @@ impl CommonPixel {
         }
 
         match info.common_pixel {
-            CommonPixel::U8x4 => info.out_kind.action(JoinAction {
-                join: <[u8; 4]>::texel(),
-                join_fn: |num, bits, idx| {
-                    let max_val = bits.mask();
-                    (num[(idx & 0x3) as usize] as u32) * max_val / 255
-                },
-                bits,
-                texel_buf,
-                pixel_buf,
-            }),
-            CommonPixel::U16x4 => info.out_kind.action(JoinAction {
-                join: <[u16; 4]>::texel(),
-                join_fn: |num, bits, idx| {
-                    let max_val = bits.mask() as u64;
-                    ((num[(idx & 0x3) as usize] as u64) * max_val / (u16::MAX as u64)) as u32
-                },
-                bits,
-                texel_buf,
-                pixel_buf,
-            }),
-            CommonPixel::U32x4 => info.out_kind.action(JoinAction {
-                join: <[u32; 4]>::texel(),
-                join_fn: |num, bits, idx| {
-                    let max_val = bits.mask() as u64;
-                    ((num[(idx & 0x3) as usize] as u64) * max_val / (u32::MAX as u64)) as u32
-                },
-                bits,
-                texel_buf,
-                pixel_buf,
-            }),
             // FIXME(color): rescaling of channels, and their bit interpretation.
             // Should we scale so that they occupy the full dynamic range, and scale floats from [0;
             // 1.0) or the respective HDR upper bound, i.e. likely 100.0 to represent 10_000 cd/m².
@@ -1071,9 +888,6 @@ impl CommonPixel {
 
     fn action<R>(self, action: impl GenericTexelAction<R>) -> R {
         match self {
-            CommonPixel::U8x4 => action.run(<[u8; 4]>::texel()),
-            CommonPixel::U16x4 => action.run(<[u16; 4]>::texel()),
-            CommonPixel::U32x4 => action.run(<[u32; 4]>::texel()),
             CommonPixel::F32x4 => action.run(<[f32; 4]>::texel()),
         }
     }
