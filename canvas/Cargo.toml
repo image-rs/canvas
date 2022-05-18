@@ -12,7 +12,7 @@ repository = "https://github.com/image-rs/canvas"
 categories = ["multimedia::images"]
 
 [dependencies]
-image-texel = { path = "../texel", version = "0.1.0" }
+image-texel = { path = "../texel", version = "0.1.1" }
 
 [dev-dependencies]
 brunch = "0.2.5"
