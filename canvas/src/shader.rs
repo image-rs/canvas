@@ -158,7 +158,7 @@ struct SuperTexel {
 impl Converter {
     pub fn new() -> Self {
         Converter {
-            chunk: 512,
+            chunk: 1024,
             super_blocks: vec![],
             in_texels: TexelBuffer::default(),
             in_coords: vec![],
@@ -283,14 +283,14 @@ impl Converter {
 
         (
             SuperTexel {
-                blocks: 0..sb_width,
-                in_super: super_width / b0.width(),
-                out_super: super_width / b1.width(),
-            },
-            SuperTexel {
                 blocks: 0..sb_height,
                 in_super: super_height / b0.height(),
                 out_super: super_height / b1.height(),
+            },
+            SuperTexel {
+                blocks: 0..sb_width,
+                in_super: super_width / b0.width(),
+                out_super: super_width / b1.width(),
             },
         )
     }
