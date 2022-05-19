@@ -20,13 +20,13 @@ pub struct Converter {
     /// Buffer where we store input texels after reading them.
     in_texels: TexelBuffer,
     /// Texel coordinates of stored texels.
-    in_coords: Vec<TexelCoord>,
+    in_coords: Vec<Coord>,
     /// Index in the input planes.
     in_index: Vec<usize>,
     /// Buffer where we store input texels before writing.
     out_texels: TexelBuffer,
     /// Texel coordinates of stored texels.
-    out_coords: Vec<TexelCoord>,
+    out_coords: Vec<Coord>,
     /// Index in the input planes.
     out_index: Vec<usize>,
 
@@ -130,9 +130,9 @@ type PlaneTarget<'data, 'layout> = ImageMut<'data, &'layout mut CanvasLayout>;
 /// matching types are being used.
 struct ConvertOps {
     /// Convert in texel coordinates to an index in the color plane.
-    in_index: fn(&Info, &[TexelCoord], &mut [usize]),
+    in_index: fn(&Info, &[Coord], &mut [usize]),
     /// Convert out texel coordinates to an index in the color plane.
-    out_index: fn(&Info, &[TexelCoord], &mut [usize]),
+    out_index: fn(&Info, &[Coord], &mut [usize]),
 
     /// Expand all texels into pixels in normalized channel order.
     expand: fn(&Info, &TexelBuffer, &mut TexelBuffer),
@@ -252,7 +252,8 @@ impl Converter {
 
         loop {
             self.super_blocks.clear();
-            self.super_blocks.extend(blocks.by_ref().take(self.chunk));
+            self.super_blocks
+                .extend(blocks.by_ref().take(self.chunk).map(TexelCoord));
 
             if self.super_blocks.is_empty() {
                 break;
@@ -312,20 +313,20 @@ impl Converter {
             // Faster than rustc having to look through and special case the iteration/clones
             // below. For some reason, it doesn't do well on `Range::zip()::flatten`.
             for &TexelCoord(Coord(bx, by)) in self.super_blocks.iter() {
-                self.in_coords.push(TexelCoord(Coord(bx, by)));
-                self.out_coords.push(TexelCoord(Coord(bx, by)));
+                self.in_coords.push(Coord(bx, by));
+                self.out_coords.push(Coord(bx, by));
             }
         } else {
             let in_blocks = Self::blocks(0..sb_x.in_super, 0..sb_y.in_super);
             let out_blocks = Self::blocks(0..sb_x.out_super, 0..sb_y.out_super);
 
             for &TexelCoord(Coord(bx, by)) in self.super_blocks.iter() {
-                for TexelCoord(Coord(ix, iy)) in in_blocks.clone() {
-                    self.in_coords.push(TexelCoord(Coord(bx + ix, by + iy)));
+                for Coord(ix, iy) in in_blocks.clone() {
+                    self.in_coords.push(Coord(bx + ix, by + iy));
                 }
 
-                for TexelCoord(Coord(ox, oy)) in out_blocks.clone() {
-                    self.out_coords.push(TexelCoord(Coord(bx + ox, by + oy)));
+                for Coord(ox, oy) in out_blocks.clone() {
+                    self.out_coords.push(Coord(bx + ox, by + oy));
                 }
             }
         }
@@ -448,27 +449,25 @@ impl Converter {
         });
     }
 
-    fn blocks(x: Range<u32>, y: Range<u32>) -> impl Iterator<Item = TexelCoord> + Clone {
+    fn blocks(x: Range<u32>, y: Range<u32>) -> impl Iterator<Item = Coord> + Clone {
         x.clone()
             .into_iter()
             .map(move |x| core::iter::repeat(x).zip(y.clone()))
             .flatten()
-            .map(|(x, y)| TexelCoord(Coord(x, y)))
+            .map(|(x, y)| Coord(x, y))
     }
 
-    fn index_from_in_info(info: &Info, texel: &[TexelCoord], idx: &mut [usize]) {
+    fn index_from_in_info(info: &Info, texel: &[Coord], idx: &mut [usize]) {
         Self::index_from_layer(&info.in_layout, texel, idx)
     }
 
-    fn index_from_out_info(info: &Info, texel: &[TexelCoord], idx: &mut [usize]) {
+    fn index_from_out_info(info: &Info, texel: &[Coord], idx: &mut [usize]) {
         Self::index_from_layer(&info.out_layout, texel, idx)
     }
 
-    fn index_from_layer(info: &CanvasLayout, texel: &[TexelCoord], idx: &mut [usize]) {
+    fn index_from_layer(info: &CanvasLayout, texel: &[Coord], idx: &mut [usize]) {
         // FIXME(perf): review performance. Could probably be vectorized by hand.
-        for (&TexelCoord(Coord(x, y)), idx) in texel.iter().zip(idx) {
-            *idx = info.texel_index(x, y) as usize;
-        }
+        info.fill_texel_indices_impl(idx, texel)
     }
 }
 
