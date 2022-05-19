@@ -359,6 +359,10 @@ impl Color {
             }
 
             return;
+        } else if let Color::Oklab {} = self {
+            return oklab::to_xyz_slice(pixel, xyz);
+        } else if let Color::SrLab2 { whitepoint } = self {
+            return srlab2::to_xyz_slice(pixel, xyz, *whitepoint);
         }
 
         // Fallback path in all cases.
@@ -398,6 +402,10 @@ impl Color {
             }
 
             return;
+        } else if let Color::Oklab {} = self {
+            return oklab::from_xyz_slice(xyz, pixel);
+        } else if let Color::SrLab2 { whitepoint } = self {
+            return srlab2::from_xyz_slice(xyz, pixel, *whitepoint);
         }
 
         for (target_pix, src_xyz) in pixel.iter_mut().zip(xyz) {
