@@ -312,14 +312,21 @@ impl Converter {
         if is_trivial_super(sb_x) && is_trivial_super(sb_y) {
             // Faster than rustc having to look through and special case the iteration/clones
             // below. For some reason, it doesn't do well on `Range::zip()::flatten`.
-            for &TexelCoord(Coord(bx, by)) in self.super_blocks.iter() {
-                self.in_coords.push(Coord(bx, by));
-                self.out_coords.push(Coord(bx, by));
-            }
+            let blocks = self
+                .super_blocks
+                .iter()
+                .map(|&TexelCoord(Coord(bx, by))| Coord(bx, by));
+            // FIXME(perf): actually, we'd like to just reuse the `super_blocks` vector where ever
+            // possible. This is a pure copy at the byte-level.
+            self.in_coords.extend(blocks.clone());
+            self.out_coords.extend(blocks.clone());
         } else {
             let in_blocks = Self::blocks(0..sb_x.in_super, 0..sb_y.in_super);
             let out_blocks = Self::blocks(0..sb_x.out_super, 0..sb_y.out_super);
 
+            // FIXME(perf): the other iteration order would serve us better. Then there is a larger
+            // bulk of coordinates looped through at the same time, with less branching as a call
+            // to std::vec::Vec::extend could rely on the exact length of the iterator.
             for &TexelCoord(Coord(bx, by)) in self.super_blocks.iter() {
                 for Coord(ix, iy) in in_blocks.clone() {
                     self.in_coords.push(Coord(bx + ix, by + iy));
