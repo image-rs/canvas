@@ -21,16 +21,3 @@ cargo run --example --release show-oklab
 cargo run --example --release show-srlab2
 # Another image test.png in another color space
 ```
-
-## Current performance
-
-The benchmarks are measuring conversion of 128x128 pixel images into other
-color and texel representations. For comparison's sake, the numbers below are
-scaled up to seconds-per-FullHD image (1920×1080 pixels). This isn't exactly
-right due to caches but good for future reference.
-
-At 2022-05-19 we have for example:
-
-- SrLab2(f32) to sRGBa(f32) at 70.49ms/FullHD
-- sRGBa(u8) to Oklab(u8) at 188.58ms/FullHD
-- sRGBa(f32) to Oklab(f32) at 81.86ms/FullHD
