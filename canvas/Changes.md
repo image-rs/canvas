@@ -1,3 +1,8 @@
+## 0.2.2
+
+- Performance optimizations, all around. Some conversions are 100% faster.
+- The Readme now contains a performance notice, will be updated irregularly.
+
 ## 0.2.1 (Yavin IV)
 
 - Rename `SampleParts::Int*` to `SampleParts::UInt*`.
