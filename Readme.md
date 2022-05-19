@@ -18,4 +18,6 @@ layout abstractions, and a color aware, flexible buffer on top.
 ```bash
 cargo run --example --release show-oklab
 # Writes an image test.png
+cargo run --example --release show-srlab2
+# Another image test.png in another color space
 ```

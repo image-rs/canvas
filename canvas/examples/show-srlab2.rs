@@ -8,7 +8,9 @@ const SZ: u32 = 512;
 fn main() -> Result<(), LayoutError> {
     let layout = CanvasLayout::with_texel(&Texel::new_f32(SampleParts::Lab), SZ, SZ)?;
     let mut canvas = Canvas::new(layout);
-    canvas.set_color(Color::Oklab)?;
+    canvas.set_color(Color::SrLab2 {
+        whitepoint: image_canvas::color::Whitepoint::D65,
+    })?;
 
     // We can initialize the canvas by hand. For example, as a [f32; 3] array.
     // Note: this works easily because `with_texel` does not add any padding.
@@ -20,7 +22,7 @@ fn main() -> Result<(), LayoutError> {
         let idx = idx as u32;
         let (x, y) = (idx % SZ, idx / SZ);
 
-        // Oklab is a Lab-like color spaces with perceptual goals. It has one lightness component,
+        // SrLab2 is a Lab-like color spaces with perceptual goals. It has one lightness component,
         // and two independent chroma components. This makes it easy to create different colors
         // with very similar perceived brightness. Varies the color across the whole image.
         let lightness = 0.8f32;
