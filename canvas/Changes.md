@@ -1,3 +1,8 @@
+## 0.2.3
+
+- Fixed a bug with the texel coordinate generation phase that caused issues in
+  non-rectangular images.
+
 ## 0.2.2
 
 - Performance optimizations, all around. Some conversions are 100% faster.

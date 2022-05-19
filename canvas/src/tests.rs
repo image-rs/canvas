@@ -126,3 +126,46 @@ fn color_conversion() -> Result<(), LayoutError> {
 
     Ok(())
 }
+
+/// Check one aspect of proper indexing into non-rectangular images.
+#[test]
+fn non_rectantular() -> Result<(), LayoutError> {
+    let layout = CanvasLayout::with_texel(&Texel::new_u8(SampleParts::Rgb), 32, 64)?;
+    let mut from = Canvas::new(layout.clone());
+    from.set_color(Color::SRGB)?;
+
+    let layout = CanvasLayout::with_texel(&Texel::new_u8(SampleParts::Lab), 32, 64)?;
+    let mut into = Canvas::new(layout);
+    into.set_color(Color::Oklab)?;
+
+    // Initializes two 32x32 images stacked vertically on top of each other.
+    // Then converts, checks that the correct color was written to each pixel.
+    let mut check_color_pair = |(rgb0, lab0): ([u8; 3], [u8; 3]),
+                                (rgb1, lab1): ([u8; 3], [u8; 3])| {
+        let mut pixels = from
+            .as_texels_mut(<[u8; 3] as image_texel::AsTexel>::texel())
+            .iter_mut();
+        pixels.by_ref().take(32 * 32).for_each(|b| *b = rgb0);
+        pixels.for_each(|b| *b = rgb1);
+
+        from.convert(&mut into);
+
+        let mut pixels = into
+            .as_texels_mut(<[u8; 3] as image_texel::AsTexel>::texel())
+            .iter();
+
+        pixels
+            .by_ref()
+            .take(32 * 32)
+            .enumerate()
+            .for_each(|(idx, b)| assert_eq!(*b, lab0, "at {}", idx));
+
+        pixels
+            .enumerate()
+            .for_each(|(idx, b)| assert_eq!(*b, lab1, "at {}", idx));
+    };
+
+    check_color_pair(([255, 255, 0], [247, 0, 51]), ([128, 0, 80], [101, 41, 0]));
+
+    Ok(())
+}
