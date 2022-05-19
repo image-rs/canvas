@@ -180,6 +180,34 @@ fn main() {
             },
             sz: 128,
         },
+        /* conversion from SRLAB2 */
+        Convert {
+            texel_in: Texel::new_u8(SampleParts::Lab),
+            color_in: Color::SrLab2 {
+                whitepoint: Whitepoint::D65,
+            },
+            texel_out: Texel::new_u8(SampleParts::Rgb),
+            color_out: Color::SRGB,
+            sz: 128,
+        },
+        Convert {
+            texel_in: Texel::new_u16(SampleParts::Lab),
+            color_in: Color::SrLab2 {
+                whitepoint: Whitepoint::D65,
+            },
+            texel_out: Texel::new_u16(SampleParts::Rgb),
+            color_out: Color::SRGB,
+            sz: 128,
+        },
+        Convert {
+            texel_in: Texel::new_f32(SampleParts::Lab),
+            color_in: Color::SrLab2 {
+                whitepoint: Whitepoint::D65,
+            },
+            texel_out: Texel::new_f32(SampleParts::Rgb),
+            color_out: Color::SRGB,
+            sz: 128,
+        },
     ];
 
     let mut benches = tests.map(|convert| {
