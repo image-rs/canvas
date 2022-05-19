@@ -733,6 +733,32 @@ impl CanvasLayout {
         byte_index / u64::from(bytes_per_texel)
     }
 
+    pub(crate) fn fill_texel_indices_impl(&self, idx: &mut [usize], iter: &[Coord]) {
+        match self.texel.bits.bytes() {
+            0 => unreachable!("No texel with zero bytes"),
+            _ if self.bytes.bytes_per_row % self.texel.bits.bytes() as u32 == 0 => {
+                let pitch = self.bytes.bytes_per_row / self.texel.bits.bytes() as u32;
+                return Self::fill_indices_constant_size(idx, iter, pitch);
+            }
+            // FIXME(perf): do we need common divisors? perf shows that a significant time is spent
+            // on division by `bytes_per_texel` but the common cases (1, 2, 3, 4, 8, etc) should
+            // all optimize a lot better.
+            _ => {}
+        }
+
+        for (&Coord(x, y), idx) in iter.iter().zip(idx) {
+            *idx = self.texel_index(x, y) as usize;
+        }
+    }
+
+    fn fill_indices_constant_size(idx: &mut [usize], iter: &[Coord], pitch: u32) {
+        let pitch = u64::from(pitch);
+        for (&Coord(x, y), idx) in iter.iter().zip(idx) {
+            let texindex = u64::from(x) * pitch + u64::from(y);
+            *idx = texindex as usize;
+        }
+    }
+
     /// Returns a matrix descriptor that can store all bytes.
     ///
     /// Note: for the moment, all layouts are row-wise matrices. This will be relaxed in the future
