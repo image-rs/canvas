@@ -784,7 +784,19 @@ impl CommonPixel {
     ) {
         let (encoding, len) = info.out_layout.texel.bits.bit_encoding();
 
-        if encoding[..len as usize] == [BitEncoding::UInt; 6][..len as usize] {
+        if let SampleBits::UInt8x4 = info.out_layout.texel.bits {
+            // TODO: pre-select SIMD version from info.ops.
+            return Self::join_uint8x4(bits, pixel_buf, texel_buf);
+        } else if let SampleBits::UInt16x4 = info.out_layout.texel.bits {
+            // TODO: pre-select SIMD version from info.ops.
+            return Self::join_uint16x4(bits, pixel_buf, texel_buf);
+        } else if let SampleBits::UInt8x3 = info.out_layout.texel.bits {
+            // TODO: pre-select version from info.ops.
+            return Self::join_uint8x3(bits, pixel_buf, texel_buf);
+        } else if let SampleBits::UInt16x3 = info.out_layout.texel.bits {
+            // TODO: pre-select SIMD version from info.ops.
+            return Self::join_uint16x3(bits, pixel_buf, texel_buf);
+        } else if encoding[..len as usize] == [BitEncoding::UInt; 6][..len as usize] {
             return Self::join_ints(info, bits, pixel_buf, texel_buf);
         } else if encoding[..len as usize] == [BitEncoding::Float; 6][..len as usize] {
             return Self::join_floats(info, bits, pixel_buf, texel_buf);
@@ -845,6 +857,119 @@ impl CommonPixel {
                 texel_buf,
                 pixel_buf,
             }),
+        }
+    }
+
+    /// Specialized join when channels are a uniform reordering of color channels, as u8.
+    fn join_uint8x4(bits: [FromBits; 4], pixel_buf: &TexelBuffer, texel_buf: &mut TexelBuffer) {
+        let src = pixel_buf.as_texels(f32::texel());
+        let dst = texel_buf.as_mut_texels(u8::texel());
+
+        // Do one quick SIMD cast to u8. Much faster than the general round and clamp.
+        // Note: fma is for some reason a call to a libc function…
+        for (tex, &pix) in dst.iter_mut().zip(src) {
+            *tex = ((pix * (u8::MAX as f32)) + 0.5) as u8;
+        }
+
+        // prepare re-ordering step. Note how we select 0x80 as invalid, which works perfectly with
+        // an SSE shuffle instruction which encodes this as a negative offset. Trust llvm to do the
+        // transform.
+        let mut shuffle = [0x80u8; 4];
+        for (idx, bits) in (0u8..4).zip(&bits) {
+            if bits.len > 0 {
+                shuffle[(bits.begin / 8) as usize] = idx;
+            }
+        }
+
+        // FIXME(perf): Really, use SIMD here.
+        Self::shuffle_u8x4(texel_buf.as_mut_texels(<[u8; 4]>::texel()), shuffle);
+    }
+
+    fn join_uint16x4(bits: [FromBits; 4], pixel_buf: &TexelBuffer, texel_buf: &mut TexelBuffer) {
+        let src = pixel_buf.as_texels(f32::texel());
+        let dst = texel_buf.as_mut_texels(u16::texel());
+
+        // Do one quick SIMD cast to u8. Faster than the general round and clamp.
+        // Note: fma is for some reason a call to a libc function…
+        for (tex, &pix) in dst.iter_mut().zip(src) {
+            *tex = ((pix * (u16::MAX as f32)) + 0.5) as u16;
+        }
+
+        // prepare re-ordering step. Note how we select 0x80 as invalid, which works perfectly with
+        // an SSE shuffle instruction which encodes this as a negative offset. Trust llvm to do the
+        // transform.
+        let mut shuffle = [0x80u8; 4];
+        for (idx, bits) in (0u8..4).zip(&bits) {
+            if bits.len > 0 {
+                shuffle[(bits.begin / 16) as usize] = idx;
+            }
+        }
+
+        // FIXME(perf): Really, use SIMD here.
+        Self::shuffle_u16x4(texel_buf.as_mut_texels(<[u16; 4]>::texel()), shuffle);
+    }
+
+    fn join_uint8x3(bits: [FromBits; 4], pixel_buf: &TexelBuffer, texel_buf: &mut TexelBuffer) {
+        let src = pixel_buf.as_texels(<[f32; 4]>::texel());
+        let dst = texel_buf.as_mut_texels(<[u8; 3]>::texel());
+
+        // prepare re-ordering step. Note how we select 0x80 as invalid, which works perfectly with
+        // an SSE shuffle instruction which encodes this as a negative offset. Trust llvm to do the
+        // transform.
+        let mut shuffle = [0x80u8; 3];
+        for (idx, bits) in (0u8..4).zip(&bits) {
+            if bits.len > 0 {
+                shuffle[(bits.begin / 8) as usize] = idx;
+            }
+        }
+
+        for (tex, pix) in dst.iter_mut().zip(src) {
+            *tex = shuffle.map(|i| {
+                let val = *pix.get(i as usize).unwrap_or(&0.0);
+                (val * u8::MAX as f32 + 0.5) as u8
+            });
+        }
+    }
+
+    fn join_uint16x3(bits: [FromBits; 4], pixel_buf: &TexelBuffer, texel_buf: &mut TexelBuffer) {
+        let src = pixel_buf.as_texels(<[f32; 4]>::texel());
+        let dst = texel_buf.as_mut_texels(<[u16; 3]>::texel());
+
+        // prepare re-ordering step. Note how we select 0x80 as invalid, which works perfectly with
+        // an SSE shuffle instruction which encodes this as a negative offset. Trust llvm to do the
+        // transform.
+        let mut shuffle = [0x80u8; 3];
+        for (idx, bits) in (0u8..4).zip(&bits) {
+            if bits.len > 0 {
+                shuffle[(bits.begin / 16) as usize] = idx;
+            }
+        }
+
+        for (tex, pix) in dst.iter_mut().zip(src) {
+            *tex = shuffle.map(|i| {
+                let val = *pix.get(i as usize).unwrap_or(&0.0);
+                (val * u16::MAX as f32 + 0.5) as u16
+            });
+        }
+    }
+
+    /// For each pixel, in-place select from the existing channels at the index given by `idx`, or
+    /// select a `0` if this index is out-of-range.
+    fn shuffle_u8x4(u8s: &mut [[u8; 4]], idx: [u8; 4]) {
+        // Naive version. For some reason, LLVM does not figure this out as shuffle instructions.
+        // Disappointing.
+        for ch in u8s {
+            *ch = idx.map(|i| ch[(i & 3) as usize] & (i < 4) as u8);
+        }
+    }
+
+    /// For each pixel, in-place select from the existing channels at the index given by `idx`, or
+    /// select a `0` if this index is out-of-range.
+    fn shuffle_u16x4(u8s: &mut [[u16; 4]], idx: [u8; 4]) {
+        // Naive version. For some reason, LLVM does not figure this out as shuffle instructions.
+        // Disappointing.
+        for ch in u8s {
+            *ch = idx.map(|i| ch[(i & 3) as usize] & (i < 4) as u16);
         }
     }
 

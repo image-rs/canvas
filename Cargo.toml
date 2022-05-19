@@ -1,2 +1,5 @@
 [workspace]
 members = [".", "canvas", "drm", "texel"]
+
+[profile.release]
+debug = 1
