@@ -338,10 +338,24 @@ impl Color {
         {
             let to_xyz = primary.to_xyz(*whitepoint);
 
-            for (src_pix, target_xyz) in pixel.iter().zip(xyz) {
-                let [r, g, b, a] = transfer.to_optical_display(*src_pix);
-                let [x, y, z] = to_xyz.mul_vec([r, g, b]);
-                *target_xyz = [x, y, z, a];
+            if let Some(eo_transfer) = transfer.to_optical_display_slice() {
+                eo_transfer(pixel, xyz);
+
+                for target_xyz in xyz {
+                    let [r, g, b, a] = *target_xyz;
+                    let [x, y, z] = to_xyz.mul_vec([r, g, b]);
+                    *target_xyz = [x, y, z, a];
+                }
+            } else {
+                for (target_xyz, src_pix) in xyz.iter_mut().zip(pixel) {
+                    *target_xyz = transfer.to_optical_display(*src_pix);
+                }
+
+                for target_xyz in xyz {
+                    let [r, g, b, a] = *target_xyz;
+                    let [x, y, z] = to_xyz.mul_vec([r, g, b]);
+                    *target_xyz = [x, y, z, a];
+                }
             }
 
             return;
@@ -363,10 +377,24 @@ impl Color {
         {
             let from_xyz = primary.to_xyz(*whitepoint).inv();
 
-            for (target_pix, src_xyz) in pixel.iter_mut().zip(xyz) {
-                let [x, y, z, a] = *src_xyz;
-                let [r, g, b] = from_xyz.mul_vec([x, y, z]);
-                *target_pix = transfer.from_optical_display([r, g, b, a]);
+            if let Some(oe_transfer) = transfer.from_optical_display_slice() {
+                for (target_pix, src_xyz) in pixel.iter_mut().zip(xyz) {
+                    let [x, y, z, a] = *src_xyz;
+                    let [r, g, b] = from_xyz.mul_vec([x, y, z]);
+                    *target_pix = [r, g, b, a];
+                }
+
+                oe_transfer(pixel);
+            } else {
+                for (target_pix, src_xyz) in pixel.iter_mut().zip(xyz) {
+                    let [x, y, z, a] = *src_xyz;
+                    let [r, g, b] = from_xyz.mul_vec([x, y, z]);
+                    *target_pix = [r, g, b, a];
+                }
+
+                for target_pix in pixel {
+                    *target_pix = transfer.from_optical_display(*target_pix);
+                }
             }
 
             return;
@@ -507,6 +535,74 @@ impl Transfer {
         };
 
         [r, g, b, a]
+    }
+
+    pub(crate) fn to_optical_display_slice(self) -> Option<fn(&[[f32; 4]], &mut [[f32; 4]])> {
+        macro_rules! optical_by_display {
+            ($what:ident: $($pattern:pat => $transfer:path,)*) => {
+                match $what {
+                    $($pattern => return optical_by_display! {@ $transfer },)*
+                    _ => return None,
+                }
+            };
+            (@ $transfer:path) => {
+                Some(|texels: &[[f32; 4]], pixels: &mut [[f32; 4]]| {
+                    for (texel, target_pix) in texels.iter().zip(pixels) {
+                        let [r, g, b, a] = *texel;
+                        let [r, g, b] = [r, g, b].map($transfer);
+                        *target_pix = [r, g, b, a];
+                    }
+                })
+            };
+        }
+
+        if let Transfer::Linear = self {
+            return Some(|x, y| y.copy_from_slice(x));
+        }
+
+        use self::transfer::*;
+        optical_by_display!(self:
+            Transfer::Bt709 => transfer_eo_bt709,
+            Transfer::Bt470M => transfer_eo_bt470m,
+            Transfer::Bt601 => transfer_eo_bt601,
+            Transfer::Smpte240 => transfer_eo_smpte240,
+            Transfer::Srgb => transfer_eo_srgb,
+            Transfer::Bt2020_10bit => transfer_eo_bt2020_10b,
+        );
+    }
+
+    pub(crate) fn from_optical_display_slice(self) -> Option<fn(&mut [[f32; 4]])> {
+        macro_rules! optical_by_display {
+            ($what:ident: $($pattern:pat => $transfer:path,)*) => {
+                match $what {
+                    $($pattern => return optical_by_display! {@ $transfer },)*
+                    _ => return None,
+                }
+            };
+            (@ $transfer:path) => {
+                Some(|pixels: &mut [[f32; 4]]| {
+                    for target_pix in pixels.iter_mut() {
+                        let [r, g, b, a] = *target_pix;
+                        let [r, g, b] = [r, g, b].map($transfer);
+                        *target_pix = [r, g, b, a];
+                    }
+                })
+            };
+        }
+
+        if let Transfer::Linear = self {
+            return Some(|_| {});
+        }
+
+        use self::transfer::*;
+        optical_by_display!(self:
+            Transfer::Bt709 => transfer_oe_bt709,
+            Transfer::Bt470M => transfer_oe_bt470m,
+            Transfer::Bt601 => transfer_oe_bt601,
+            Transfer::Smpte240 => transfer_oe_smpte240,
+            Transfer::Srgb => transfer_oe_srgb,
+            Transfer::Bt2020_10bit => transfer_oe_bt2020_10b,
+        );
     }
 }
 
