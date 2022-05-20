@@ -25,3 +25,8 @@ features = ["png"]
 name = "conversion"
 path = "benchmarks/conversion.rs"
 harness = false
+
+[[bench]]
+name = "intcast"
+path = "benchmarks/intcast.rs"
+harness = false
