@@ -595,6 +595,8 @@ impl SampleParts {
         model: ColorChannelModel,
     ) -> Option<Self> {
         let parts = [parts[0], parts[1], parts[2], None];
+        // FIXME(color): should we allow arbitrary channels to be subsampled like this?
+        // Or do we need to perform stronger checks on the `ColorChannel` input?
         let color_index = Self::color_index(&parts, model)?;
 
         Some(SampleParts {
@@ -611,6 +613,7 @@ impl SampleParts {
         parts: [Option<ColorChannel>; 3],
         model: ColorChannelModel,
     ) -> Option<Self> {
+        // FIXME(color): implement this properly, `color_index` check included, see `with_yuv_422`.
         todo!()
     }
 
