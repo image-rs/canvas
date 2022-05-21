@@ -208,29 +208,143 @@ impl Converter {
 
         // Check that the layout is accurate..
         self.with_filled_texels(
-            |that| {
-                (ops.expand)(&info, &that.in_texels, &mut that.pixel_in_buffer);
-
-                let pixel_out = if let Some(ref recolor) = ops.recolor {
-                    (recolor.from)(&info, &that.pixel_in_buffer, &mut that.neutral_color_buffer);
-                    (recolor.into)(
-                        &info,
-                        &that.neutral_color_buffer,
-                        &mut that.pixel_out_buffer,
-                    );
-                    &that.pixel_out_buffer
-                } else {
-                    &that.pixel_in_buffer
-                };
-
-                // FIXME: necessary to do a reorder of pixels here? Or let join do this?
-                (ops.join)(&info, pixel_out, &mut that.out_texels);
-            },
+            |that| that.convert_texelbuf_with_ops(&info, &ops),
             &info,
             &ops,
             frame_in,
             frame_out,
         )
+    }
+
+    /// Convert all loaded texels, using the provided `ConvertOps` as dynamic function selection.
+    ///
+    /// Assumes that the caller resized all buffers appropriately (TODO: should be a better
+    /// contract for this, with explicit data flow of this invariant and what 'proper' size means,
+    /// because it depends on the chosen ops).
+    fn convert_texelbuf_with_ops(&mut self, info: &Info, ops: &ConvertOps) {
+        if ops.recolor.is_none() {
+            if let Some(_) = self.convert_intbuf_with_nocolor_ops(info, ops) {
+                return;
+            }
+        }
+
+        (ops.expand)(&info, &self.in_texels, &mut self.pixel_in_buffer);
+
+        let pixel_out = if let Some(ref recolor) = ops.recolor {
+            (recolor.from)(&info, &self.pixel_in_buffer, &mut self.neutral_color_buffer);
+            (recolor.into)(
+                &info,
+                &self.neutral_color_buffer,
+                &mut self.pixel_out_buffer,
+            );
+            &self.pixel_out_buffer
+        } else {
+            &self.pixel_in_buffer
+        };
+
+        // FIXME: necessary to do a reorder of pixels here? Or let join do this?
+        (ops.join)(&info, pixel_out, &mut self.out_texels);
+    }
+
+    /// Special case on `convert_texelbuf_with_ops`, when both buffers:
+    /// * utilize an expasion-roundtrip-safe color/bit combination
+    /// * have the same bit depths on all channels
+    /// * do not require any color conversion between them
+    ///
+    /// This avoids expanding them into `pixel_in_buffer` where they'd be represented as `f32x4`
+    /// and thus undergo an expensive `u8->f32->u8` cast chain.
+    fn convert_intbuf_with_nocolor_ops(&mut self, info: &Info, _: &ConvertOps) -> Option<()> {
+        fn determine_shuffle(inp: SampleParts, outp: SampleParts) -> Option<[u8; 4]> {
+            let mut ch_from_common = [0x80u8; 4];
+            let mut ch_from_input = [0x80u8; 4];
+
+            // Not yet handled, we need independent channels and the same amount.
+            // FIXME(perf): we could use very similar code to expand pixels from blocks but that
+            // requires specialized shuffle methods.
+            // FIXME(perf): for simple linear combinations in non-linear space (e.g. both Rec.601
+            // and Rec.709 specify their YUV in the electric domain even though that's not
+            // accurate) we could do them here, too.
+            // FIXME(perf): Utilize a library for this, e.g. `dcv-color-primitives`, but those are
+            // heavy and may have different implementation goals.
+            // - `dvc-color-primitives` uses an unsafe globals to fetch the `fn` to use...
+            // - `dvc-color-primitives` also depends on `paste`, a proc-macro crate.
+            if inp.pitch != SamplePitch::PixelBits || outp.pitch != SamplePitch::PixelBits {
+                return None;
+            }
+
+            for ((ch, common_pos), idx) in inp.channels().zip(0..4) {
+                if ch.is_some() {
+                    ch_from_input[common_pos as usize] = idx;
+                }
+            }
+
+            for ((ch, common_pos), idx) in outp.channels().zip(0..4) {
+                if ch.is_some() {
+                    ch_from_common[idx] = ch_from_input[common_pos as usize];
+                }
+            }
+
+            Some(ch_from_common)
+        }
+
+        let in_texel = &info.in_layout.texel;
+        let out_texel = &info.out_layout.texel;
+
+        let shuffle = determine_shuffle(in_texel.parts, out_texel.parts)?;
+
+        // This should have been checked previous.
+        debug_assert!(info.in_layout.color == info.out_layout.color);
+        match (in_texel.bits, out_texel.bits) {
+            (SampleBits::UInt8x4, SampleBits::UInt8x4)
+            | (SampleBits::Int8x4, SampleBits::Int8x4) => {
+                let in_texels = self.in_texels.as_texels(<[u8; 4]>::texel());
+                let out_texels = self.out_texels.as_mut_texels(<[u8; 4]>::texel());
+                out_texels.copy_from_slice(in_texels);
+                CommonPixel::shuffle_u8x4(out_texels, shuffle);
+                Some(())
+            }
+            (SampleBits::UInt8x3, SampleBits::UInt8x4)
+            | (SampleBits::Int8x3, SampleBits::Int8x4) => {
+                let in_texels = self.in_texels.as_texels(<[u8; 3]>::texel());
+                let out_texels = self.out_texels.as_mut_texels(<[u8; 4]>::texel());
+                CommonPixel::shuffle_u8x3_to_u8x4(in_texels, out_texels, shuffle);
+                Some(())
+            }
+            (SampleBits::UInt8x4, SampleBits::UInt8x3)
+            | (SampleBits::Int8x4, SampleBits::Int8x3) => {
+                let in_texels = self.in_texels.as_texels(<[u8; 4]>::texel());
+                let out_texels = self.out_texels.as_mut_texels(<[u8; 3]>::texel());
+                let shuffle = [shuffle[0], shuffle[1], shuffle[2]];
+                CommonPixel::shuffle_u8x4_to_u8x3(in_texels, out_texels, shuffle);
+                Some(())
+            }
+
+            // Simple U16 cases.
+            (SampleBits::UInt16x4, SampleBits::UInt16x4)
+            | (SampleBits::Int16x4, SampleBits::Int16x4) => {
+                let in_texels = self.in_texels.as_mut_texels(<[u16; 4]>::texel());
+                let out_texels = self.out_texels.as_mut_texels(<[u16; 4]>::texel());
+                out_texels.copy_from_slice(in_texels);
+                CommonPixel::shuffle_u16x4(out_texels, shuffle);
+                Some(())
+            }
+            (SampleBits::UInt16x3, SampleBits::UInt16x4)
+            | (SampleBits::Int16x3, SampleBits::Int16x4) => {
+                let in_texels = self.in_texels.as_texels(<[u16; 3]>::texel());
+                let out_texels = self.out_texels.as_mut_texels(<[u16; 4]>::texel());
+                CommonPixel::shuffle_u16x3_to_u16x4(in_texels, out_texels, shuffle);
+                Some(())
+            }
+            (SampleBits::UInt16x4, SampleBits::UInt16x3)
+            | (SampleBits::Int16x4, SampleBits::Int16x3) => {
+                let in_texels = self.in_texels.as_texels(<[u16; 4]>::texel());
+                let out_texels = self.out_texels.as_mut_texels(<[u16; 3]>::texel());
+                let shuffle = [shuffle[0], shuffle[1], shuffle[2]];
+                CommonPixel::shuffle_u16x4_to_u16x3(in_texels, out_texels, shuffle);
+                Some(())
+            }
+            _ => None,
+        }
     }
 
     /// Choose iteration order of texels, fill with texels and then put them back.
@@ -961,21 +1075,47 @@ impl CommonPixel {
 
     /// For each pixel, in-place select from the existing channels at the index given by `idx`, or
     /// select a `0` if this index is out-of-range.
+    /// FIXME(perf): this should be chosen arch dependent.
     fn shuffle_u8x4(u8s: &mut [[u8; 4]], idx: [u8; 4]) {
         // Naive version. For some reason, LLVM does not figure this out as shuffle instructions.
         // Disappointing.
         for ch in u8s {
-            *ch = idx.map(|i| ch[(i & 3) as usize] & (i < 4) as u8);
+            *ch = idx.map(|i| ch[(i & 3) as usize] & as_u8mask(i < 4));
         }
     }
 
     /// For each pixel, in-place select from the existing channels at the index given by `idx`, or
     /// select a `0` if this index is out-of-range.
+    /// FIXME(perf): this should be chosen arch dependent.
     fn shuffle_u16x4(u8s: &mut [[u16; 4]], idx: [u8; 4]) {
         // Naive version. For some reason, LLVM does not figure this out as shuffle instructions.
         // Disappointing.
         for ch in u8s {
-            *ch = idx.map(|i| ch[(i & 3) as usize] & (i < 4) as u16);
+            *ch = idx.map(|i| ch[(i & 3) as usize] & as_u16mask(i < 4));
+        }
+    }
+
+    fn shuffle_u8x3_to_u8x4(u3: &[[u8; 3]], u4: &mut [[u8; 4]], idx: [u8; 4]) {
+        for (dst, src) in u4.iter_mut().zip(u3) {
+            *dst = idx.map(|i| src[i.min(2) as usize] & as_u8mask(i < 3));
+        }
+    }
+
+    fn shuffle_u8x4_to_u8x3(u4: &[[u8; 4]], u3: &mut [[u8; 3]], idx: [u8; 3]) {
+        for (dst, src) in u3.iter_mut().zip(u4) {
+            *dst = idx.map(|i| src[(i & 3) as usize] & as_u8mask(i < 4));
+        }
+    }
+
+    fn shuffle_u16x3_to_u16x4(u3: &[[u16; 3]], u4: &mut [[u16; 4]], idx: [u8; 4]) {
+        for (dst, src) in u4.iter_mut().zip(u3) {
+            *dst = idx.map(|i| src[i.min(2) as usize] & as_u16mask(i < 3));
+        }
+    }
+
+    fn shuffle_u16x4_to_u16x3(u4: &[[u16; 4]], u3: &mut [[u16; 3]], idx: [u8; 3]) {
+        for (dst, src) in u3.iter_mut().zip(u4) {
+            *dst = idx.map(|i| src[(i & 3) as usize] & as_u16mask(i < 4));
         }
     }
 
@@ -1241,6 +1381,14 @@ impl FromBits {
         be_bytes = newval.to_le_bytes();
         texel_bytes[..initlen].copy_from_slice(&be_bytes[..initlen]);
     }
+}
+
+fn as_u8mask(c: bool) -> u8 {
+    0u8.wrapping_sub(c as u8)
+}
+
+fn as_u16mask(c: bool) -> u16 {
+    0u16.wrapping_sub(c as u16)
 }
 
 impl TexelKind {
