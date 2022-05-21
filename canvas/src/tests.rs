@@ -195,3 +195,55 @@ fn shuffled_samples() -> Result<(), LayoutError> {
 
     Ok(())
 }
+
+#[test]
+fn drop_shuffled_samples() -> Result<(), LayoutError> {
+    let texel = Texel::new_u8(SampleParts::RgbA);
+    let source_layout = CanvasLayout::with_texel(&texel, 32, 32)?;
+    let texel = Texel::new_u8(SampleParts::Bgr);
+    let target_layout = CanvasLayout::with_texel(&texel, 32, 32)?;
+
+    let mut from = Canvas::new(source_layout);
+    from.set_color(Color::SRGB)?;
+    let mut into = Canvas::new(target_layout);
+    into.set_color(Color::SRGB)?;
+
+    from.as_texels_mut(<[u8; 4] as image_texel::AsTexel>::texel())
+        .iter_mut()
+        .for_each(|b| *b = [0x40, 0x41, 0x42, 0x43]);
+
+    from.convert(&mut into);
+
+    into.as_texels(<[u8; 3] as image_texel::AsTexel>::texel())
+        .iter()
+        .enumerate()
+        .for_each(|(idx, b)| assert_eq!(*b, [0x42, 0x41, 0x40], "at {}", idx));
+
+    Ok(())
+}
+
+#[test]
+fn expand_shuffled_samples() -> Result<(), LayoutError> {
+    let texel = Texel::new_u8(SampleParts::Rgb);
+    let source_layout = CanvasLayout::with_texel(&texel, 32, 32)?;
+    let texel = Texel::new_u8(SampleParts::BgrA);
+    let target_layout = CanvasLayout::with_texel(&texel, 32, 32)?;
+
+    let mut from = Canvas::new(source_layout);
+    from.set_color(Color::SRGB)?;
+    let mut into = Canvas::new(target_layout);
+    into.set_color(Color::SRGB)?;
+
+    from.as_texels_mut(<[u8; 3] as image_texel::AsTexel>::texel())
+        .iter_mut()
+        .for_each(|b| *b = [0x40, 0x41, 0x42]);
+
+    from.convert(&mut into);
+
+    into.as_texels(<[u8; 4] as image_texel::AsTexel>::texel())
+        .iter()
+        .enumerate()
+        .for_each(|(idx, b)| assert_eq!(*b, [0x42, 0x41, 0x40, 0x00], "at {}", idx));
+
+    Ok(())
+}

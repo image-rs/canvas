@@ -272,22 +272,19 @@ impl Converter {
                 return None;
             }
 
-            for ((_, common_pos), idx) in inp.channels().zip(0..4) {
-                ch_from_input[common_pos as usize] = idx;
+            for ((ch, common_pos), idx) in inp.channels().zip(0..4) {
+                if ch.is_some() {
+                    ch_from_input[common_pos as usize] = idx;
+                }
             }
 
-            for ((_, common_pos), idx) in outp.channels().zip(0..4) {
-                ch_from_common[idx] = common_pos;
+            for ((ch, common_pos), idx) in outp.channels().zip(0..4) {
+                if ch.is_some() {
+                    ch_from_common[idx] = ch_from_input[common_pos as usize];
+                }
             }
 
-            let shuffle = [0, 1, 2, 3]
-                .map(|i| {
-                    let i = *ch_from_common.get(i as usize)?;
-                    let idx_from_inp = *ch_from_input.get(i as usize)?;
-                    Some(idx_from_inp)
-                })
-                .map(|idx| idx.unwrap_or(0x80u8));
-            Some(shuffle)
+            Some(ch_from_common)
         }
 
         let in_texel = &info.in_layout.texel;
@@ -306,10 +303,44 @@ impl Converter {
                 CommonPixel::shuffle_u8x4(out_texels, shuffle);
                 Some(())
             }
+            (SampleBits::UInt8x3, SampleBits::UInt8x4)
+            | (SampleBits::Int8x3, SampleBits::Int8x4) => {
+                let in_texels = self.in_texels.as_texels(<[u8; 3]>::texel());
+                let out_texels = self.out_texels.as_mut_texels(<[u8; 4]>::texel());
+                CommonPixel::shuffle_u8x3_to_u8x4(in_texels, out_texels, shuffle);
+                Some(())
+            }
+            (SampleBits::UInt8x4, SampleBits::UInt8x3)
+            | (SampleBits::Int8x4, SampleBits::Int8x3) => {
+                let in_texels = self.in_texels.as_texels(<[u8; 4]>::texel());
+                let out_texels = self.out_texels.as_mut_texels(<[u8; 3]>::texel());
+                let shuffle = [shuffle[0], shuffle[1], shuffle[2]];
+                CommonPixel::shuffle_u8x4_to_u8x3(in_texels, out_texels, shuffle);
+                Some(())
+            }
+
+            // Simple U16 cases.
             (SampleBits::UInt16x4, SampleBits::UInt16x4)
             | (SampleBits::Int16x4, SampleBits::Int16x4) => {
-                let texels = self.out_texels.as_mut_texels(<[u16; 4]>::texel());
-                CommonPixel::shuffle_u16x4(texels, shuffle);
+                let in_texels = self.in_texels.as_mut_texels(<[u16; 4]>::texel());
+                let out_texels = self.out_texels.as_mut_texels(<[u16; 4]>::texel());
+                out_texels.copy_from_slice(in_texels);
+                CommonPixel::shuffle_u16x4(out_texels, shuffle);
+                Some(())
+            }
+            (SampleBits::UInt16x3, SampleBits::UInt16x4)
+            | (SampleBits::Int16x3, SampleBits::Int16x4) => {
+                let in_texels = self.in_texels.as_texels(<[u16; 3]>::texel());
+                let out_texels = self.out_texels.as_mut_texels(<[u16; 4]>::texel());
+                CommonPixel::shuffle_u16x3_to_u16x4(in_texels, out_texels, shuffle);
+                Some(())
+            }
+            (SampleBits::UInt16x4, SampleBits::UInt16x3)
+            | (SampleBits::Int16x4, SampleBits::Int16x3) => {
+                let in_texels = self.in_texels.as_texels(<[u16; 4]>::texel());
+                let out_texels = self.out_texels.as_mut_texels(<[u16; 3]>::texel());
+                let shuffle = [shuffle[0], shuffle[1], shuffle[2]];
+                CommonPixel::shuffle_u16x4_to_u16x3(in_texels, out_texels, shuffle);
                 Some(())
             }
             _ => None,
@@ -1046,14 +1077,10 @@ impl CommonPixel {
     /// select a `0` if this index is out-of-range.
     /// FIXME(perf): this should be chosen arch dependent.
     fn shuffle_u8x4(u8s: &mut [[u8; 4]], idx: [u8; 4]) {
-        fn as_mask(c: bool) -> u8 {
-            0u8.wrapping_sub(c as u8)
-        }
-
         // Naive version. For some reason, LLVM does not figure this out as shuffle instructions.
         // Disappointing.
         for ch in u8s {
-            *ch = idx.map(|i| ch[(i & 3) as usize] & as_mask(i < 4));
+            *ch = idx.map(|i| ch[(i & 3) as usize] & as_u8mask(i < 4));
         }
     }
 
@@ -1061,14 +1088,34 @@ impl CommonPixel {
     /// select a `0` if this index is out-of-range.
     /// FIXME(perf): this should be chosen arch dependent.
     fn shuffle_u16x4(u8s: &mut [[u16; 4]], idx: [u8; 4]) {
-        fn as_mask(c: bool) -> u16 {
-            0u16.wrapping_sub(c as u16)
-        }
-
         // Naive version. For some reason, LLVM does not figure this out as shuffle instructions.
         // Disappointing.
         for ch in u8s {
-            *ch = idx.map(|i| ch[(i & 3) as usize] & as_mask(i < 4));
+            *ch = idx.map(|i| ch[(i & 3) as usize] & as_u16mask(i < 4));
+        }
+    }
+
+    fn shuffle_u8x3_to_u8x4(u3: &[[u8; 3]], u4: &mut [[u8; 4]], idx: [u8; 4]) {
+        for (dst, src) in u4.iter_mut().zip(u3) {
+            *dst = idx.map(|i| src[i.min(2) as usize] & as_u8mask(i < 3));
+        }
+    }
+
+    fn shuffle_u8x4_to_u8x3(u4: &[[u8; 4]], u3: &mut [[u8; 3]], idx: [u8; 3]) {
+        for (dst, src) in u3.iter_mut().zip(u4) {
+            *dst = idx.map(|i| src[(i & 3) as usize] & as_u8mask(i < 4));
+        }
+    }
+
+    fn shuffle_u16x3_to_u16x4(u3: &[[u16; 3]], u4: &mut [[u16; 4]], idx: [u8; 4]) {
+        for (dst, src) in u4.iter_mut().zip(u3) {
+            *dst = idx.map(|i| src[i.min(2) as usize] & as_u16mask(i < 3));
+        }
+    }
+
+    fn shuffle_u16x4_to_u16x3(u4: &[[u16; 4]], u3: &mut [[u16; 3]], idx: [u8; 3]) {
+        for (dst, src) in u3.iter_mut().zip(u4) {
+            *dst = idx.map(|i| src[(i & 3) as usize] & as_u16mask(i < 4));
         }
     }
 
@@ -1334,6 +1381,14 @@ impl FromBits {
         be_bytes = newval.to_le_bytes();
         texel_bytes[..initlen].copy_from_slice(&be_bytes[..initlen]);
     }
+}
+
+fn as_u8mask(c: bool) -> u8 {
+    0u8.wrapping_sub(c as u8)
+}
+
+fn as_u16mask(c: bool) -> u16 {
+    0u16.wrapping_sub(c as u16)
 }
 
 impl TexelKind {
