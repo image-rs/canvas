@@ -86,6 +86,8 @@ pub(crate) mod constants {
         (I64, i64),
         (U64, u64),
         (F64, f64),
+        (USIZE, usize),
+        (ISIZE, isize),
         (MAX, MaxAligned)
     );
 

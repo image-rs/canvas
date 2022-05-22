@@ -7,6 +7,8 @@ use image_texel::layout::{
     TexelLayout,
 };
 
+use crate::shader::ChunkSpec;
+
 /// The byte layout of a buffer.
 ///
 /// An inner invariant is that the layout fits in memory, and in particular into a `usize`, while
@@ -736,29 +738,64 @@ impl CanvasLayout {
         byte_index / u64::from(bytes_per_texel)
     }
 
-    pub(crate) fn fill_texel_indices_impl(&self, idx: &mut [usize], iter: &[Coord]) {
-        match self.texel.bits.bytes() {
-            0 => unreachable!("No texel with zero bytes"),
-            _ if self.bytes.bytes_per_row % self.texel.bits.bytes() as u32 == 0 => {
-                let pitch = self.bytes.bytes_per_row / self.texel.bits.bytes() as u32;
-                return Self::fill_indices_constant_size(idx, iter, pitch);
-            }
-            // FIXME(perf): do we need common divisors? perf shows that a significant time is spent
-            // on division by `bytes_per_texel` but the common cases (1, 2, 3, 4, 8, etc) should
-            // all optimize a lot better.
-            _ => {}
+    pub(crate) fn fill_texel_indices_impl(
+        &self,
+        idx: &mut [usize],
+        iter: &[Coord],
+        chunk: ChunkSpec,
+    ) {
+        if self.texel.bits.bytes() == 0 {
+            unreachable!("No texel with zero bytes");
         }
 
+        if self.bytes.bytes_per_row % self.texel.bits.bytes() as u32 == 0 {
+            let pitch = self.bytes.bytes_per_row / self.texel.bits.bytes() as u32;
+            return Self::fill_indices_constant_size(idx, iter, pitch, chunk);
+        }
+
+        // FIXME(perf): do we need common divisors? perf shows that a significant time is spent
+        // on division by `bytes_per_texel` but the common cases (1, 2, 3, 4, 8, etc) should
+        // all optimize a lot better.
+
+        // Fallback, actually generate everything by hard.
         for (&Coord(x, y), idx) in iter.iter().zip(idx) {
             *idx = self.texel_index(x, y) as usize;
         }
     }
 
-    fn fill_indices_constant_size(idx: &mut [usize], iter: &[Coord], pitch: u32) {
+    fn fill_indices_constant_size(idx: &mut [usize], iter: &[Coord], pitch: u32, spec: ChunkSpec) {
         let pitch = u64::from(pitch);
-        for (&Coord(x, y), idx) in iter.iter().zip(idx) {
-            let texindex = u64::from(x) * pitch + u64::from(y);
-            *idx = texindex as usize;
+        let mut idx = idx.chunks_mut(spec.chunk_size);
+        let mut iter = iter.chunks(spec.chunk_size);
+
+        for chunk_spec in spec.chunks {
+            let (idx, iter) = match (idx.next(), iter.next()) {
+                (Some(idx), Some(iter)) => (idx, iter),
+                _ => break,
+            };
+
+            for (&Coord(x, y), idx) in iter.iter().zip(&mut idx[..]) {
+                let texindex = u64::from(x) * pitch + u64::from(y);
+                *idx = texindex as usize;
+            }
+
+            if spec.should_defer_texel_ops {
+                let contiguous_start = idx
+                    .windows(2)
+                    .map(|wnd| {
+                        if wnd[1].saturating_sub(wnd[0]) == 1 {
+                            Some(wnd[0])
+                        } else {
+                            None
+                        }
+                    })
+                    .min()
+                    .unwrap_or(None);
+
+                if let Some(start) = contiguous_start {
+                    *chunk_spec = [start, idx.len()];
+                }
+            }
         }
     }
 
