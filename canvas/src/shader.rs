@@ -156,6 +156,10 @@ struct ConvertOps {
     /// Well-define bit/byte/channel shuffle operations on common texel combinations.
     shuffle: ShuffleOps,
 
+    // Ops that are available, dynamically.
+    /// Simple int-shuffles, avoiding color decoding.
+    int_shuffle: Option<IntShuffleOps>,
+
     should_defer_texel_read: bool,
     should_defer_texel_write: bool,
 }
@@ -174,6 +178,11 @@ struct ShuffleOps {
 struct RecolorOps {
     from: fn(&Info, &TexelBuffer, &mut TexelBuffer),
     into: fn(&Info, &TexelBuffer, &mut TexelBuffer),
+}
+
+struct IntShuffleOps {
+    call: fn(&mut Converter, &ConvertOps, [u8; 4]),
+    shuffle: [u8; 4],
 }
 
 struct SuperTexel {
@@ -235,26 +244,47 @@ impl Converter {
             out_kind: TexelKind::from(frame_out.layout().texel.bits),
         };
 
+        let recolor = Self::recolor_ops(frame_in.layout(), frame_out.layout());
+        let int_shuffle = self
+            .convert_intbuf_with_nocolor_ops(&info)
+            .filter(|_| recolor.is_none());
+
         let ops = ConvertOps {
             in_index: Self::index_from_in_info,
             out_index: Self::index_from_out_info,
             expand: CommonPixel::expand_from_info,
-            recolor: Self::recolor_ops(frame_in.layout(), frame_out.layout()),
+            recolor,
             join: CommonPixel::join_from_info,
             // FIXME(perf): implement and choose arch-specific shuffles.
             shuffle: ShuffleOps::default(),
+
+            int_shuffle,
+
             should_defer_texel_read: false,
             should_defer_texel_write: false,
         };
 
-        // Check that the layout is accurate..
-        self.with_filled_texels(
-            |that, fi, fo| that.convert_texelbuf_with_ops(&info, &ops, fi, fo),
-            &info,
-            &ops,
-            frame_in,
-            frame_out,
-        )
+        // Choose how we actually perform conversion.
+        let mut convert_texelbuf_with_ops;
+        let mut convert_with_intshuffle;
+        let convert_with: &mut dyn FnMut(&mut Self, &mut [PlaneSource], &mut [PlaneTarget]) = {
+            if let Some(int_ops) = &ops.int_shuffle {
+                convert_with_intshuffle =
+                    |that: &mut Self, _: &mut [PlaneSource], _: &mut [PlaneTarget]| {
+                        (int_ops.call)(that, &ops, int_ops.shuffle)
+                    };
+                &mut convert_with_intshuffle
+            } else {
+                convert_texelbuf_with_ops =
+                    |that: &mut Self, fi: &mut [PlaneSource], fo: &mut [PlaneTarget]| {
+                        that.convert_texelbuf_with_ops(&info, &ops, fi, fo)
+                    };
+
+                &mut convert_texelbuf_with_ops
+            }
+        };
+
+        self.with_filled_texels(convert_with, &info, &ops, frame_in, frame_out)
     }
 
     /// Convert all loaded texels, using the provided `ConvertOps` as dynamic function selection.
@@ -269,12 +299,6 @@ impl Converter {
         frame_in: &mut [PlaneSource],
         frame_out: &mut [PlaneTarget],
     ) {
-        if ops.recolor.is_none() {
-            if let Some(_) = self.convert_intbuf_with_nocolor_ops(info, ops) {
-                return;
-            }
-        }
-
         (ops.expand)(
             &info,
             ops,
@@ -306,7 +330,7 @@ impl Converter {
     ///
     /// This avoids expanding them into `pixel_in_buffer` where they'd be represented as `f32x4`
     /// and thus undergo an expensive `u8->f32->u8` cast chain.
-    fn convert_intbuf_with_nocolor_ops(&mut self, info: &Info, ops: &ConvertOps) -> Option<()> {
+    fn convert_intbuf_with_nocolor_ops(&mut self, info: &Info) -> Option<IntShuffleOps> {
         fn determine_shuffle(inp: SampleParts, outp: SampleParts) -> Option<[u8; 4]> {
             let mut ch_from_common = [0x80u8; 4];
             let mut ch_from_input = [0x80u8; 4];
@@ -343,61 +367,72 @@ impl Converter {
         let in_texel = &info.in_layout.texel;
         let out_texel = &info.out_layout.texel;
 
+        // We can't handle color conversion inside the shuffles.
+        if info.in_layout.color != info.out_layout.color {
+            return None;
+        }
+
         let shuffle = determine_shuffle(in_texel.parts, out_texel.parts)?;
 
-        // This should have been checked previous.
-        debug_assert!(info.in_layout.color == info.out_layout.color);
-        match (in_texel.bits, out_texel.bits) {
+        fn shuffle_int8x4(that: &mut Converter, ops: &ConvertOps, shuffle: [u8; 4]) {
+            let in_texels = that.in_texels.as_texels(<[u8; 4]>::texel());
+            let out_texels = that.out_texels.as_mut_texels(<[u8; 4]>::texel());
+            out_texels.copy_from_slice(in_texels);
+            (ops.shuffle.shuffle_u8x4)(out_texels, shuffle);
+        }
+
+        fn shuffle_int8x3_int8x4(that: &mut Converter, ops: &ConvertOps, shuffle: [u8; 4]) {
+            let in_texels = that.in_texels.as_texels(<[u8; 3]>::texel());
+            let out_texels = that.out_texels.as_mut_texels(<[u8; 4]>::texel());
+            (ops.shuffle.shuffle_u8x3_to_u8x4)(in_texels, out_texels, shuffle);
+        }
+
+        fn shuffle_int8x4_int8x3(that: &mut Converter, ops: &ConvertOps, shuffle: [u8; 4]) {
+            let in_texels = that.in_texels.as_texels(<[u8; 4]>::texel());
+            let out_texels = that.out_texels.as_mut_texels(<[u8; 3]>::texel());
+            let shuffle = [shuffle[0], shuffle[1], shuffle[2]];
+            (ops.shuffle.shuffle_u8x4_to_u8x3)(in_texels, out_texels, shuffle);
+        }
+
+        fn shuffle_int16x4(that: &mut Converter, ops: &ConvertOps, shuffle: [u8; 4]) {
+            let in_texels = that.in_texels.as_mut_texels(<[u16; 4]>::texel());
+            let out_texels = that.out_texels.as_mut_texels(<[u16; 4]>::texel());
+            out_texels.copy_from_slice(in_texels);
+            (ops.shuffle.shuffle_u16x4)(out_texels, shuffle);
+        }
+
+        fn shuffle_int16x3_int16x4(that: &mut Converter, ops: &ConvertOps, shuffle: [u8; 4]) {
+            let in_texels = that.in_texels.as_texels(<[u16; 3]>::texel());
+            let out_texels = that.out_texels.as_mut_texels(<[u16; 4]>::texel());
+            (ops.shuffle.shuffle_u16x3_to_u16x4)(in_texels, out_texels, shuffle);
+        }
+
+        fn shuffle_int16x4_int16x3(that: &mut Converter, ops: &ConvertOps, shuffle: [u8; 4]) {
+            let in_texels = that.in_texels.as_texels(<[u16; 4]>::texel());
+            let out_texels = that.out_texels.as_mut_texels(<[u16; 3]>::texel());
+            let shuffle = [shuffle[0], shuffle[1], shuffle[2]];
+            (ops.shuffle.shuffle_u16x4_to_u16x3)(in_texels, out_texels, shuffle);
+        }
+
+        let call = match (in_texel.bits, out_texel.bits) {
             (SampleBits::UInt8x4, SampleBits::UInt8x4)
-            | (SampleBits::Int8x4, SampleBits::Int8x4) => {
-                let in_texels = self.in_texels.as_texels(<[u8; 4]>::texel());
-                let out_texels = self.out_texels.as_mut_texels(<[u8; 4]>::texel());
-                out_texels.copy_from_slice(in_texels);
-                (ops.shuffle.shuffle_u8x4)(out_texels, shuffle);
-                Some(())
-            }
+            | (SampleBits::Int8x4, SampleBits::Int8x4) => shuffle_int8x4,
             (SampleBits::UInt8x3, SampleBits::UInt8x4)
-            | (SampleBits::Int8x3, SampleBits::Int8x4) => {
-                let in_texels = self.in_texels.as_texels(<[u8; 3]>::texel());
-                let out_texels = self.out_texels.as_mut_texels(<[u8; 4]>::texel());
-                (ops.shuffle.shuffle_u8x3_to_u8x4)(in_texels, out_texels, shuffle);
-                Some(())
-            }
+            | (SampleBits::Int8x3, SampleBits::Int8x4) => shuffle_int8x3_int8x4,
             (SampleBits::UInt8x4, SampleBits::UInt8x3)
-            | (SampleBits::Int8x4, SampleBits::Int8x3) => {
-                let in_texels = self.in_texels.as_texels(<[u8; 4]>::texel());
-                let out_texels = self.out_texels.as_mut_texels(<[u8; 3]>::texel());
-                let shuffle = [shuffle[0], shuffle[1], shuffle[2]];
-                (ops.shuffle.shuffle_u8x4_to_u8x3)(in_texels, out_texels, shuffle);
-                Some(())
-            }
+            | (SampleBits::Int8x4, SampleBits::Int8x3) => shuffle_int8x4_int8x3,
 
             // Simple U16 cases.
             (SampleBits::UInt16x4, SampleBits::UInt16x4)
-            | (SampleBits::Int16x4, SampleBits::Int16x4) => {
-                let in_texels = self.in_texels.as_mut_texels(<[u16; 4]>::texel());
-                let out_texels = self.out_texels.as_mut_texels(<[u16; 4]>::texel());
-                out_texels.copy_from_slice(in_texels);
-                (ops.shuffle.shuffle_u16x4)(out_texels, shuffle);
-                Some(())
-            }
+            | (SampleBits::Int16x4, SampleBits::Int16x4) => shuffle_int16x4,
             (SampleBits::UInt16x3, SampleBits::UInt16x4)
-            | (SampleBits::Int16x3, SampleBits::Int16x4) => {
-                let in_texels = self.in_texels.as_texels(<[u16; 3]>::texel());
-                let out_texels = self.out_texels.as_mut_texels(<[u16; 4]>::texel());
-                (ops.shuffle.shuffle_u16x3_to_u16x4)(in_texels, out_texels, shuffle);
-                Some(())
-            }
+            | (SampleBits::Int16x3, SampleBits::Int16x4) => shuffle_int16x3_int16x4,
             (SampleBits::UInt16x4, SampleBits::UInt16x3)
-            | (SampleBits::Int16x4, SampleBits::Int16x3) => {
-                let in_texels = self.in_texels.as_texels(<[u16; 4]>::texel());
-                let out_texels = self.out_texels.as_mut_texels(<[u16; 3]>::texel());
-                let shuffle = [shuffle[0], shuffle[1], shuffle[2]];
-                (ops.shuffle.shuffle_u16x4_to_u16x3)(in_texels, out_texels, shuffle);
-                Some(())
-            }
-            _ => None,
-        }
+            | (SampleBits::Int16x4, SampleBits::Int16x3) => shuffle_int16x4_int16x3,
+            _ => return None,
+        };
+
+        Some(IntShuffleOps { call, shuffle })
     }
 
     /// Choose iteration order of texels, fill with texels and then put them back.
@@ -1295,7 +1330,7 @@ impl CommonPixel {
         }
     }
 
-    fn join_yuv422(info: &Info, pixel_buf: &TexelBuffer, out_texels: &mut TexelBuffer) {
+    fn join_yuv422(_: &Info, _: &TexelBuffer, _: &mut TexelBuffer) {
         // FIXME(color): actually implement this..
         debug_assert!(false);
     }
