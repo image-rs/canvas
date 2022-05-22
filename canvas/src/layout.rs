@@ -793,7 +793,7 @@ impl CanvasLayout {
                     .unwrap_or(None);
 
                 if let Some(start) = contiguous_start {
-                    *chunk_spec = [start, 0];
+                    *chunk_spec = [start, idx.len()];
                 }
             }
         }

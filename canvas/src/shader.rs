@@ -159,7 +159,10 @@ struct ConvertOps {
     // Ops that are available, dynamically.
     /// Simple int-shuffles, avoiding color decoding.
     int_shuffle: Option<IntShuffleOps>,
+}
 
+struct TexelConvertWith<'lt> {
+    ops: &'lt mut dyn FnMut(&mut Converter, &mut [PlaneSource], &mut [PlaneTarget]),
     should_defer_texel_read: bool,
     should_defer_texel_write: bool,
 }
@@ -181,8 +184,10 @@ struct RecolorOps {
 }
 
 struct IntShuffleOps {
-    call: fn(&mut Converter, &ConvertOps, [u8; 4]),
+    call: fn(&mut Converter, &ConvertOps, [u8; 4], &[PlaneSource], &mut [PlaneTarget]),
     shuffle: [u8; 4],
+    should_defer_texel_read: bool,
+    should_defer_texel_write: bool,
 }
 
 struct SuperTexel {
@@ -259,28 +264,33 @@ impl Converter {
             shuffle: ShuffleOps::default(),
 
             int_shuffle,
-
-            should_defer_texel_read: false,
-            should_defer_texel_write: false,
         };
 
         // Choose how we actually perform conversion.
         let mut convert_texelbuf_with_ops;
         let mut convert_with_intshuffle;
-        let convert_with: &mut dyn FnMut(&mut Self, &mut [PlaneSource], &mut [PlaneTarget]) = {
+        let convert_with: TexelConvertWith = {
             if let Some(int_ops) = &ops.int_shuffle {
                 convert_with_intshuffle =
-                    |that: &mut Self, _: &mut [PlaneSource], _: &mut [PlaneTarget]| {
-                        (int_ops.call)(that, &ops, int_ops.shuffle)
+                    |that: &mut Self, fi: &mut [PlaneSource], fo: &mut [PlaneTarget]| {
+                        (int_ops.call)(that, &ops, int_ops.shuffle, fi, fo)
                     };
-                &mut convert_with_intshuffle
+                TexelConvertWith {
+                    ops: &mut convert_with_intshuffle,
+                    should_defer_texel_read: int_ops.should_defer_texel_read,
+                    should_defer_texel_write: int_ops.should_defer_texel_write,
+                }
             } else {
                 convert_texelbuf_with_ops =
                     |that: &mut Self, fi: &mut [PlaneSource], fo: &mut [PlaneTarget]| {
                         that.convert_texelbuf_with_ops(&info, &ops, fi, fo)
                     };
 
-                &mut convert_texelbuf_with_ops
+                TexelConvertWith {
+                    ops: &mut convert_texelbuf_with_ops,
+                    should_defer_texel_read: false,
+                    should_defer_texel_write: false,
+                }
             }
         };
 
@@ -374,71 +384,153 @@ impl Converter {
 
         let shuffle = determine_shuffle(in_texel.parts, out_texel.parts)?;
 
-        fn shuffle_int8x4(that: &mut Converter, ops: &ConvertOps, shuffle: [u8; 4]) {
-            let in_texels = that.in_texels.as_texels(<[u8; 4]>::texel());
-            let out_texels = that.out_texels.as_mut_texels(<[u8; 4]>::texel());
-            out_texels.copy_from_slice(in_texels);
-            (ops.shuffle.shuffle_u8x4)(out_texels, shuffle);
+        trait Shuffle<T, const N: usize, const M: usize> {
+            fn run(_: &ConvertOps, _: &[[T; N]], _: &mut [[T; M]], _: [u8; 4]);
         }
 
-        fn shuffle_int8x3_int8x4(that: &mut Converter, ops: &ConvertOps, shuffle: [u8; 4]) {
-            let in_texels = that.in_texels.as_texels(<[u8; 3]>::texel());
-            let out_texels = that.out_texels.as_mut_texels(<[u8; 4]>::texel());
-            (ops.shuffle.shuffle_u8x3_to_u8x4)(in_texels, out_texels, shuffle);
+        fn shuffle_with_texel<T, S: Shuffle<T, N, M>, const N: usize, const M: usize>(
+            that: &mut Converter,
+            ops: &ConvertOps,
+            shuffle: [u8; 4],
+            source: &[PlaneSource],
+            target: &mut [PlaneTarget],
+        ) where
+            T: AsTexel,
+        {
+            let in_texel = T::texel().array::<N>();
+            let out_texel = T::texel().array::<M>();
+
+            let source_texels = source[0].as_texels(in_texel);
+            let target_texels = target[0].as_mut_texels(out_texel);
+
+            let in_texels = that.in_texels.as_texels(in_texel);
+            let out_texels = that.out_texels.as_mut_texels(out_texel);
+
+            let chunk_texel = <[usize; 2]>::texel();
+
+            let in_slices = that.in_slices.as_mut_texels(chunk_texel).iter_mut();
+            let out_slices = that.out_slices.as_mut_texels(chunk_texel).iter_mut();
+            let chunks = (0..in_texels.len()).step_by(that.chunk);
+
+            for ((islice, oslice), chunk_start) in in_slices.zip(out_slices).zip(chunks) {
+                let length = in_texels[chunk_start..].len().min(that.chunk);
+
+                let input_slice = if islice[1] > 0 {
+                    debug_assert!(length == islice[1]);
+                    let length = core::mem::replace(&mut islice[1], 0);
+                    &source_texels[islice[0]..][..length]
+                } else {
+                    &in_texels[chunk_start..][..length]
+                };
+
+                let output_slice = if oslice[1] > 0 {
+                    debug_assert!(length == oslice[1]);
+                    let length = core::mem::replace(&mut oslice[1], 0);
+                    &mut target_texels[oslice[0]..][..length]
+                } else {
+                    &mut out_texels[chunk_start..][..length]
+                };
+
+                S::run(ops, input_slice, output_slice, shuffle)
+            }
         }
 
-        fn shuffle_int8x4_int8x3(that: &mut Converter, ops: &ConvertOps, shuffle: [u8; 4]) {
-            let in_texels = that.in_texels.as_texels(<[u8; 4]>::texel());
-            let out_texels = that.out_texels.as_mut_texels(<[u8; 3]>::texel());
-            let shuffle = [shuffle[0], shuffle[1], shuffle[2]];
-            (ops.shuffle.shuffle_u8x4_to_u8x3)(in_texels, out_texels, shuffle);
+        struct ShuffleInt8;
+        struct ShuffleInt16;
+
+        impl Shuffle<u8, 4, 4> for ShuffleInt8 {
+            fn run(ops: &ConvertOps, inp: &[[u8; 4]], outp: &mut [[u8; 4]], shuffle: [u8; 4]) {
+                outp.copy_from_slice(inp);
+                (ops.shuffle.shuffle_u8x4)(outp, shuffle);
+            }
         }
 
-        fn shuffle_int16x4(that: &mut Converter, ops: &ConvertOps, shuffle: [u8; 4]) {
-            let in_texels = that.in_texels.as_mut_texels(<[u16; 4]>::texel());
-            let out_texels = that.out_texels.as_mut_texels(<[u16; 4]>::texel());
-            out_texels.copy_from_slice(in_texels);
-            (ops.shuffle.shuffle_u16x4)(out_texels, shuffle);
+        impl Shuffle<u8, 3, 4> for ShuffleInt8 {
+            fn run(ops: &ConvertOps, inp: &[[u8; 3]], outp: &mut [[u8; 4]], shuffle: [u8; 4]) {
+                (ops.shuffle.shuffle_u8x3_to_u8x4)(inp, outp, shuffle);
+            }
         }
 
-        fn shuffle_int16x3_int16x4(that: &mut Converter, ops: &ConvertOps, shuffle: [u8; 4]) {
-            let in_texels = that.in_texels.as_texels(<[u16; 3]>::texel());
-            let out_texels = that.out_texels.as_mut_texels(<[u16; 4]>::texel());
-            (ops.shuffle.shuffle_u16x3_to_u16x4)(in_texels, out_texels, shuffle);
+        impl Shuffle<u8, 4, 3> for ShuffleInt8 {
+            fn run(ops: &ConvertOps, inp: &[[u8; 4]], outp: &mut [[u8; 3]], shuffle: [u8; 4]) {
+                let shuffle = [shuffle[0], shuffle[1], shuffle[2]];
+                (ops.shuffle.shuffle_u8x4_to_u8x3)(inp, outp, shuffle);
+            }
         }
 
-        fn shuffle_int16x4_int16x3(that: &mut Converter, ops: &ConvertOps, shuffle: [u8; 4]) {
-            let in_texels = that.in_texels.as_texels(<[u16; 4]>::texel());
-            let out_texels = that.out_texels.as_mut_texels(<[u16; 3]>::texel());
-            let shuffle = [shuffle[0], shuffle[1], shuffle[2]];
-            (ops.shuffle.shuffle_u16x4_to_u16x3)(in_texels, out_texels, shuffle);
+        impl Shuffle<u16, 4, 4> for ShuffleInt16 {
+            fn run(ops: &ConvertOps, inp: &[[u16; 4]], outp: &mut [[u16; 4]], shuffle: [u8; 4]) {
+                outp.copy_from_slice(inp);
+                (ops.shuffle.shuffle_u16x4)(outp, shuffle);
+            }
         }
 
-        let call = match (in_texel.bits, out_texel.bits) {
+        impl Shuffle<u16, 3, 4> for ShuffleInt16 {
+            fn run(ops: &ConvertOps, inp: &[[u16; 3]], outp: &mut [[u16; 4]], shuffle: [u8; 4]) {
+                (ops.shuffle.shuffle_u16x3_to_u16x4)(inp, outp, shuffle);
+            }
+        }
+
+        impl Shuffle<u16, 4, 3> for ShuffleInt16 {
+            fn run(ops: &ConvertOps, inp: &[[u16; 4]], outp: &mut [[u16; 3]], shuffle: [u8; 4]) {
+                let shuffle = [shuffle[0], shuffle[1], shuffle[2]];
+                (ops.shuffle.shuffle_u16x4_to_u16x3)(inp, outp, shuffle);
+            }
+        }
+
+        Some(match (in_texel.bits, out_texel.bits) {
             (SampleBits::UInt8x4, SampleBits::UInt8x4)
-            | (SampleBits::Int8x4, SampleBits::Int8x4) => shuffle_int8x4,
+            | (SampleBits::Int8x4, SampleBits::Int8x4) => IntShuffleOps {
+                call: shuffle_with_texel::<u8, ShuffleInt8, 4, 4>,
+                shuffle,
+                should_defer_texel_read: true,
+                should_defer_texel_write: true,
+            },
             (SampleBits::UInt8x3, SampleBits::UInt8x4)
-            | (SampleBits::Int8x3, SampleBits::Int8x4) => shuffle_int8x3_int8x4,
+            | (SampleBits::Int8x3, SampleBits::Int8x4) => IntShuffleOps {
+                call: shuffle_with_texel::<u8, ShuffleInt8, 3, 4>,
+                shuffle,
+                should_defer_texel_read: true,
+                should_defer_texel_write: true,
+            },
             (SampleBits::UInt8x4, SampleBits::UInt8x3)
-            | (SampleBits::Int8x4, SampleBits::Int8x3) => shuffle_int8x4_int8x3,
+            | (SampleBits::Int8x4, SampleBits::Int8x3) => IntShuffleOps {
+                call: shuffle_with_texel::<u8, ShuffleInt8, 4, 3>,
+                shuffle,
+                should_defer_texel_read: true,
+                should_defer_texel_write: true,
+            },
 
             // Simple U16 cases.
             (SampleBits::UInt16x4, SampleBits::UInt16x4)
-            | (SampleBits::Int16x4, SampleBits::Int16x4) => shuffle_int16x4,
+            | (SampleBits::Int16x4, SampleBits::Int16x4) => IntShuffleOps {
+                call: shuffle_with_texel::<u16, ShuffleInt16, 4, 4>,
+                shuffle,
+                should_defer_texel_read: true,
+                should_defer_texel_write: true,
+            },
             (SampleBits::UInt16x3, SampleBits::UInt16x4)
-            | (SampleBits::Int16x3, SampleBits::Int16x4) => shuffle_int16x3_int16x4,
+            | (SampleBits::Int16x3, SampleBits::Int16x4) => IntShuffleOps {
+                call: shuffle_with_texel::<u16, ShuffleInt16, 3, 4>,
+                shuffle,
+                should_defer_texel_read: true,
+                should_defer_texel_write: true,
+            },
             (SampleBits::UInt16x4, SampleBits::UInt16x3)
-            | (SampleBits::Int16x4, SampleBits::Int16x3) => shuffle_int16x4_int16x3,
+            | (SampleBits::Int16x4, SampleBits::Int16x3) => IntShuffleOps {
+                call: shuffle_with_texel::<u16, ShuffleInt16, 4, 3>,
+                shuffle,
+                should_defer_texel_read: true,
+                should_defer_texel_write: true,
+            },
             _ => return None,
-        };
-
-        Some(IntShuffleOps { call, shuffle })
+        })
     }
 
     /// Choose iteration order of texels, fill with texels and then put them back.
     fn with_filled_texels(
         &mut self,
-        mut texel_conversion: impl FnMut(&mut Self, &mut [PlaneSource], &mut [PlaneTarget]),
+        texel_conversion: TexelConvertWith,
         info: &Info,
         ops: &ConvertOps,
         frame_in: &Canvas,
@@ -463,17 +555,17 @@ impl Converter {
                 break;
             }
 
-            self.generate_coords(info, ops, &sb_x, &sb_y);
+            self.generate_coords(info, ops, &texel_conversion, &sb_x, &sb_y);
             self.reserve_buffers(info, ops);
             // FIXME(planar): should be repeated for all planes?
-            self.read_texels(info, ops, frame_in.as_ref());
+            self.read_texels(info, ops, &texel_conversion, frame_in.as_ref());
 
             let mut frame_in = frame_in.as_ref();
             let mut frame_out = frame_out.as_mut();
-            texel_conversion(self, from_mut(&mut frame_in), from_mut(&mut frame_out));
+            (texel_conversion.ops)(self, from_mut(&mut frame_in), from_mut(&mut frame_out));
 
             // FIXME(planar): should be repeated for all planes?
-            self.write_texels(info, ops, frame_out);
+            self.write_texels(info, ops, &texel_conversion, frame_out);
         }
     }
 
@@ -507,6 +599,7 @@ impl Converter {
         &mut self,
         info: &Info,
         ops: &ConvertOps,
+        converter: &TexelConvertWith,
         sb_x: &SuperTexel,
         sb_y: &SuperTexel,
     ) {
@@ -558,13 +651,13 @@ impl Converter {
         let in_chunk = ChunkSpec {
             chunks: self.in_slices.as_mut_texels(chunk_texel),
             chunk_size: self.chunk,
-            should_defer_texel_ops: ops.should_defer_texel_read,
+            should_defer_texel_ops: converter.should_defer_texel_read,
         };
 
         let out_chunk = ChunkSpec {
             chunks: self.out_slices.as_mut_texels(chunk_texel),
             chunk_size: self.chunk,
-            should_defer_texel_ops: ops.should_defer_texel_write,
+            should_defer_texel_ops: converter.should_defer_texel_write,
         };
 
         (ops.in_index)(&info, &self.in_coords, &mut self.in_index_list, in_chunk);
@@ -611,7 +704,13 @@ impl Converter {
         }
     }
 
-    fn read_texels(&mut self, info: &Info, ops: &ConvertOps, from: PlaneSource) {
+    fn read_texels(
+        &mut self,
+        info: &Info,
+        _: &ConvertOps,
+        converter: &TexelConvertWith,
+        from: PlaneSource,
+    ) {
         fn fetch_from_texel_array<T>(
             from: &PlaneSource,
             idx: &[usize],
@@ -645,7 +744,7 @@ impl Converter {
             }
         }
 
-        if ops.should_defer_texel_read {
+        if converter.should_defer_texel_read {
             /* For deferred reading, we expect some functions to do the transfer for us allowing us
              * to leave the source texel blank, uninitialized, or in an otherwise unreadable state.
              * We should skip them. The protocol here is that each chunk has two indices; the index
@@ -658,14 +757,22 @@ impl Converter {
             let range = (0..self.in_index_list.len()).step_by(self.chunk);
 
             for (chunk, (indexes, start)) in chunks.iter_mut().zip(indexes.zip(range)) {
-                let [_, written] = chunk;
+                let [_, available] = chunk;
+
+                if *available == indexes.len() {
+                    continue;
+                }
+
+                // Only use the input frame if all indexes are available in the layout.
+                // For this reason read all texels individually into the texel buffer otherwise and
+                // the indicate that no texels are available from the layout.
+                *available = 0;
                 info.in_kind.action(ReadUnit {
                     from: &from,
                     idx: &self.in_index_list,
                     into: &mut self.in_texels,
                     range: start..start + indexes.len(),
                 });
-                *written = indexes.len();
             }
         } else {
             info.in_kind.action(ReadUnit {
@@ -679,7 +786,13 @@ impl Converter {
 
     /// The job of this function is transferring texel information onto the target plane.
     ///
-    fn write_texels(&mut self, info: &Info, ops: &ConvertOps, mut into: PlaneTarget) {
+    fn write_texels(
+        &mut self,
+        info: &Info,
+        _: &ConvertOps,
+        converter: &TexelConvertWith,
+        mut into: PlaneTarget,
+    ) {
         fn write_from_texel_array<T>(
             into: &mut PlaneTarget,
             idx: &[usize],
@@ -712,8 +825,7 @@ impl Converter {
             }
         }
 
-        // FIXME(perf): relax chunk count..
-        if ops.should_defer_texel_write {
+        if converter.should_defer_texel_write {
             /* For deferred writing, we expect some functions to have already done the transfer for
              * us and left the source texel blank, uninitialized, or in an otherwise unreadable
              * state. We must skip them. The protocol here is that each chunk has two indices; the
@@ -726,18 +838,23 @@ impl Converter {
             let range = (0..self.out_index_list.len()).step_by(self.chunk);
 
             for (&chunk, (indexes, start)) in chunks.iter().zip(indexes.zip(range)) {
-                let [_, written] = chunk;
-                debug_assert!(written <= indexes.len());
+                let [_, unwritten] = chunk;
+                debug_assert!(unwritten <= indexes.len());
 
-                if written >= indexes.len() {
+                if unwritten > indexes.len() {
                     continue;
                 }
 
+                if unwritten == 0 {
+                    continue;
+                }
+
+                let offset = indexes.len() - unwritten;
                 info.out_kind.action(WriteUnit {
                     into: &mut into,
                     idx: &self.out_index_list,
                     from: &self.out_texels,
-                    range: start + written..start + indexes.len(),
+                    range: start + offset..start + indexes.len(),
                 });
             }
         } else {
