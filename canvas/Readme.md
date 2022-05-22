@@ -41,6 +41,8 @@ right due to caches but good for future reference.
 
 At 2022-05-19 we have for example:
 
+- sRGB(u8) to sBGR(u8) at 19.20ms/FullHD
+- sRGBa(u8) to sBGRa(u8) at 21.76ms/FullHD
 - SrLab2(f32) to sRGBa(f32) at 70.49ms/FullHD
 - sRGBa(u8) to Oklab(u8) at 188.58ms/FullHD
 - sRGBa(f32) to Oklab(f32) at 81.86ms/FullHD

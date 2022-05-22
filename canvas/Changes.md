@@ -1,3 +1,11 @@
+## 0.2.4
+
+- Fixed a bug in conversion to integer formats that would mask some bits.
+- Conversion from int-array-to-int-array representations within the same color
+  space (e.g. bgra-u8 to rgba-u8 or bgra-u8 to rgb-u8) are now much faster. The
+  converter has learned to elide some copies into the texel buffer if the
+  canvas already contains the right contiguous texel representation.
+
 ## 0.2.3
 
 - Fixed a bug with the texel coordinate generation phase that caused issues in

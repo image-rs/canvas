@@ -47,18 +47,71 @@ pub trait AsTexel {
     fn texel() -> Texel<Self>;
 }
 
-pub(crate) const MAX_ALIGN: usize = 16;
+macro_rules! def_max_align {
+    (
+        $($($arch:literal),* = $num:literal),*
+    ) => {
+        $(
+            /// A byte-like-type that is aligned to the required max alignment.
+            ///
+            /// This type does not contain padding and implements `Pod`. Generally, the alignment and size
+            /// requirement is kept small to avoid overhead.
+            #[derive(Clone, Copy)]
+            #[cfg(
+                any($(target_arch = $arch),*),
+            )]
+            #[repr(align($num))]
+            #[repr(C)]
+            pub struct MaxAligned(pub(crate) [u8; $num]);
 
-/// A byte-like-type that is aligned to the required max alignment.
-///
-/// This type does not contain padding and implements `Pod`.
-#[derive(Clone, Copy)]
-#[repr(align(16))]
-#[repr(C)]
-pub struct MaxAligned(pub(crate) [u8; 16]);
+            #[cfg(
+                any($(target_arch = $arch),*),
+            )]
+            pub(crate) const MAX_ALIGN: usize = $num;
+        )*
+
+
+        #[cfg(
+            not(any(
+                $(any($(target_arch = $arch),*)),*
+            )),
+        )]
+        #[repr(align(8))]
+        #[repr(C)]
+        pub struct MaxAligned(pub(crate) [u8; 8]);
+
+        #[cfg(
+            not(any(
+                $(any($(target_arch = $arch),*)),*
+            )),
+        )]
+        pub(crate) const MAX_ALIGN: usize = 8;
+    }
+}
+
+def_max_align! {
+    "x86", "x86_64" = 32,
+    "arm" = 16,
+    "aarch64" = 16,
+    "wasm32" = 16
+}
 
 unsafe impl bytemuck::Zeroable for MaxAligned {}
 unsafe impl bytemuck::Pod for MaxAligned {}
+
+macro_rules! builtin_texel {
+    ( $name:ty ) => {
+        impl AsTexel for $name {
+            fn texel() -> Texel<Self> {
+                const _: () = {
+                    assert!(Texel::<$name>::check_invariants());
+                };
+
+                unsafe { Texel::new_unchecked() }
+            }
+        }
+    };
+}
 
 pub(crate) mod constants {
     use super::{AsTexel, MaxAligned, Texel};
@@ -68,6 +121,10 @@ pub(crate) mod constants {
             $(pub const $name: Texel<$type> = Texel(core::marker::PhantomData) ;
               impl AsTexel for $type {
                   fn texel() -> Texel<Self> {
+                      const _: () = {
+                          assert!(Texel::<$type>::check_invariants());
+                      };
+
                       $name
                   }
               }
@@ -146,6 +203,61 @@ pub(crate) mod constants {
     }
 }
 
+#[cfg(target_arch = "x86")]
+mod x64 {
+    use super::{AsTexel, Texel};
+    use core::arch::x86;
+
+    builtin_texel!(x86::__m128);
+
+    builtin_texel!(x86::__m128);
+    builtin_texel!(x86::__m128d);
+    builtin_texel!(x86::__m128i);
+    builtin_texel!(x86::__m256);
+    builtin_texel!(x86::__m256d);
+    builtin_texel!(x86::__m256i);
+}
+
+#[cfg(target_arch = "x86_64")]
+mod x64_64 {
+    use super::{AsTexel, Texel};
+    use core::arch::x86_64;
+
+    builtin_texel!(x86_64::__m128);
+    builtin_texel!(x86_64::__m128d);
+    builtin_texel!(x86_64::__m128i);
+    builtin_texel!(x86_64::__m256);
+    builtin_texel!(x86_64::__m256d);
+    builtin_texel!(x86_64::__m256i);
+}
+
+#[cfg(target_arch = "arm")]
+mod arm { /* all types unstable */
+}
+
+#[cfg(target_arch = "aarch64")]
+mod arm {
+    use super::{AsTexel, Texel};
+    use core::arch::aarch64;
+
+    builtin_texel!(aarch64::float64x1_t);
+    builtin_texel!(aarch64::float64x1x2_t);
+    builtin_texel!(aarch64::float64x1x3_t);
+    builtin_texel!(aarch64::float64x1x4_t);
+    builtin_texel!(aarch64::float64x2_t);
+    builtin_texel!(aarch64::float64x2x2_t);
+    builtin_texel!(aarch64::float64x2x3_t);
+    builtin_texel!(aarch64::float64x2x4_t);
+}
+
+#[cfg(target_arch = "wasm32")]
+mod arm {
+    use super::{AsTexel, Texel};
+    use core::arch::wasm32;
+
+    builtin_texel!(wasm32::v128);
+}
+
 impl<P: bytemuck::Pod> Texel<P> {
     /// Try to construct an instance of the marker.
     ///
@@ -153,8 +265,8 @@ impl<P: bytemuck::Pod> Texel<P> {
     /// - The type must have an alignment of *at most* `MAX_ALIGN`.
     /// - The type must *not* be a ZST.
     /// - The type must *not* have any Drop-glue (no drop, any contain not part that is Drop).
-    pub fn for_type() -> Option<Self> {
-        if mem::align_of::<P>() <= MAX_ALIGN && mem::size_of::<P>() > 0 && !mem::needs_drop::<P>() {
+    pub const fn for_type() -> Option<Self> {
+        if Texel::<P>::check_invariants() {
             Some(Texel(PhantomData))
         } else {
             None
@@ -217,7 +329,13 @@ impl<P> Texel<P> {
     ///
     /// [`MaxAligned`]: struct.MaxAligned.html
     pub const unsafe fn new_unchecked() -> Self {
+        debug_assert!(Self::check_invariants());
         Texel(PhantomData)
+    }
+
+    /// Note this isn't exhaustive. Indeed, we have no way to check for padding.
+    pub(crate) const fn check_invariants() -> bool {
+        mem::align_of::<P>() <= MAX_ALIGN && mem::size_of::<P>() > 0 && !mem::needs_drop::<P>()
     }
 
     /// Proxy of `core::mem::align_of`.
