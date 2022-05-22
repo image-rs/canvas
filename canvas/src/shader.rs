@@ -30,7 +30,7 @@ pub struct Converter {
     /// Runs of texels to be read by anything reading input texels.
     /// Each entry refers to a range of indices in `in_index` and a range of corresponding texels
     /// in `in_texels`, or it can refer directly to the input image.
-    in_slices: TexelBuffer,
+    in_slices: TexelBuffer<[usize; 2]>,
     /// Buffer where we store input texels before writing.
     out_texels: TexelBuffer,
     /// Texel coordinates of stored texels.
@@ -40,7 +40,7 @@ pub struct Converter {
     /// Runs of texels to be read by anything writing output texels.
     /// Each entry refers to a range of indices in `out_index` and a range of corresponding texels
     /// in `out_texels`, or it can refer directly to the output image.
-    out_slices: TexelBuffer,
+    out_slices: TexelBuffer<[usize; 2]>,
 
     /// The input texels, split into pixels in the color's natural order.
     pixel_in_buffer: TexelBuffer,
@@ -406,10 +406,8 @@ impl Converter {
             let in_texels = that.in_texels.as_texels(in_texel);
             let out_texels = that.out_texels.as_mut_texels(out_texel);
 
-            let chunk_texel = <[usize; 2]>::texel();
-
-            let in_slices = that.in_slices.as_mut_texels(chunk_texel).iter_mut();
-            let out_slices = that.out_slices.as_mut_texels(chunk_texel).iter_mut();
+            let in_slices = that.in_slices.iter_mut();
+            let out_slices = that.out_slices.iter_mut();
             let chunks = (0..in_texels.len()).step_by(that.chunk);
 
             for ((islice, oslice), chunk_start) in in_slices.zip(out_slices).zip(chunks) {
@@ -642,20 +640,17 @@ impl Converter {
         self.in_index_list.resize_with(self.in_coords.len(), || 0);
         self.out_index_list.resize_with(self.out_coords.len(), || 0);
 
-        let chunk_texel = <[usize; 2]>::texel();
-        self.in_slices
-            .resize_for_texel(self.chunk_count, chunk_texel);
-        self.out_slices
-            .resize_for_texel(self.chunk_count, chunk_texel);
+        self.in_slices.resize(self.chunk_count);
+        self.out_slices.resize(self.chunk_count);
 
         let in_chunk = ChunkSpec {
-            chunks: self.in_slices.as_mut_texels(chunk_texel),
+            chunks: self.in_slices.as_mut_slice(),
             chunk_size: self.chunk,
             should_defer_texel_ops: converter.should_defer_texel_read,
         };
 
         let out_chunk = ChunkSpec {
-            chunks: self.out_slices.as_mut_texels(chunk_texel),
+            chunks: self.out_slices.as_mut_slice(),
             chunk_size: self.chunk,
             should_defer_texel_ops: converter.should_defer_texel_write,
         };
@@ -751,8 +746,7 @@ impl Converter {
              * in the plane texture and the index up-to-which the texels are to be ignored in the
              * `in_texels`.
              */
-            let chunk_texel = <[usize; 2]>::texel();
-            let chunks = self.in_slices.as_mut_texels(chunk_texel);
+            let chunks = self.in_slices.as_mut_slice();
             let indexes = self.in_index_list.chunks(self.chunk);
             let range = (0..self.in_index_list.len()).step_by(self.chunk);
 
@@ -832,8 +826,7 @@ impl Converter {
              * index in the plane texture and the index up-to-which the texels are to be ignored in
              * the `out_texels`.
              */
-            let chunk_texel = <[usize; 2]>::texel();
-            let chunks = self.out_slices.as_texels(chunk_texel);
+            let chunks = self.out_slices.as_slice();
             let indexes = self.out_index_list.chunks(self.chunk);
             let range = (0..self.out_index_list.len()).step_by(self.chunk);
 
