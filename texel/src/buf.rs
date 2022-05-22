@@ -6,7 +6,7 @@ use core::{borrow, cmp, mem, ops};
 use alloc::borrow::ToOwned;
 use alloc::vec::Vec;
 
-use crate::texel::{constants::MAX, MaxAligned, Texel};
+use crate::texel::{constants::MAX, MaxAligned, Texel, MAX_ALIGN};
 
 /// Allocates and manages raw bytes.
 ///
@@ -44,7 +44,7 @@ pub(crate) enum Cog<'buf> {
 }
 
 impl Buffer {
-    const ELEMENT: MaxAligned = MaxAligned([0; 16]);
+    const ELEMENT: MaxAligned = MaxAligned([0; MAX_ALIGN]);
 
     pub fn as_buf(&self) -> &buf {
         buf::new(self.inner.as_slice())

@@ -65,6 +65,42 @@ pub use self::rec::{BufferReuseError, TexelBuffer};
 pub use self::texel::{AsTexel, Texel};
 
 /// Constants for predefined texel types.
+///
+/// Holding an instance of `Texel<T>` certifies that the type `T` is compatible with the texel
+/// concept, that is: its alignment requirement is *small* enough, its size is non-zero, it does
+/// not contain any padding, and it is a plain old data type without any inner invariants
+/// (including sharing predicates). These assertions allow a number of operations such as
+/// reinterpreting aligned byte slices, writing to and read from byte buffers, fallible cast to
+/// other texels, etc.
+///
+/// For types that guarantee the property, see [`AsTexel`] and its impls.
+///
+/// # Extending
+///
+/// The recommended method of extending this with a custom type is by implementing `bytemuck::Pod`
+/// for this type. This applies a number of consistency checks.
+///
+/// ```rust
+/// use bytemuck::{Pod, Zeroable};
+/// use image_texel::{AsTexel, Texel};
+///
+/// #[derive(Clone, Copy, Pod, Zeroable)]
+/// #[repr(C)]
+/// struct Rgb(pub [u8; 3]);
+///
+/// impl AsTexel for Rgb {
+///     fn texel() -> Texel<Rgb> {
+///         Texel::for_type().expect("verified by bytemuck and image_texel")
+///     }
+/// }
+///
+/// impl Rgb {
+///     const TEXEL: Texel<Self> = match Texel::for_type() {
+///         Some(texel) => texel,
+///         None => panic!("compilation error"),
+///     };
+/// }
+/// ```
 pub mod texels {
     pub use crate::texel::constants::*;
     pub use crate::texel::IsTransparentWrapper;

@@ -264,7 +264,7 @@ impl<P: bytemuck::Pod> Texel<P> {
     /// - The type must have an alignment of *at most* `MAX_ALIGN`.
     /// - The type must *not* be a ZST.
     /// - The type must *not* have any Drop-glue (no drop, any contain not part that is Drop).
-    pub fn for_type() -> Option<Self> {
+    pub const fn for_type() -> Option<Self> {
         if Texel::<P>::check_invariants() {
             Some(Texel(PhantomData))
         } else {
