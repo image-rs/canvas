@@ -77,6 +77,7 @@ macro_rules! def_max_align {
             )),
         )]
         #[repr(align(8))]
+        #[repr(C)]
         pub struct MaxAligned(pub(crate) [u8; 8]);
 
         #[cfg(
