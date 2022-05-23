@@ -765,11 +765,11 @@ impl CanvasLayout {
 
     fn fill_indices_constant_size(idx: &mut [usize], iter: &[Coord], pitch: u32, spec: ChunkSpec) {
         let pitch = u64::from(pitch);
-        let mut idx = idx.chunks_mut(spec.chunk_size);
+        let mut index_chunks = idx.chunks_mut(spec.chunk_size);
         let mut iter = iter.chunks(spec.chunk_size);
 
-        for chunk_spec in spec.chunks {
-            let (idx, iter) = match (idx.next(), iter.next()) {
+        for _ in &mut spec.chunks[..] {
+            let (idx, iter) = match (index_chunks.next(), iter.next()) {
                 (Some(idx), Some(iter)) => (idx, iter),
                 _ => break,
             };
@@ -778,22 +778,20 @@ impl CanvasLayout {
                 let texindex = u64::from(x) * pitch + u64::from(y);
                 *idx = texindex as usize;
             }
+        }
 
-            if spec.should_defer_texel_ops {
-                let contiguous_start = idx
-                    .windows(2)
-                    .map(|wnd| {
-                        if wnd[1].saturating_sub(wnd[0]) == 1 {
-                            Some(wnd[0])
-                        } else {
-                            None
-                        }
-                    })
-                    .min()
-                    .unwrap_or(None);
+        if spec.should_defer_texel_ops {
+            for (idx, chunk_spec) in idx.chunks_mut(spec.chunk_size).zip(spec.chunks) {
+                let mut contig = true;
+                for wnd in idx.windows(2) {
+                    if wnd[1].saturating_sub(wnd[0]) != 1 {
+                        contig = false;
+                    }
+                }
 
-                if let Some(start) = contiguous_start {
-                    *chunk_spec = [start, idx.len()];
+                let contiguous_start = idx[0];
+                if contig {
+                    *chunk_spec = [contiguous_start, idx.len()];
                 }
             }
         }

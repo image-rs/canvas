@@ -19,13 +19,13 @@ pub unsafe fn shuffle_u8x4(u8s: &mut [[u8; 4]], idx: [u8; 4]) {
     }
 
     let [a, b, c, d] = idx.map(in_bounds);
-    let offset = _mm_set1_epi8(16);
     #[rustfmt::skip]
     let shuffle = _mm_set_epi8(
         d+12, c+12, b+12, a+12,
         d+8, c+8, b+8, a+8,
         d+4, c+4, b+4, a+4,
         d, c, b, a);
+    let offset = _mm_set1_epi8(16);
     let shuffle = _mm256_set_m128i(_mm_add_epi8(shuffle, offset), shuffle);
 
     for vec in aligned {
@@ -47,11 +47,11 @@ pub unsafe fn shuffle_u16x4(u16s: &mut [[u16; 4]], idx: [u8; 4]) {
     }
 
     let [a, b, c, d] = idx.map(in_bounds);
-    let offset = _mm_set1_epi8(16);
     #[rustfmt::skip]
     let shuffle = _mm_set_epi8(
         2*d+9, 2*d+8, 2*c+9, 2*c+8, 2*b+9, 2*b+8, 2*a+9, 2*a+8,
         2*d+1, 2*d, 2*c+1, 2*c, 2*b+1, 2*b, 2*a+1, 2*a);
+    let offset = _mm_set1_epi8(16);
     let shuffle = _mm256_set_m128i(_mm_add_epi8(shuffle, offset), shuffle);
 
     for vec in aligned {
