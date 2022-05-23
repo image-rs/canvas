@@ -6,6 +6,7 @@ use core::ops::Range;
 use image_texel::image::{ImageMut, ImageRef};
 use image_texel::{image::Coord, AsTexel, Texel, TexelBuffer};
 
+use crate::arch::ShuffleOps;
 use crate::layout_::{
     BitEncoding, Block, CanvasLayout, SampleBits, SampleParts, SamplePitch, Texel as TexelBits,
 };
@@ -167,17 +168,6 @@ struct TexelConvertWith<'lt> {
     should_defer_texel_write: bool,
 }
 
-struct ShuffleOps {
-    // 8-bit, note we may use them for unsigned and signed.
-    shuffle_u8x4: fn(&mut [[u8; 4]], [u8; 4]),
-    shuffle_u8x3_to_u8x4: fn(&[[u8; 3]], &mut [[u8; 4]], [u8; 4]),
-    shuffle_u8x4_to_u8x3: fn(&[[u8; 4]], &mut [[u8; 3]], [u8; 3]),
-    // 16-bit, note we may use them for unsigned and signed.
-    shuffle_u16x4: fn(&mut [[u16; 4]], [u8; 4]),
-    shuffle_u16x3_to_u16x4: fn(&[[u16; 3]], &mut [[u16; 4]], [u8; 4]),
-    shuffle_u16x4_to_u16x3: fn(&[[u16; 4]], &mut [[u16; 3]], [u8; 3]),
-}
-
 struct RecolorOps {
     from: fn(&Info, &TexelBuffer, &mut TexelBuffer),
     into: fn(&Info, &TexelBuffer, &mut TexelBuffer),
@@ -260,8 +250,7 @@ impl Converter {
             expand: CommonPixel::expand_from_info,
             recolor,
             join: CommonPixel::join_from_info,
-            // FIXME(perf): implement and choose arch-specific shuffles.
-            shuffle: ShuffleOps::default(),
+            shuffle: ShuffleOps::default().with_arch(),
 
             int_shuffle,
         };
@@ -1500,67 +1489,6 @@ impl CommonColor {
     }
 }
 
-impl ShuffleOps {
-    /// For each pixel, in-place select from the existing channels at the index given by `idx`, or
-    /// select a `0` if this index is out-of-range.
-    /// FIXME(perf): this should be chosen arch dependent.
-    fn shuffle_u8x4(u8s: &mut [[u8; 4]], idx: [u8; 4]) {
-        // Naive version. For some reason, LLVM does not figure this out as shuffle instructions.
-        // Disappointing.
-        for ch in u8s {
-            *ch = idx.map(|i| ch[(i & 3) as usize] & as_u8mask(i < 4));
-        }
-    }
-
-    /// For each pixel, in-place select from the existing channels at the index given by `idx`, or
-    /// select a `0` if this index is out-of-range.
-    /// FIXME(perf): this should be chosen arch dependent.
-    fn shuffle_u16x4(u8s: &mut [[u16; 4]], idx: [u8; 4]) {
-        // Naive version. For some reason, LLVM does not figure this out as shuffle instructions.
-        // Disappointing.
-        for ch in u8s {
-            *ch = idx.map(|i| ch[(i & 3) as usize] & as_u16mask(i < 4));
-        }
-    }
-
-    fn shuffle_u8x3_to_u8x4(u3: &[[u8; 3]], u4: &mut [[u8; 4]], idx: [u8; 4]) {
-        for (dst, src) in u4.iter_mut().zip(u3) {
-            *dst = idx.map(|i| src[i.min(2) as usize] & as_u8mask(i < 3));
-        }
-    }
-
-    fn shuffle_u8x4_to_u8x3(u4: &[[u8; 4]], u3: &mut [[u8; 3]], idx: [u8; 3]) {
-        for (dst, src) in u3.iter_mut().zip(u4) {
-            *dst = idx.map(|i| src[(i & 3) as usize] & as_u8mask(i < 4));
-        }
-    }
-
-    fn shuffle_u16x3_to_u16x4(u3: &[[u16; 3]], u4: &mut [[u16; 4]], idx: [u8; 4]) {
-        for (dst, src) in u4.iter_mut().zip(u3) {
-            *dst = idx.map(|i| src[i.min(2) as usize] & as_u16mask(i < 3));
-        }
-    }
-
-    fn shuffle_u16x4_to_u16x3(u4: &[[u16; 4]], u3: &mut [[u16; 3]], idx: [u8; 3]) {
-        for (dst, src) in u3.iter_mut().zip(u4) {
-            *dst = idx.map(|i| src[(i & 3) as usize] & as_u16mask(i < 4));
-        }
-    }
-}
-
-impl Default for ShuffleOps {
-    fn default() -> Self {
-        ShuffleOps {
-            shuffle_u8x4: Self::shuffle_u8x4,
-            shuffle_u8x3_to_u8x4: Self::shuffle_u8x3_to_u8x4,
-            shuffle_u8x4_to_u8x3: Self::shuffle_u8x4_to_u8x3,
-            shuffle_u16x4: Self::shuffle_u16x4,
-            shuffle_u16x3_to_u16x4: Self::shuffle_u16x3_to_u16x4,
-            shuffle_u16x4_to_u16x3: Self::shuffle_u16x4_to_u16x3,
-        }
-    }
-}
-
 macro_rules! from_bits {
     ($bits:ident = { $($variant:pat => $($value:expr)+);* }) => {
         match $bits {
@@ -1730,14 +1658,6 @@ impl FromBits {
         be_bytes = newval.to_le_bytes();
         texel_bytes[..initlen].copy_from_slice(&be_bytes[..initlen]);
     }
-}
-
-fn as_u8mask(c: bool) -> u8 {
-    0u8.wrapping_sub(c as u8)
-}
-
-fn as_u16mask(c: bool) -> u16 {
-    0u16.wrapping_sub(c as u16)
 }
 
 impl TexelKind {
