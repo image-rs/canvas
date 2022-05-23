@@ -741,7 +741,7 @@ impl CanvasLayout {
     pub(crate) fn fill_texel_indices_impl(
         &self,
         idx: &mut [usize],
-        iter: &[Coord],
+        iter: &[[u32; 2]],
         chunk: ChunkSpec,
     ) {
         if self.texel.bits.bytes() == 0 {
@@ -758,12 +758,17 @@ impl CanvasLayout {
         // all optimize a lot better.
 
         // Fallback, actually generate everything by hard.
-        for (&Coord(x, y), idx) in iter.iter().zip(idx) {
+        for (&[x, y], idx) in iter.iter().zip(idx) {
             *idx = self.texel_index(x, y) as usize;
         }
     }
 
-    fn fill_indices_constant_size(idx: &mut [usize], iter: &[Coord], pitch: u32, spec: ChunkSpec) {
+    fn fill_indices_constant_size(
+        idx: &mut [usize],
+        iter: &[[u32; 2]],
+        pitch: u32,
+        spec: ChunkSpec,
+    ) {
         let pitch = u64::from(pitch);
         let mut index_chunks = idx.chunks_mut(spec.chunk_size);
         let mut iter = iter.chunks(spec.chunk_size);
@@ -774,7 +779,7 @@ impl CanvasLayout {
                 _ => break,
             };
 
-            for (&Coord(x, y), idx) in iter.iter().zip(&mut idx[..]) {
+            for (&[x, y], idx) in iter.iter().zip(&mut idx[..]) {
                 let texindex = u64::from(x) * pitch + u64::from(y);
                 *idx = texindex as usize;
             }
