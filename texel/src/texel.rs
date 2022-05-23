@@ -464,13 +464,13 @@ impl<P> Texel<P> {
     /// Try to reinterpret a slice of bytes as a slice of the texel.
     ///
     /// This returns `Some` if the buffer is suitably aligned, and `None` otherwise.
-    pub fn try_to_slice_mut<'buf>(self, bytes: &'buf mut [u8]) -> Option<&'buf [P]> {
+    pub fn try_to_slice_mut<'buf>(self, bytes: &'buf mut [u8]) -> Option<&'buf mut [P]> {
         if let Some(slice) = self.try_to_slice(bytes) {
             // SAFETY:
             // - The `pod`-ness is certified by `self`, which makes the bytes a valid
             //   representation of P. Conversely, it makes any P valid as bytes.
             let len = slice.len();
-            Some(unsafe { &*ptr::slice_from_raw_parts_mut(bytes.as_ptr() as *mut P, len) })
+            Some(unsafe { &mut *ptr::slice_from_raw_parts_mut(bytes.as_ptr() as *mut P, len) })
         } else {
             None
         }
