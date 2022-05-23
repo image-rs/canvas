@@ -1,3 +1,9 @@
+## 0.3.0
+
+- Added u8x4 and u16x4 shuffle implementations for SSSE3 and AVX2.
+- Speedups for everything, mostly the u8x4 case though because of above.
+- Bump `image-texel` to `0.2` to fix an API oversight.
+
 ## 0.2.4
 
 - Fixed a bug in conversion to integer formats that would mask some bits.
