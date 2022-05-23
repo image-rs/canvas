@@ -52,7 +52,11 @@
 //! # use image_canvas::layout::LayoutError;
 //! # Ok::<(), LayoutError>(())
 //! ```
+// Deny, not forbid, unsafe code. In `arch` module we have inherently unsafe code, for the moment.
+// Maybe at a future point we gain some possibility to write such code safely.
+#![deny(unsafe_code)]
 
+mod arch;
 /// Putting it all together with a buffer type.
 pub mod color;
 mod color_matrix;

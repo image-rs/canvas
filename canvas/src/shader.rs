@@ -6,6 +6,7 @@ use core::ops::Range;
 use image_texel::image::{ImageMut, ImageRef};
 use image_texel::{image::Coord, AsTexel, Texel, TexelBuffer};
 
+use crate::arch::ShuffleOps;
 use crate::layout_::{
     BitEncoding, Block, CanvasLayout, SampleBits, SampleParts, SamplePitch, Texel as TexelBits,
 };
@@ -20,11 +21,11 @@ pub struct Converter {
     /// The number of chunks to do at once.
     chunk_count: usize,
 
-    super_blocks: Vec<TexelCoord>,
+    super_blocks: TexelBuffer<[u32; 2]>,
     /// Buffer where we store input texels after reading them.
     in_texels: TexelBuffer,
     /// Texel coordinates of stored texels.
-    in_coords: Vec<Coord>,
+    in_coords: TexelBuffer<[u32; 2]>,
     /// Index in the input planes.
     in_index_list: Vec<usize>,
     /// Runs of texels to be read by anything reading input texels.
@@ -34,7 +35,7 @@ pub struct Converter {
     /// Buffer where we store input texels before writing.
     out_texels: TexelBuffer,
     /// Texel coordinates of stored texels.
-    out_coords: Vec<Coord>,
+    out_coords: TexelBuffer<[u32; 2]>,
     /// Index in the input planes.
     out_index_list: Vec<usize>,
     /// Runs of texels to be read by anything writing output texels.
@@ -142,9 +143,9 @@ type PlaneTarget<'data, 'layout> = ImageMut<'data, &'layout mut CanvasLayout>;
 /// matching types are being used.
 struct ConvertOps {
     /// Convert in texel coordinates to an index in the color plane.
-    in_index: fn(&Info, &[Coord], &mut [usize], ChunkSpec),
+    fill_in_index: fn(&Info, &[[u32; 2]], &mut [usize], ChunkSpec),
     /// Convert out texel coordinates to an index in the color plane.
-    out_index: fn(&Info, &[Coord], &mut [usize], ChunkSpec),
+    fill_out_index: fn(&Info, &[[u32; 2]], &mut [usize], ChunkSpec),
 
     /// Expand all texels into pixels in normalized channel order.
     expand: fn(&Info, &ConvertOps, &TexelBuffer, &mut TexelBuffer, &mut [PlaneSource]),
@@ -165,17 +166,6 @@ struct TexelConvertWith<'lt> {
     ops: &'lt mut dyn FnMut(&mut Converter, &mut [PlaneSource], &mut [PlaneTarget]),
     should_defer_texel_read: bool,
     should_defer_texel_write: bool,
-}
-
-struct ShuffleOps {
-    // 8-bit, note we may use them for unsigned and signed.
-    shuffle_u8x4: fn(&mut [[u8; 4]], [u8; 4]),
-    shuffle_u8x3_to_u8x4: fn(&[[u8; 3]], &mut [[u8; 4]], [u8; 4]),
-    shuffle_u8x4_to_u8x3: fn(&[[u8; 4]], &mut [[u8; 3]], [u8; 3]),
-    // 16-bit, note we may use them for unsigned and signed.
-    shuffle_u16x4: fn(&mut [[u16; 4]], [u8; 4]),
-    shuffle_u16x3_to_u16x4: fn(&[[u16; 3]], &mut [[u16; 4]], [u8; 4]),
-    shuffle_u16x4_to_u16x3: fn(&[[u16; 4]], &mut [[u16; 3]], [u8; 3]),
 }
 
 struct RecolorOps {
@@ -209,13 +199,13 @@ impl Converter {
         Converter {
             chunk: 1024,
             chunk_count: 1,
-            super_blocks: vec![],
+            super_blocks: TexelBuffer::default(),
             in_texels: TexelBuffer::default(),
-            in_coords: vec![],
+            in_coords: TexelBuffer::default(),
             in_index_list: vec![],
             in_slices: TexelBuffer::default(),
             out_texels: TexelBuffer::default(),
-            out_coords: vec![],
+            out_coords: TexelBuffer::default(),
             out_index_list: vec![],
             out_slices: TexelBuffer::default(),
             pixel_in_buffer: TexelBuffer::default(),
@@ -255,13 +245,12 @@ impl Converter {
             .filter(|_| recolor.is_none());
 
         let ops = ConvertOps {
-            in_index: Self::index_from_in_info,
-            out_index: Self::index_from_out_info,
+            fill_in_index: Self::index_from_in_info,
+            fill_out_index: Self::index_from_out_info,
             expand: CommonPixel::expand_from_info,
             recolor,
             join: CommonPixel::join_from_info,
-            // FIXME(perf): implement and choose arch-specific shuffles.
-            shuffle: ShuffleOps::default(),
+            shuffle: ShuffleOps::default().with_arch(),
 
             int_shuffle,
         };
@@ -544,10 +533,10 @@ impl Converter {
         let mut blocks = Self::blocks(sb_x.blocks.clone(), sb_y.blocks.clone());
 
         loop {
-            self.super_blocks.clear();
             let at_once = self.chunk * self.chunk_count;
-            let blocks = blocks.by_ref().take(at_once);
-            self.super_blocks.extend(blocks.map(TexelCoord));
+            self.super_blocks.resize(at_once);
+            let actual = blocks(self.super_blocks.as_mut_slice());
+            self.super_blocks.resize(actual);
 
             if self.super_blocks.is_empty() {
                 break;
@@ -605,34 +594,54 @@ impl Converter {
             sup.in_super == 1 && sup.out_super == 1
         }
 
-        self.in_coords.clear();
-        self.out_coords.clear();
+        self.in_coords.resize(0);
+        self.out_coords.resize(0);
 
         if is_trivial_super(sb_x) && is_trivial_super(sb_y) {
             // Faster than rustc having to look through and special case the iteration/clones
             // below. For some reason, it doesn't do well on `Range::zip()::flatten`.
-            let blocks = self
-                .super_blocks
-                .iter()
-                .map(|&TexelCoord(Coord(bx, by))| Coord(bx, by));
+
             // FIXME(perf): actually, we'd like to just reuse the `super_blocks` vector where ever
             // possible. This is a pure copy at the byte-level.
-            self.in_coords.extend(blocks.clone());
-            self.out_coords.extend(blocks.clone());
+            self.in_coords.resize(self.super_blocks.len());
+            self.out_coords.resize(self.super_blocks.len());
+            self.in_coords
+                .as_mut_slice()
+                .copy_from_slice(&self.super_blocks);
+            self.out_coords
+                .as_mut_slice()
+                .copy_from_slice(&self.super_blocks);
         } else {
-            let in_blocks = Self::blocks(0..sb_x.in_super, 0..sb_y.in_super);
-            let out_blocks = Self::blocks(0..sb_x.out_super, 0..sb_y.out_super);
+            let in_chunk_len = (sb_x.in_super * sb_y.in_super) as usize;
+            self.in_coords
+                .resize(self.super_blocks.len() * in_chunk_len);
+            let out_chunk_len = (sb_x.out_super * sb_y.out_super) as usize;
+            self.out_coords
+                .resize(self.super_blocks.len() * out_chunk_len);
 
             // FIXME(perf): the other iteration order would serve us better. Then there is a larger
             // bulk of coordinates looped through at the same time, with less branching as a call
             // to std::vec::Vec::extend could rely on the exact length of the iterator.
-            for &TexelCoord(Coord(bx, by)) in self.super_blocks.iter() {
-                for Coord(ix, iy) in in_blocks.clone() {
-                    self.in_coords.push(Coord(bx + ix, by + iy));
+            let mut in_chunks = self.in_coords.as_mut_slice().chunks_exact_mut(in_chunk_len);
+            let mut out_chunks = self
+                .out_coords
+                .as_mut_slice()
+                .chunks_exact_mut(out_chunk_len);
+            for &[bx, by] in self.super_blocks.as_slice().iter() {
+                if let Some(chunk) = in_chunks.next() {
+                    Self::blocks(0..sb_x.in_super, 0..sb_y.in_super)(chunk);
+                    for p in chunk.iter_mut() {
+                        let [ix, iy] = *p;
+                        *p = [bx + ix, by + iy];
+                    }
                 }
 
-                for Coord(ox, oy) in out_blocks.clone() {
-                    self.out_coords.push(Coord(bx + ox, by + oy));
+                if let Some(chunk) = out_chunks.next() {
+                    Self::blocks(0..sb_x.out_super, 0..sb_y.out_super)(chunk);
+                    for p in chunk.iter_mut() {
+                        let [ox, oy] = *p;
+                        *p = [bx + ox, by + oy];
+                    }
                 }
             }
         }
@@ -655,8 +664,18 @@ impl Converter {
             should_defer_texel_ops: converter.should_defer_texel_write,
         };
 
-        (ops.in_index)(&info, &self.in_coords, &mut self.in_index_list, in_chunk);
-        (ops.out_index)(&info, &self.out_coords, &mut self.out_index_list, out_chunk);
+        (ops.fill_in_index)(
+            &info,
+            self.in_coords.as_slice(),
+            &mut self.in_index_list,
+            in_chunk,
+        );
+        (ops.fill_out_index)(
+            &info,
+            self.out_coords.as_slice(),
+            &mut self.out_index_list,
+            out_chunk,
+        );
     }
 
     fn reserve_buffers(&mut self, info: &Info, ops: &ConvertOps) {
@@ -860,25 +879,57 @@ impl Converter {
         }
     }
 
-    fn blocks(x: Range<u32>, y: Range<u32>) -> impl Iterator<Item = Coord> + Clone {
-        x.clone()
-            .into_iter()
-            .map(move |x| core::iter::repeat(x).zip(y.clone()))
-            .flatten()
-            .map(|(x, y)| Coord(x, y))
+    /// Generate the coordinates of all blocks, in row order.
+    /// Returns the actual number if the chunk is too large and all coordinates were generated..
+    fn blocks(mut x: Range<u32>, mut y: Range<u32>) -> impl FnMut(&mut [[u32; 2]]) -> usize {
+        // Why not: x.zip(move |x| core::iter::repeat(x).zip(y.clone())).flatten();
+        // Because its codegen is abysmal, apparently, leading to 10-15% slowdown for rgba.
+        // I'm assuming it is because our `actual` computation which is a `size_hint` that isn't
+        // available to llvm in the other case.
+        #[inline(never)]
+        move |buffer| {
+            let maximum = buffer.len();
+            if x.start == x.end {
+                return 0;
+            }
+
+            if y.end == 0 {
+                return 0;
+            }
+
+            let lines_left = x.end - x.start;
+            let line_len = y.end;
+
+            let pix_left = u64::from(lines_left) * u64::from(line_len) - u64::from(y.start);
+            let actual = pix_left.min(maximum as u64);
+
+            for p in buffer[..actual as usize].iter_mut() {
+                let cx = x.start;
+                let cy = y.start;
+                *p = [cx, cy];
+                y.start += 1;
+
+                if y.start >= y.end {
+                    y.start = 0;
+                    x.start += 1;
+                }
+            }
+
+            return actual as usize;
+        }
     }
 
-    fn index_from_in_info(info: &Info, texel: &[Coord], idx: &mut [usize], chunks: ChunkSpec) {
+    fn index_from_in_info(info: &Info, texel: &[[u32; 2]], idx: &mut [usize], chunks: ChunkSpec) {
         Self::index_from_layer(&info.in_layout, texel, idx, chunks)
     }
 
-    fn index_from_out_info(info: &Info, texel: &[Coord], idx: &mut [usize], chunks: ChunkSpec) {
+    fn index_from_out_info(info: &Info, texel: &[[u32; 2]], idx: &mut [usize], chunks: ChunkSpec) {
         Self::index_from_layer(&info.out_layout, texel, idx, chunks)
     }
 
     fn index_from_layer(
         info: &CanvasLayout,
-        texel: &[Coord],
+        texel: &[[u32; 2]],
         idx: &mut [usize],
         chunks: ChunkSpec,
     ) {
@@ -1500,67 +1551,6 @@ impl CommonColor {
     }
 }
 
-impl ShuffleOps {
-    /// For each pixel, in-place select from the existing channels at the index given by `idx`, or
-    /// select a `0` if this index is out-of-range.
-    /// FIXME(perf): this should be chosen arch dependent.
-    fn shuffle_u8x4(u8s: &mut [[u8; 4]], idx: [u8; 4]) {
-        // Naive version. For some reason, LLVM does not figure this out as shuffle instructions.
-        // Disappointing.
-        for ch in u8s {
-            *ch = idx.map(|i| ch[(i & 3) as usize] & as_u8mask(i < 4));
-        }
-    }
-
-    /// For each pixel, in-place select from the existing channels at the index given by `idx`, or
-    /// select a `0` if this index is out-of-range.
-    /// FIXME(perf): this should be chosen arch dependent.
-    fn shuffle_u16x4(u8s: &mut [[u16; 4]], idx: [u8; 4]) {
-        // Naive version. For some reason, LLVM does not figure this out as shuffle instructions.
-        // Disappointing.
-        for ch in u8s {
-            *ch = idx.map(|i| ch[(i & 3) as usize] & as_u16mask(i < 4));
-        }
-    }
-
-    fn shuffle_u8x3_to_u8x4(u3: &[[u8; 3]], u4: &mut [[u8; 4]], idx: [u8; 4]) {
-        for (dst, src) in u4.iter_mut().zip(u3) {
-            *dst = idx.map(|i| src[i.min(2) as usize] & as_u8mask(i < 3));
-        }
-    }
-
-    fn shuffle_u8x4_to_u8x3(u4: &[[u8; 4]], u3: &mut [[u8; 3]], idx: [u8; 3]) {
-        for (dst, src) in u3.iter_mut().zip(u4) {
-            *dst = idx.map(|i| src[(i & 3) as usize] & as_u8mask(i < 4));
-        }
-    }
-
-    fn shuffle_u16x3_to_u16x4(u3: &[[u16; 3]], u4: &mut [[u16; 4]], idx: [u8; 4]) {
-        for (dst, src) in u4.iter_mut().zip(u3) {
-            *dst = idx.map(|i| src[i.min(2) as usize] & as_u16mask(i < 3));
-        }
-    }
-
-    fn shuffle_u16x4_to_u16x3(u4: &[[u16; 4]], u3: &mut [[u16; 3]], idx: [u8; 3]) {
-        for (dst, src) in u3.iter_mut().zip(u4) {
-            *dst = idx.map(|i| src[(i & 3) as usize] & as_u16mask(i < 4));
-        }
-    }
-}
-
-impl Default for ShuffleOps {
-    fn default() -> Self {
-        ShuffleOps {
-            shuffle_u8x4: Self::shuffle_u8x4,
-            shuffle_u8x3_to_u8x4: Self::shuffle_u8x3_to_u8x4,
-            shuffle_u8x4_to_u8x3: Self::shuffle_u8x4_to_u8x3,
-            shuffle_u16x4: Self::shuffle_u16x4,
-            shuffle_u16x3_to_u16x4: Self::shuffle_u16x3_to_u16x4,
-            shuffle_u16x4_to_u16x3: Self::shuffle_u16x4_to_u16x3,
-        }
-    }
-}
-
 macro_rules! from_bits {
     ($bits:ident = { $($variant:pat => $($value:expr)+);* }) => {
         match $bits {
@@ -1730,14 +1720,6 @@ impl FromBits {
         be_bytes = newval.to_le_bytes();
         texel_bytes[..initlen].copy_from_slice(&be_bytes[..initlen]);
     }
-}
-
-fn as_u8mask(c: bool) -> u8 {
-    0u8.wrapping_sub(c as u8)
-}
-
-fn as_u16mask(c: bool) -> u16 {
-    0u16.wrapping_sub(c as u16)
 }
 
 impl TexelKind {

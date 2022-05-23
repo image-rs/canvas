@@ -1,3 +1,7 @@
+## v0.2.0
+
+* Fix the signature of `Texel::try_to_slice_mut`.
+
 ## v0.1.2
 
 * `Texel::for_type` is now a `const fn`, allowing certifying from a `bytemuck`
