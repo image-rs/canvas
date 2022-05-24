@@ -967,6 +967,25 @@ impl<T> PlanarLayout<T> {
 }
 
 impl ChannelBytes {
+    pub fn spec(&self) -> ChannelSpec {
+        let StrideSpec {
+            width,
+            width_stride,
+            height,
+            height_stride,
+            ..
+        } = self.inner.spec();
+
+        ChannelSpec {
+            channels: self.channels,
+            channel_stride: self.channel_stride,
+            height: height as u32,
+            height_stride,
+            width: width as u32,
+            width_stride,
+        }
+    }
+
     pub(crate) fn is_compatible<T>(
         &self,
         texel: image_texel::Texel<T>,
@@ -983,6 +1002,10 @@ impl ChannelBytes {
 }
 
 impl<T> ChannelLayout<T> {
+    pub fn spec(&self) -> ChannelSpec {
+        self.inner.spec()
+    }
+
     fn from_planar_assume_u8<const N: usize>(from: PlanarLayout<[T; N]>) -> Self {
         let channel = from.matrix.texel().array_element();
         let inner = StridedBytes::decay(from.matrix);
