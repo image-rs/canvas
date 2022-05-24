@@ -247,3 +247,16 @@ fn expand_shuffled_samples() -> Result<(), LayoutError> {
 
     Ok(())
 }
+
+#[test]
+fn split_to_planes() -> Result<(), LayoutError> {
+    let texel = Texel::new_u8(SampleParts::Rgb);
+    let source_layout = CanvasLayout::with_texel(&texel, 32, 32)?;
+    let mut from = Canvas::new(source_layout);
+
+    assert!(from.planes_mut::<0>().is_some());
+    let [_] = from
+        .planes_mut::<1>()
+        .expect("single plane always possible");
+    Ok(())
+}

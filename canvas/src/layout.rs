@@ -908,10 +908,21 @@ impl CanvasLayout {
             // Require that the number of planes actually works..
             let plane = this.plane(plane)?;
             let spec = plane.matrix.spec();
+
+            let offset = plane.matrix.spec().offset;
+            let texel_offset = plane.offset_in_texels().checked_mul(spec.element.size())?;
+
+            // FIXME(planar): decide on this issue.
+            if texel_offset != offset {
+                return None;
+            }
+
             // TODO: should we require that planes are aligned to MAX_ALIGN?
             // Probably useful for some methods but that's something for planar layouts.
-            // FIXME(planar): decide on this issue.
-            let offset = plane.offset_in_texels().checked_mul(spec.element.size())?;
+            if texel_offset % 256 != 0 {
+                return None;
+            }
+
             let plane_end = offset.checked_add(plane.matrix.byte_len())?;
 
             let texel_layout = plane.texel.bits.layout();
@@ -937,6 +948,15 @@ impl CanvasLayout {
 }
 
 impl PlaneBytes {
+    pub(crate) fn sub_offset(&mut self, offset: usize) {
+        let mut spec = self.matrix.spec();
+        assert!(offset % spec.element.size() == 0);
+        assert!(offset % 256 == 0);
+
+        spec.offset = spec.offset.saturating_sub(offset);
+        self.matrix = StridedBytes::new(spec).unwrap();
+    }
+
     pub(crate) fn as_channel_bytes(&self) -> Option<ChannelBytes> {
         let (channel_layout, channels) = self.texel.bits.as_array()?;
         Some(ChannelBytes {
@@ -955,13 +975,13 @@ impl PlaneBytes {
         })
     }
 
-    pub fn offset_in_texels(&self) -> usize {
+    pub(crate) fn offset_in_texels(&self) -> usize {
         self.matrix.spec().offset / self.matrix.spec().element.size()
     }
 }
 
 impl<T> PlanarLayout<T> {
-    pub fn offset_in_texels(&self) -> usize {
+    pub(crate) fn offset_in_texels(&self) -> usize {
         self.matrix.spec().offset / self.matrix.spec().element.size()
     }
 }

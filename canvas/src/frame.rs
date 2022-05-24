@@ -21,33 +21,45 @@ pub struct Plane {
 pub type BytePlane<'data> = BytePlaneRef<'data>;
 
 /// Represents a single matrix like layer of an image.
+///
+/// Created from [`Canvas::plane`].
 pub struct BytePlaneRef<'data> {
     inner: ImageRef<'data, PlaneBytes>,
 }
 
 /// Represents a single matrix like layer of an image.
+///
+/// Created from [`Canvas::plane_mut`].
 pub struct BytePlaneMut<'data> {
     inner: ImageMut<'data, PlaneBytes>,
 }
 
 /// Represents a single matrix like layer of an image.
+///
+/// Created from [`BytePlaneRef::as_texels`].
 pub struct PlaneRef<'data, T> {
     inner: ImageRef<'data, PlanarLayout<T>>,
 }
 
 /// Represents a single mutable matrix like layer of an image.
+///
+/// Created from [`BytePlaneMut::as_texels`].
 pub struct PlaneMut<'data, T> {
     inner: ImageMut<'data, PlanarLayout<T>>,
 }
 
 /// Represent a single matrix with uniform channel type.
-pub struct ChannelsRef<'data, T> {
-    inner: ImageRef<'data, ChannelLayout<T>>,
+///
+/// Created from [`Canvas::channels_u8`] and related methods.
+pub struct ChannelsRef<'data, C> {
+    inner: ImageRef<'data, ChannelLayout<C>>,
 }
 
 /// Represent a single matrix with uniform channel type.
-pub struct ChannelsMut<'data, T> {
-    inner: ImageMut<'data, ChannelLayout<T>>,
+///
+/// Created from [`Canvas::channels_u8_mut`] and related methods.
+pub struct ChannelsMut<'data, C> {
+    inner: ImageMut<'data, ChannelLayout<C>>,
 }
 
 impl Canvas {
@@ -221,11 +233,68 @@ impl Canvas {
         })
     }
 
+    /// Get references to multiple planes at the same time.
+    pub fn planes<const N: usize>(&self) -> Option<[BytePlaneRef<'_>; N]> {
+        todo!()
+    }
+
+    /// Get the untyped, mutable reference to the texel matrix.
+    ///
+    /// Returns `None` if the image contains data that can not be described as a single texel
+    /// plane, e.g. multiple planes or if the plane is not a matrix.
     pub fn plane_mut(&mut self, idx: u8) -> Option<BytePlaneMut<'_>> {
         let layout = self.layout().plane(idx)?;
         Some(BytePlaneMut {
             inner: self.inner.as_mut().with_layout(layout)?,
         })
+    }
+
+    /// Get mutable references to multiple planes at the same time.
+    ///
+    /// This works because planes never overlap. Note that all planes are aligned to the same byte
+    /// boundary as the complete canvas bytes.
+    pub fn planes_mut<const N: usize>(&mut self) -> Option<[BytePlaneMut<'_>; N]> {
+        use image_texel::layout::Bytes;
+
+        let mut layouts = [(); N].map(|()| None);
+
+        for i in 0..N {
+            if i > u8::MAX as usize {
+                return None;
+            }
+
+            layouts[i] = Some(self.layout().plane(i as u8)?);
+        }
+
+        let layouts = layouts.map(|layout| layout.unwrap());
+
+        let mut offset = 0;
+        // This frame's layout takes 0 bytes, so we can take all contents with split_layout
+        let frame: ImageMut<'_, Bytes> = self.as_mut().decay().expect("decay to bytes valid");
+
+        let &Bytes(total_len) = frame.layout();
+        let mut frame = frame.with_layout(Bytes(0)).expect("zero-byte layout valid");
+
+        let planes = layouts.map(move |mut layout| {
+            layout.sub_offset(offset);
+            let mut plane = frame
+                .split_layout()
+                .with_layout(layout)
+                .expect("plane layout within frame");
+            let tail = plane.split_layout();
+            let &Bytes(tail_len) = tail.layout();
+            // Put back all remaining bytes.
+            frame = tail.with_layout(Bytes(0)).expect("zero-byte layout valid");
+            offset = total_len - tail_len;
+
+            Some(plane)
+        });
+
+        if planes.iter().any(|p| p.is_none()) {
+            return None;
+        }
+
+        Some(planes.map(|p| BytePlaneMut { inner: p.unwrap() }))
     }
 
     /// Set the color model.
@@ -234,11 +303,6 @@ impl Canvas {
     /// error if the new color is not compatible with the texel's color channels.
     pub fn set_color(&mut self, color: Color) -> Result<(), LayoutError> {
         self.inner.layout_mut_unguarded().set_color(color)
-    }
-
-    /// Write into another frame, converting color representation between.
-    pub fn convert(&self, into: &mut Self) {
-        Converter::new().run_on(self, into)
     }
 
     pub(crate) fn as_ref(&self) -> ImageRef<'_, &'_ CanvasLayout> {
@@ -250,7 +314,19 @@ impl Canvas {
     }
 }
 
+/// Conversion related methods.
+impl Canvas {
+    /// Write into another frame, converting color representation between.
+    pub fn convert(&self, into: &mut Self) {
+        Converter::new().run_on(self, into)
+    }
+}
+
 impl<'data> BytePlaneRef<'data> {
+    pub fn layout(&self) -> &PlaneBytes {
+        self.inner.layout()
+    }
+
     pub fn to_owned(&self) -> Plane {
         let plane = self.inner.layout();
         let bytes = self.inner.as_bytes();
@@ -282,6 +358,10 @@ impl<'data> BytePlaneRef<'data> {
 }
 
 impl<'data> BytePlaneMut<'data> {
+    pub fn layout(&self) -> &PlaneBytes {
+        self.inner.layout()
+    }
+
     pub fn to_owned(&self) -> Plane {
         let plane = self.inner.layout();
         let bytes = self.inner.as_bytes();
@@ -323,18 +403,26 @@ impl<'data> BytePlaneMut<'data> {
     }
 }
 
-impl<'data, T> ChannelsRef<'data, T> {
-    pub fn as_slice(&self) -> &[T] {
+impl<'data, C> ChannelsRef<'data, C> {
+    pub fn layout(&self) -> &ChannelLayout<C> {
+        self.inner.layout()
+    }
+
+    pub fn as_slice(&self) -> &[C] {
         self.inner.as_slice()
     }
 }
 
-impl<'data, T> ChannelsMut<'data, T> {
-    pub fn as_slice(&self) -> &[T] {
+impl<'data, C> ChannelsMut<'data, C> {
+    pub fn layout(&self) -> &ChannelLayout<C> {
+        self.inner.layout()
+    }
+
+    pub fn as_slice(&self) -> &[C] {
         self.inner.as_slice()
     }
 
-    pub fn as_mut_slice(&mut self) -> &mut [T] {
+    pub fn as_mut_slice(&mut self) -> &mut [C] {
         self.inner.as_mut_slice()
     }
 }
