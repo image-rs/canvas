@@ -62,9 +62,8 @@ pub mod color;
 mod color_matrix;
 /// The main frame module.
 mod frame;
-/// The complex layout implementation.
-#[path = "layout.rs"]
-mod layout_;
+/// The layout implementation, builders, descriptors.
+pub mod layout;
 /// Conversion operation.
 mod shader;
 
@@ -72,10 +71,3 @@ mod shader;
 mod tests;
 
 pub use self::frame::{Canvas, Plane, PlaneMut, PlaneRef};
-
-pub mod layout {
-    pub use crate::layout_::{
-        Block, CanvasLayout, ChannelLayout, LayoutError, PlanarLayout, PlaneBytes,
-        RowLayoutDescription, SampleBits, SampleParts, Texel,
-    };
-}

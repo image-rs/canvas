@@ -7,7 +7,7 @@ use image_texel::image::{ImageMut, ImageRef};
 use image_texel::{image::Coord, AsTexel, Texel, TexelBuffer};
 
 use crate::arch::ShuffleOps;
-use crate::layout_::{
+use crate::layout::{
     BitEncoding, Block, CanvasLayout, SampleBits, SampleParts, SamplePitch, Texel as TexelBits,
 };
 use crate::Canvas;
