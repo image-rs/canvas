@@ -159,6 +159,22 @@ impl buf {
         &mut self.0
     }
 
+    pub fn split_at(&self, at: usize) -> (&Self, &Self) {
+        assert!(at % MAX_ALIGN == 0);
+        let (a, b) = self.0.split_at(at);
+        let a = MAX.try_to_slice(a).expect("was previously aligned");
+        let b = MAX.try_to_slice(b).expect("asserted to be aligned");
+        (Self::new(a), Self::new(b))
+    }
+
+    pub fn split_at_mut(&mut self, at: usize) -> (&mut Self, &mut Self) {
+        assert!(at % MAX_ALIGN == 0);
+        let (a, b) = self.0.split_at_mut(at);
+        let a = MAX.try_to_slice_mut(a).expect("was previously aligned");
+        let b = MAX.try_to_slice_mut(b).expect("asserted to be aligned");
+        (Self::new_mut(a), Self::new_mut(b))
+    }
+
     /// Reinterpret the buffer for the specific texel type.
     ///
     /// The alignment of `P` is already checked to be smaller than `MAX_ALIGN` through the
