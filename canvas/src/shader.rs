@@ -4,7 +4,7 @@
 //! fragment unit, and pipeline multiple texels in parallel.
 use core::ops::Range;
 use image_texel::image::{ImageMut, ImageRef};
-use image_texel::{image::Coord, AsTexel, Texel, TexelBuffer};
+use image_texel::{AsTexel, Texel, TexelBuffer};
 
 use crate::arch::ShuffleOps;
 use crate::layout::{
@@ -50,9 +50,6 @@ pub struct Converter {
     /// The output texels, split into pixels in the color's natural order.
     pixel_out_buffer: TexelBuffer,
 }
-
-#[repr(transparent)]
-struct TexelCoord(Coord);
 
 struct Info {
     /// Layout of the input frame.

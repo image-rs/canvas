@@ -70,4 +70,13 @@ mod shader;
 #[cfg(test)]
 mod tests;
 
-pub use self::frame::{Canvas, Plane, PlaneMut, PlaneRef};
+pub use self::frame::{Canvas, Plane};
+
+pub mod canvas {
+    pub use crate::frame::{
+        BytePlaneMut, BytePlaneRef as BytePlane, ChannelsMut, ChannelsRef, PlaneMut, PlaneRef,
+    };
+}
+
+#[doc(hidden)]
+pub use self::canvas::{PlaneMut, PlaneRef};
