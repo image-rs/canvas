@@ -1,5 +1,13 @@
 ## 0.3.1 (Mustafar)
 
+This release is complete enough to provide all relevant RGB-Lab interaction.
+
+Bug fixes:
+- Fixed having default values for missing color channels. Converting `Rgb` to
+  `Rgba` now assigns a value corresponding to `1.0` to the alpha channel,
+  instead of `NaN`.
+
+New features:
 - Added `Canvas::planes_mut` as an interface to split it into multiple planes.
 - Added `{BytePlaneRef, BytePlaneMut}::{to_owned, to_canvas}` to get owning
   representations of singular color planes.
