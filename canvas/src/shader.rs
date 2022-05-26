@@ -4,10 +4,10 @@
 //! fragment unit, and pipeline multiple texels in parallel.
 use core::ops::Range;
 use image_texel::image::{ImageMut, ImageRef};
-use image_texel::{image::Coord, AsTexel, Texel, TexelBuffer};
+use image_texel::{AsTexel, Texel, TexelBuffer};
 
 use crate::arch::ShuffleOps;
-use crate::layout_::{
+use crate::layout::{
     BitEncoding, Block, CanvasLayout, SampleBits, SampleParts, SamplePitch, Texel as TexelBits,
 };
 use crate::Canvas;
@@ -50,9 +50,6 @@ pub struct Converter {
     /// The output texels, split into pixels in the color's natural order.
     pixel_out_buffer: TexelBuffer,
 }
-
-#[repr(transparent)]
-struct TexelCoord(Coord);
 
 struct Info {
     /// Layout of the input frame.
@@ -1005,6 +1002,10 @@ impl CommonPixel {
         }
     }
 
+    /// Expand integer components into shader floats.
+    ///
+    /// Prepares a replacement value for channels that were not present in the texel. This is, for
+    /// all colors, `[0, 0, 0, 1]`. FIXME(color): possibly incorrect for non-`???A` colors.
     fn expand_ints(
         info: &Info,
         bits: [FromBits; 4],
@@ -1051,6 +1052,21 @@ impl CommonPixel {
                 in_texel,
                 pixel_buf,
             }),
+        }
+
+        // Replacement channels if any channel of common color was selected with 0-bits.
+        // We want to avoid, for example, the conversion of a zero to NaN for alpha channel.
+        // FIXME(perf): could be skipped if know that it ends up unused
+        // FIXME(perf): should this have an SIMD-op?
+        for (idx, component) in (0..4).zip(bits) {
+            if component.len > 0 {
+                continue;
+            }
+
+            let default = if idx == 3 { 1.0 } else { 0.0 };
+            for pix in pixel_buf.as_mut_texels(<[f32; 4]>::texel()) {
+                pix[idx] = default;
+            }
         }
     }
 

@@ -13,37 +13,53 @@ pub struct Canvas {
 
 /// A byte buffer containing a single plane.
 pub struct Plane {
-    inner: Image<CanvasLayout>,
+    inner: Image<PlaneBytes>,
 }
 
+#[doc(hidden)]
+#[deprecated = "Use BytePlaneRef"]
+pub type BytePlane<'data> = BytePlaneRef<'data>;
+
 /// Represents a single matrix like layer of an image.
-pub struct BytePlane<'data> {
+///
+/// Created from [`Canvas::plane`].
+pub struct BytePlaneRef<'data> {
     inner: ImageRef<'data, PlaneBytes>,
 }
 
 /// Represents a single matrix like layer of an image.
+///
+/// Created from [`Canvas::plane_mut`].
 pub struct BytePlaneMut<'data> {
     inner: ImageMut<'data, PlaneBytes>,
 }
 
 /// Represents a single matrix like layer of an image.
+///
+/// Created from [`BytePlaneRef::as_texels`].
 pub struct PlaneRef<'data, T> {
     inner: ImageRef<'data, PlanarLayout<T>>,
 }
 
 /// Represents a single mutable matrix like layer of an image.
+///
+/// Created from [`BytePlaneMut::as_texels`].
 pub struct PlaneMut<'data, T> {
     inner: ImageMut<'data, PlanarLayout<T>>,
 }
 
 /// Represent a single matrix with uniform channel type.
-pub struct ChannelsRef<'data, T> {
-    inner: ImageRef<'data, ChannelLayout<T>>,
+///
+/// Created from [`Canvas::channels_u8`] and related methods.
+pub struct ChannelsRef<'data, C> {
+    inner: ImageRef<'data, ChannelLayout<C>>,
 }
 
 /// Represent a single matrix with uniform channel type.
-pub struct ChannelsMut<'data, T> {
-    inner: ImageMut<'data, ChannelLayout<T>>,
+///
+/// Created from [`Canvas::channels_u8_mut`] and related methods.
+pub struct ChannelsMut<'data, C> {
+    inner: ImageMut<'data, ChannelLayout<C>>,
 }
 
 impl Canvas {
@@ -210,18 +226,75 @@ impl Canvas {
     ///
     /// Returns `None` if the image contains data that can not be described as a single texel
     /// plane, e.g. multiple planes or if the plane is not a matrix.
-    pub fn plane(&self, idx: u8) -> Option<BytePlane<'_>> {
+    pub fn plane(&self, idx: u8) -> Option<BytePlaneRef<'_>> {
         let layout = self.layout().plane(idx)?;
-        Some(BytePlane {
+        Some(BytePlaneRef {
             inner: self.inner.as_ref().with_layout(layout)?,
         })
     }
 
+    /// Get references to multiple planes at the same time.
+    pub fn planes<const N: usize>(&self) -> Option<[BytePlaneRef<'_>; N]> {
+        todo!()
+    }
+
+    /// Get the untyped, mutable reference to the texel matrix.
+    ///
+    /// Returns `None` if the image contains data that can not be described as a single texel
+    /// plane, e.g. multiple planes or if the plane is not a matrix.
     pub fn plane_mut(&mut self, idx: u8) -> Option<BytePlaneMut<'_>> {
         let layout = self.layout().plane(idx)?;
         Some(BytePlaneMut {
             inner: self.inner.as_mut().with_layout(layout)?,
         })
+    }
+
+    /// Get mutable references to multiple planes at the same time.
+    ///
+    /// This works because planes never overlap. Note that all planes are aligned to the same byte
+    /// boundary as the complete canvas bytes.
+    pub fn planes_mut<const N: usize>(&mut self) -> Option<[BytePlaneMut<'_>; N]> {
+        use image_texel::layout::Bytes;
+
+        let mut layouts = [(); N].map(|()| None);
+
+        for i in 0..N {
+            if i > u8::MAX as usize {
+                return None;
+            }
+
+            layouts[i] = Some(self.layout().plane(i as u8)?);
+        }
+
+        let layouts = layouts.map(|layout| layout.unwrap());
+
+        let mut offset = 0;
+        // This frame's layout takes 0 bytes, so we can take all contents with split_layout
+        let frame: ImageMut<'_, Bytes> = self.as_mut().decay().expect("decay to bytes valid");
+
+        let &Bytes(total_len) = frame.layout();
+        let mut frame = frame.with_layout(Bytes(0)).expect("zero-byte layout valid");
+
+        let planes = layouts.map(move |mut layout| {
+            layout.sub_offset(offset);
+            let mut plane = frame
+                .split_layout()
+                .with_layout(layout)
+                .expect("plane layout within frame");
+            let tail = plane.split_layout();
+            let &Bytes(tail_len) = tail.layout();
+            // Put back all remaining bytes.
+            frame = tail.with_layout(Bytes(0)).expect("zero-byte layout valid");
+            offset = total_len - tail_len;
+
+            Some(plane)
+        });
+
+        if planes.iter().any(|p| p.is_none()) {
+            return None;
+        }
+
+        Some(planes.map(|p| BytePlaneMut { inner: p.unwrap() }))
     }
 
     /// Set the color model.
@@ -230,11 +303,6 @@ impl Canvas {
     /// error if the new color is not compatible with the texel's color channels.
     pub fn set_color(&mut self, color: Color) -> Result<(), LayoutError> {
         self.inner.layout_mut_unguarded().set_color(color)
-    }
-
-    /// Write into another frame, converting color representation between.
-    pub fn convert(&self, into: &mut Self) {
-        Converter::new().run_on(self, into)
     }
 
     pub(crate) fn as_ref(&self) -> ImageRef<'_, &'_ CanvasLayout> {
@@ -246,7 +314,37 @@ impl Canvas {
     }
 }
 
-impl<'data> BytePlane<'data> {
+/// Conversion related methods.
+impl Canvas {
+    /// Write into another frame, converting color representation between.
+    pub fn convert(&self, into: &mut Self) {
+        Converter::new().run_on(self, into)
+    }
+}
+
+impl<'data> BytePlaneRef<'data> {
+    pub fn layout(&self) -> &PlaneBytes {
+        self.inner.layout()
+    }
+
+    pub fn to_owned(&self) -> Plane {
+        let plane = self.inner.layout();
+        let bytes = self.inner.as_bytes();
+
+        Plane {
+            inner: Image::with_bytes(plane.clone(), bytes),
+        }
+    }
+
+    pub fn to_canvas(&self) -> Canvas {
+        let plane = self.inner.layout();
+        let bytes = self.inner.as_bytes();
+
+        Canvas {
+            inner: Image::with_bytes(plane.into(), bytes),
+        }
+    }
+
     /// Upgrade to a view with strongly typed texel type.
     pub fn as_texels<T>(self, texel: image_texel::Texel<T>) -> Option<PlaneRef<'data, T>> {
         if let Some(layout) = self.inner.layout().is_compatible(texel) {
@@ -260,6 +358,28 @@ impl<'data> BytePlane<'data> {
 }
 
 impl<'data> BytePlaneMut<'data> {
+    pub fn layout(&self) -> &PlaneBytes {
+        self.inner.layout()
+    }
+
+    pub fn to_owned(&self) -> Plane {
+        let plane = self.inner.layout();
+        let bytes = self.inner.as_bytes();
+
+        Plane {
+            inner: Image::with_bytes(plane.clone(), bytes),
+        }
+    }
+
+    pub fn to_canvas(&self) -> Canvas {
+        let plane = self.inner.layout();
+        let bytes = self.inner.as_bytes();
+
+        Canvas {
+            inner: Image::with_bytes(plane.into(), bytes),
+        }
+    }
+
     /// Upgrade to a view with strongly typed texel type.
     pub fn as_texels<T>(self, texel: image_texel::Texel<T>) -> Option<PlaneRef<'data, T>> {
         if let Some(layout) = self.inner.layout().is_compatible(texel) {
@@ -283,9 +403,45 @@ impl<'data> BytePlaneMut<'data> {
     }
 }
 
-impl<'data, T> From<PlaneRef<'data, T>> for BytePlane<'data> {
+impl<'data, C> ChannelsRef<'data, C> {
+    pub fn layout(&self) -> &ChannelLayout<C> {
+        self.inner.layout()
+    }
+
+    pub fn as_slice(&self) -> &[C] {
+        self.inner.as_slice()
+    }
+
+    pub fn into_slice(self) -> &'data [C] {
+        self.inner.into_slice()
+    }
+}
+
+impl<'data, C> ChannelsMut<'data, C> {
+    pub fn layout(&self) -> &ChannelLayout<C> {
+        self.inner.layout()
+    }
+
+    pub fn as_slice(&self) -> &[C] {
+        self.inner.as_slice()
+    }
+
+    pub fn as_mut_slice(&mut self) -> &mut [C] {
+        self.inner.as_mut_slice()
+    }
+
+    pub fn into_slice(self) -> &'data [C] {
+        self.inner.into_slice()
+    }
+
+    pub fn into_mut_slice(self) -> &'data mut [C] {
+        self.inner.into_mut_slice()
+    }
+}
+
+impl<'data, T> From<PlaneRef<'data, T>> for BytePlaneRef<'data> {
     fn from(plane: PlaneRef<'data, T>) -> Self {
-        BytePlane {
+        BytePlaneRef {
             inner: plane.inner.decay().unwrap(),
         }
     }
@@ -295,6 +451,14 @@ impl<'data, T> From<PlaneMut<'data, T>> for BytePlaneMut<'data> {
     fn from(plane: PlaneMut<'data, T>) -> Self {
         BytePlaneMut {
             inner: plane.inner.decay().unwrap(),
+        }
+    }
+}
+
+impl From<Plane> for Canvas {
+    fn from(plane: Plane) -> Self {
+        Canvas {
+            inner: plane.inner.decay(),
         }
     }
 }

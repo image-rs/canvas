@@ -17,6 +17,7 @@ use crate::buf::{buf, Buffer, Cog};
 use crate::layout::{
     Bytes, Decay, DynLayout, Layout, Mend, Raster, RasterMut, SliceLayout, Take, TryMend,
 };
+use crate::texel::MAX_ALIGN;
 use crate::{BufferReuseError, Texel, TexelBuffer};
 
 pub use crate::stride::{StridedBufferMut, StridedBufferRef};
@@ -476,6 +477,25 @@ impl<'data, L> ImageRef<'data, L> {
     /// This returns `Some` if the layout fits the underlying data, and `None` otherwise. Use
     /// [`ImageRef::fits`] to check this property in a separate call. Note that the new layout
     /// need not be related to the old layout in any other way.
+    ///
+    /// # Usage
+    ///
+    /// ```rust
+    /// # fn not_main() -> Option<()> {
+    /// use image_texel::{Image, Matrix, layout::Bytes};
+    /// let image = Image::from(Matrix::<[u8; 4]>::with_width_and_height(10, 10));
+    ///
+    /// let reference = image.as_ref();
+    ///
+    /// let as_bytes = reference.with_layout(Bytes(400))?;
+    /// assert!(matches!(as_bytes.layout(), Bytes(400)));
+    ///
+    /// // But not if we request too much.
+    /// assert!(as_bytes.with_layout(Bytes(500)).is_none());
+    ///
+    /// # Some(()) }
+    /// # fn main() { not_main(); }
+    /// ```
     pub fn with_layout<M>(self, layout: M) -> Option<ImageRef<'data, M>>
     where
         M: Layout,
@@ -549,6 +569,25 @@ impl<'data, L> ImageRef<'data, L> {
     {
         L::get(self.as_ref(), coord)
     }
+
+    /// Split off all unused bytes at the tail of the layout.
+    pub fn split_layout(&mut self) -> ImageRef<'data, Bytes>
+    where
+        L: Layout,
+    {
+        // Need to roundup to correct alignment.
+        let size = self.inner.layout.byte_len();
+        let round_up = (size.wrapping_neg() & !(MAX_ALIGN - 1)).wrapping_neg();
+
+        if round_up > self.inner.buffer.len() {
+            return RawImage::with_buffer(Bytes(0), buf::new(&[])).into();
+        }
+
+        let (initial, next) = self.inner.buffer.split_at(round_up);
+        self.inner.buffer = initial;
+
+        RawImage::with_buffer(Bytes(next.len()), next).into()
+    }
 }
 
 impl<'data, L> ImageMut<'data, L> {
@@ -601,6 +640,25 @@ impl<'data, L> ImageMut<'data, L> {
     /// This returns `Some` if the layout fits the underlying data, and `None` otherwise. Use
     /// [`ImageMut::fits`] to check this property in a separate call. Note that the new layout
     /// need not be related to the old layout in any other way.
+    ///
+    /// # Usage
+    ///
+    /// ```rust
+    /// # fn not_main() -> Option<()> {
+    /// use image_texel::{Image, Matrix, layout::Bytes};
+    /// let mut image = Image::from(Matrix::<[u8; 4]>::with_width_and_height(10, 10));
+    ///
+    /// let reference = image.as_mut();
+    ///
+    /// let as_bytes = reference.with_layout(Bytes(400))?;
+    /// assert!(matches!(as_bytes.layout(), Bytes(400)));
+    ///
+    /// // But not if we request too much.
+    /// assert!(as_bytes.with_layout(Bytes(500)).is_none());
+    ///
+    /// # Some(()) }
+    /// # fn main() { not_main(); }
+    /// ```
     pub fn with_layout<M>(self, layout: M) -> Option<ImageMut<'data, M>>
     where
         M: Layout,
@@ -723,6 +781,27 @@ impl<'data, L> ImageMut<'data, L> {
         L: RasterMut<P>,
     {
         L::shade(self.as_mut(), f)
+    }
+
+    /// Split off unused bytes at the tail of the layout.
+    pub fn split_layout(&mut self) -> ImageMut<'data, Bytes>
+    where
+        L: Layout,
+    {
+        // Need to roundup to correct alignment.
+        let size = self.inner.layout.byte_len();
+        let round_up = (size.wrapping_neg() & !(MAX_ALIGN - 1)).wrapping_neg();
+
+        let empty = buf::new_mut(&mut []);
+        if round_up > self.inner.buffer.len() {
+            return RawImage::with_buffer(Bytes(0), empty).into();
+        }
+
+        let buffer = core::mem::replace(&mut self.inner.buffer, empty);
+        let (initial, next) = buffer.split_at_mut(round_up);
+        self.inner.buffer = initial;
+
+        RawImage::with_buffer(Bytes(next.len()), next).into()
     }
 }
 
@@ -1015,7 +1094,7 @@ impl<B, L> RawImage<B, L> {
         B: ops::Deref<Target = buf>,
         Other: Layout,
     {
-        if self.buffer.len() > layout.byte_len() {
+        if self.buffer.len() < layout.byte_len() {
             Err(self)
         } else {
             Ok(RawImage {

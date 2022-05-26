@@ -1,10 +1,10 @@
 //! Defines layout and buffer of our images.
-use crate::color::*;
+use crate::color::{Color, ColorChannel, ColorChannelModel};
 
 use image_texel::image::{Coord, ImageRef};
 use image_texel::layout::{
-    Decay, Layout as ImageLayout, MatrixBytes, Raster, StrideSpec, StridedBytes, Strides,
-    TexelLayout,
+    Decay, Layout as ImageLayout, MatrixBytes, Raster, SliceLayout, StrideSpec, StridedBytes,
+    Strides, TexelLayout,
 };
 
 use crate::shader::ChunkSpec;
@@ -34,6 +34,8 @@ pub struct CanvasLayout {
     /// The texel representing merged layers.
     /// When no explicit planes are given then this describes the sole plane as well.
     pub(crate) texel: Texel,
+    /// The offset of the first plane.
+    pub(crate) offset: usize,
     /// How the numbers relate to physical quantities, important for conversion.
     pub(crate) color: Option<Color>,
     /// Additional color planes, if any.
@@ -52,6 +54,7 @@ pub(crate) struct Plane {
 }
 
 /// The strides of uniformly spaced (color) channels.
+#[derive(Clone, Debug, PartialEq)]
 pub struct ChannelSpec {
     pub channels: u8,
     pub channel_stride: usize,
@@ -83,11 +86,10 @@ pub struct ChannelLayout<T> {
 }
 
 /// The byte matrix layout of a single plane of the image.
+#[derive(Clone, PartialEq)]
 pub struct PlaneBytes {
     /// The texel in this plane.
     texel: Texel,
-    /// Offset within the image in bytes.
-    offset_in_texels: usize,
     /// The matrix descriptor of this plane.
     matrix: StridedBytes,
 }
@@ -96,11 +98,10 @@ pub struct PlaneBytes {
 ///
 /// Note that this is _not_ fully public like the related [`PlaneBytes`] as we have invariants
 /// relating the texel type to alignment and offset of the matrix within the image.
+#[derive(Clone, PartialEq)]
 pub struct PlanarLayout<T> {
     /// The texel in this plane.
     texel: Texel,
-    /// Offset within the image in bytes.
-    offset_in_texels: usize,
     /// The matrix descriptor of this plane.
     matrix: Strides<T>,
 }
@@ -616,11 +617,24 @@ impl SampleParts {
         model: ColorChannelModel,
     ) -> Option<Self> {
         // FIXME(color): implement this properly, `color_index` check included, see `with_yuv_422`.
-        todo!()
+        let parts = [parts[0], parts[1], parts[2], None];
+        let color_index = Self::color_index(&parts, model)?;
+
+        Some(SampleParts {
+            parts,
+            color_index,
+            pitch: SamplePitch::Yuv411,
+        })
     }
 
     pub fn num_components(self) -> u8 {
         self.parts.iter().map(|ch| u8::from(ch.is_some())).sum()
+    }
+
+    pub fn has_alpha(self) -> bool {
+        self.parts
+            .iter()
+            .any(|c| matches!(c, Some(ColorChannel::Alpha)))
     }
 
     pub(crate) fn channels(&self) -> impl '_ + Iterator<Item = (Option<ColorChannel>, u8)> {
@@ -651,18 +665,7 @@ impl Block {
 impl CanvasLayout {
     /// Construct a full frame from a single plane.
     pub fn with_plane(bytes: PlaneBytes) -> Self {
-        let stride = bytes.matrix.spec();
-
-        CanvasLayout {
-            bytes: ByteLayout {
-                width: stride.width as u32,
-                height: stride.height as u32,
-                bytes_per_row: stride.width_stride as u32,
-            },
-            planes: Box::default(),
-            texel: bytes.texel,
-            color: None,
-        }
+        CanvasLayout::from(&bytes)
     }
 
     /// Create from a list of planes, and the texel they describe when merged.
@@ -687,6 +690,7 @@ impl CanvasLayout {
                 bytes_per_row: (spec.width_stride as u32) * width,
             },
             planes: Box::default(),
+            offset: 0,
             texel,
             color: None,
         })
@@ -709,7 +713,6 @@ impl CanvasLayout {
 
         let bytes = PlaneBytes {
             texel: rows.texel.clone(),
-            offset_in_texels: 0,
             matrix: StridedBytes::new(stride).map_err(LayoutError::stride_error)?,
         };
 
@@ -728,6 +731,19 @@ impl CanvasLayout {
             row_stride: u64::from(width) * texel_stride,
             texel: texel.clone(),
         })
+    }
+
+    /// Get the texel represented by the canvas *as a whole*.
+    ///
+    /// For non-planar images this is exactly the same as the texel of the first place. Otherwise,
+    /// it is a merged representation.
+    pub fn texel(&self) -> &Texel {
+        &self.texel
+    }
+
+    /// Get the color space used by the image.
+    pub fn color(&self) -> Option<&Color> {
+        self.color.as_ref()
     }
 
     /// Returns the index of a texel in a slice of planar image data.
@@ -881,7 +897,6 @@ impl CanvasLayout {
 
         Some(PlaneBytes {
             texel: self.texel.clone(),
-            offset_in_texels: 0,
             matrix,
         })
     }
@@ -905,17 +920,28 @@ impl CanvasLayout {
 
     /// Verify that the byte-length is below `isize::MAX`.
     fn validate(this: Self) -> Option<Self> {
-        let mut start = 0;
+        let mut start = this.offset;
         // For now, validation requires that planes are successive.
         // This can probably stay true for quite a while..
         for plane in 0..this.num_planes() {
             // Require that the number of planes actually works..
             let plane = this.plane(plane)?;
             let spec = plane.matrix.spec();
+
+            let offset = plane.matrix.spec().offset;
+            let texel_offset = plane.offset_in_texels().checked_mul(spec.element.size())?;
+
+            // FIXME(planar): decide on this issue.
+            if texel_offset != offset {
+                return None;
+            }
+
             // TODO: should we require that planes are aligned to MAX_ALIGN?
             // Probably useful for some methods but that's something for planar layouts.
-            // FIXME(planar): decide on this issue.
-            let offset = plane.offset_in_texels.checked_mul(spec.element.size())?;
+            if texel_offset % 256 != 0 {
+                return None;
+            }
+
             let plane_end = offset.checked_add(plane.matrix.byte_len())?;
 
             let texel_layout = plane.texel.bits.layout();
@@ -941,6 +967,20 @@ impl CanvasLayout {
 }
 
 impl PlaneBytes {
+    /// Get the texel represented by this plane.
+    pub fn texel(&self) -> &Texel {
+        &self.texel
+    }
+
+    pub(crate) fn sub_offset(&mut self, offset: usize) {
+        let mut spec = self.matrix.spec();
+        assert!(offset % spec.element.size() == 0);
+        assert!(offset % 256 == 0);
+
+        spec.offset = spec.offset.saturating_sub(offset);
+        self.matrix = StridedBytes::new(spec).unwrap();
+    }
+
     pub(crate) fn as_channel_bytes(&self) -> Option<ChannelBytes> {
         let (channel_layout, channels) = self.texel.bits.as_array()?;
         Some(ChannelBytes {
@@ -955,13 +995,46 @@ impl PlaneBytes {
         use image_texel::layout::TryMend;
         Some(PlanarLayout {
             texel: self.texel.clone(),
-            offset_in_texels: self.offset_in_texels,
             matrix: texel.try_mend(&self.matrix).ok()?,
         })
+    }
+
+    pub(crate) fn offset_in_texels(&self) -> usize {
+        self.matrix.spec().offset / self.matrix.spec().element.size()
+    }
+}
+
+impl<T> PlanarLayout<T> {
+    /// Get the texel represented by this plane.
+    pub fn texel(&self) -> &Texel {
+        &self.texel
+    }
+
+    pub(crate) fn offset_in_texels(&self) -> usize {
+        self.matrix.spec().offset / self.matrix.spec().element.size()
     }
 }
 
 impl ChannelBytes {
+    pub fn spec(&self) -> ChannelSpec {
+        let StrideSpec {
+            width,
+            width_stride,
+            height,
+            height_stride,
+            ..
+        } = self.inner.spec();
+
+        ChannelSpec {
+            channels: self.channels,
+            channel_stride: self.channel_stride,
+            height: height as u32,
+            height_stride,
+            width: width as u32,
+            width_stride,
+        }
+    }
+
     pub(crate) fn is_compatible<T>(
         &self,
         texel: image_texel::Texel<T>,
@@ -978,6 +1051,15 @@ impl ChannelBytes {
 }
 
 impl<T> ChannelLayout<T> {
+    /// Get the texel represented by this plane.
+    pub fn texel(&self) -> &Texel {
+        &self.inner.texel
+    }
+
+    pub fn spec(&self) -> ChannelSpec {
+        self.inner.spec()
+    }
+
     fn from_planar_assume_u8<const N: usize>(from: PlanarLayout<[T; N]>) -> Self {
         let channel = from.matrix.texel().array_element();
         let inner = StridedBytes::decay(from.matrix);
@@ -1015,15 +1097,29 @@ impl ImageLayout for CanvasLayout {
     }
 }
 
-impl<T> ImageLayout for PlanarLayout<T> {
-    fn byte_len(&self) -> usize {
-        self.matrix.byte_len()
+impl Decay<PlaneBytes> for CanvasLayout {
+    fn decay(from: PlaneBytes) -> Self {
+        CanvasLayout::from(&from)
     }
 }
 
 impl ImageLayout for PlaneBytes {
     fn byte_len(&self) -> usize {
         self.matrix.byte_len()
+    }
+}
+
+impl<T> ImageLayout for PlanarLayout<T> {
+    fn byte_len(&self) -> usize {
+        self.matrix.byte_len()
+    }
+}
+
+impl<T> SliceLayout for PlanarLayout<T> {
+    type Sample = T;
+
+    fn sample(&self) -> image_texel::Texel<Self::Sample> {
+        self.matrix.texel()
     }
 }
 
@@ -1041,6 +1137,7 @@ impl<T> Raster<T> for PlanarLayout<T> {
         Coord(width as u32, height as u32)
     }
 
+    // FIXME: requires testing and validation, etc.
     fn get(from: ImageRef<&Self>, at: Coord) -> Option<T> {
         let (x, y) = at.xy();
         let layout = from.layout();
@@ -1058,7 +1155,7 @@ impl<T> Raster<T> for PlanarLayout<T> {
 
         let idx = y as usize * (width_stride / texel.size()) + x as usize;
         let slice = from.as_texels(texel);
-        let value = slice.get(layout.offset_in_texels..)?.get(idx)?;
+        let value = slice.get(layout.offset_in_texels()..)?.get(idx)?;
         Some(texel.copy_val(value))
     }
 }
@@ -1067,9 +1164,14 @@ impl<T> Decay<PlanarLayout<T>> for PlaneBytes {
     fn decay(from: PlanarLayout<T>) -> Self {
         PlaneBytes {
             texel: from.texel,
-            offset_in_texels: from.offset_in_texels,
             matrix: StridedBytes::decay(from.matrix),
         }
+    }
+}
+
+impl ImageLayout for ChannelBytes {
+    fn byte_len(&self) -> usize {
+        self.inner.byte_len()
     }
 }
 
@@ -1079,9 +1181,11 @@ impl<T> ImageLayout for ChannelLayout<T> {
     }
 }
 
-impl ImageLayout for ChannelBytes {
-    fn byte_len(&self) -> usize {
-        self.inner.byte_len()
+impl<T> SliceLayout for ChannelLayout<T> {
+    type Sample = T;
+
+    fn sample(&self) -> image_texel::Texel<Self::Sample> {
+        self.channel
     }
 }
 
@@ -1112,5 +1216,30 @@ impl<T> Decay<PlanarLayout<[T; 4]>> for ChannelLayout<T> {
 impl<T> Decay<ChannelLayout<T>> for ChannelBytes {
     fn decay(from: ChannelLayout<T>) -> Self {
         from.inner
+    }
+}
+
+impl From<&'_ PlaneBytes> for CanvasLayout {
+    fn from(plane: &PlaneBytes) -> Self {
+        let StrideSpec {
+            width,
+            height,
+            width_stride: _,
+            height_stride,
+            element: _,
+            offset,
+        } = plane.matrix.spec();
+
+        CanvasLayout {
+            bytes: ByteLayout {
+                width: width as u32,
+                height: height as u32,
+                bytes_per_row: height_stride as u32,
+            },
+            texel: plane.texel.clone(),
+            offset,
+            color: None,
+            planes: Box::default(),
+        }
     }
 }
