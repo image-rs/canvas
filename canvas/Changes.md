@@ -1,3 +1,29 @@
+## 0.3.1 (Mustafar)
+
+This release is complete enough to provide all relevant RGB-Lab interaction.
+
+Bug fixes:
+- Fixed having default values for missing color channels. Converting `Rgb` to
+  `Rgba` now assigns a value corresponding to `1.0` to the alpha channel,
+  instead of `NaN`.
+
+New features:
+- Added `Canvas::planes_mut` as an interface to split it into multiple planes.
+- Added `{BytePlaneRef, BytePlaneMut}::{to_owned, to_canvas}` to get owning
+  representations of singular color planes.
+- Export containers related to `Canvas` in a new public `canvas` module.
+- Added `{Canvas, *}::layout` for container types, returning references to
+  their respective layout types.
+- Exposed `Channels{Ref,Mut}` as a strongly typed reference to arrays of
+  uniform color channels. These offer `{as,mut,into}_slice` methods for direct
+  access to individual channel values.
+- Added `From<Plane>` for `Canvas`.
+- Added `SampleParts::has_alpha` to check for any alpha channel.
+- Added `color` and `texel` getter for `CanvasLayout`.
+- The `BytePlane` type is now `BytePlaneRef` (hidden alias keeps this from
+  being a breaking change).
+
+
 ## 0.3.0
 
 - Added u8x4 and u16x4 shuffle implementations for SSSE3 and AVX2.
