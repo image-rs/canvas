@@ -411,6 +411,10 @@ impl<'data, C> ChannelsRef<'data, C> {
     pub fn as_slice(&self) -> &[C] {
         self.inner.as_slice()
     }
+
+    pub fn into_slice(self) -> &'data [C] {
+        self.inner.into_slice()
+    }
 }
 
 impl<'data, C> ChannelsMut<'data, C> {
@@ -424,6 +428,14 @@ impl<'data, C> ChannelsMut<'data, C> {
 
     pub fn as_mut_slice(&mut self) -> &mut [C] {
         self.inner.as_mut_slice()
+    }
+
+    pub fn into_slice(self) -> &'data [C] {
+        self.inner.into_slice()
+    }
+
+    pub fn into_mut_slice(self) -> &'data mut [C] {
+        self.inner.into_mut_slice()
     }
 }
 
