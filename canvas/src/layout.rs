@@ -631,6 +631,12 @@ impl SampleParts {
         self.parts.iter().map(|ch| u8::from(ch.is_some())).sum()
     }
 
+    pub fn has_alpha(self) -> bool {
+        self.parts
+            .iter()
+            .any(|c| matches!(c, Some(ColorChannel::Alpha)))
+    }
+
     pub(crate) fn channels(&self) -> impl '_ + Iterator<Item = (Option<ColorChannel>, u8)> {
         (0..4).map(|i| (self.parts[i], (self.color_index >> (2 * i)) & 0x3))
     }
@@ -725,6 +731,19 @@ impl CanvasLayout {
             row_stride: u64::from(width) * texel_stride,
             texel: texel.clone(),
         })
+    }
+
+    /// Get the texel represented by the canvas *as a whole*.
+    ///
+    /// For non-planar images this is exactly the same as the texel of the first place. Otherwise,
+    /// it is a merged representation.
+    pub fn texel(&self) -> &Texel {
+        &self.texel
+    }
+
+    /// Get the color space used by the image.
+    pub fn color(&self) -> Option<&Color> {
+        self.color.as_ref()
     }
 
     /// Returns the index of a texel in a slice of planar image data.
@@ -948,6 +967,11 @@ impl CanvasLayout {
 }
 
 impl PlaneBytes {
+    /// Get the texel represented by this plane.
+    pub fn texel(&self) -> &Texel {
+        &self.texel
+    }
+
     pub(crate) fn sub_offset(&mut self, offset: usize) {
         let mut spec = self.matrix.spec();
         assert!(offset % spec.element.size() == 0);
@@ -981,6 +1005,11 @@ impl PlaneBytes {
 }
 
 impl<T> PlanarLayout<T> {
+    /// Get the texel represented by this plane.
+    pub fn texel(&self) -> &Texel {
+        &self.texel
+    }
+
     pub(crate) fn offset_in_texels(&self) -> usize {
         self.matrix.spec().offset / self.matrix.spec().element.size()
     }
@@ -1022,6 +1051,11 @@ impl ChannelBytes {
 }
 
 impl<T> ChannelLayout<T> {
+    /// Get the texel represented by this plane.
+    pub fn texel(&self) -> &Texel {
+        &self.inner.texel
+    }
+
     pub fn spec(&self) -> ChannelSpec {
         self.inner.spec()
     }
