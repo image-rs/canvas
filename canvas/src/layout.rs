@@ -134,6 +134,10 @@ pub struct Texel {
 }
 
 /// How many pixels are described by a single texel unit.
+///
+/// Also each pixel in a block to order of channels, i.e. provides the link between SampleParts and
+/// SampleBits. Note that some block layouts may have _less_ channel than the sample if channels
+/// are not encoded separately, for example block compressed layouts.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 #[non_exhaustive]
 #[repr(u8)]
@@ -150,6 +154,13 @@ pub enum Block {
     Sub2x4 = 4,
     /// Each texel refers to a four-by-four block.
     Sub4x4 = 5,
+
+    /* Special block layouts */
+    Yuv422,
+    /// Yuv422 with different order of channels.
+    Yuy2,
+    Yuv411,
+    /* TODO: Bc1, Astc, EAC */
 }
 
 /// Describes which values are present in a texel.
@@ -168,24 +179,6 @@ pub struct SampleParts {
     /// The position of each channel as a 2-bit number.
     /// This is the index into which the channel is written.
     pub(crate) color_index: u8,
-    /// How the samples are recovered from a texel.
-    pub(crate) pitch: SamplePitch,
-}
-
-/// Defines the method by which parts from a texel are expanded into bits.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub(crate) enum SamplePitch {
-    /// Parts are expanded by extracting bit fields from the texel.
-    PixelBits,
-    // Subsampled chroma, in order uyvy.
-    Yuv422,
-    // Like Yuv422 but yuyv.
-    Yuy2,
-    // Subsampled chroma, uyyvyy.
-    Yuv411,
-    // Subsampled blocks.
-    Yuv420,
-    Bc1,
 }
 
 macro_rules! sample_parts {
@@ -203,7 +196,6 @@ macro_rules! sample_parts {
             color_index: (
                 $ch0.canonical_index_in_surely(ColorChannelModel::$color)
             ),
-            pitch: SamplePitch::PixelBits,
         };
     };
     (@$color:ident: $(#[$attr:meta])* $name:ident = $ch0:path,$ch1:path) => {
@@ -214,7 +206,6 @@ macro_rules! sample_parts {
                 $ch0.canonical_index_in_surely(ColorChannelModel::$color)
                 | $ch1.canonical_index_in_surely(ColorChannelModel::$color) << 2
             ),
-            pitch: SamplePitch::PixelBits,
         };
     };
     (@$color:ident: $(#[$attr:meta])* $name:ident = $ch0:path,$ch1:path,$ch2:path) => {
@@ -226,7 +217,6 @@ macro_rules! sample_parts {
                 | $ch1.canonical_index_in_surely(ColorChannelModel::$color) << 2
                 | $ch2.canonical_index_in_surely(ColorChannelModel::$color) << 4
             ),
-            pitch: SamplePitch::PixelBits,
         };
     };
     (@$color:ident: $(#[$attr:meta])* $name:ident = $ch0:path,$ch1:path,$ch2:path,$ch3:path) => {
@@ -239,7 +229,6 @@ macro_rules! sample_parts {
                 | $ch2.canonical_index_in_surely(ColorChannelModel::$color) << 4
                 | $ch3.canonical_index_in_surely(ColorChannelModel::$color) << 6
             ),
-            pitch: SamplePitch::PixelBits,
         };
     };
 }
@@ -252,7 +241,6 @@ mod sample_parts {
     type Cc = super::ColorChannel;
     use super::ColorChannelModel;
     use super::SampleParts;
-    use super::SamplePitch;
 
     sample_parts! {
         /// A pure alpha part.
@@ -407,6 +395,9 @@ impl Texel {
 
     /// Get the texel describing a single channel.
     /// Returns None if the channel is not contained, or if it can not be extracted on its own.
+    ///
+    /// FIXME(color): review what this means for block layouts. But since it only works for `UInt?x?`
+    /// this is not a big deal yet.
     pub fn channel_texel(&self, channel: ColorChannel) -> Option<Texel> {
         use sample_parts::*;
         use Block::*;
@@ -434,6 +425,8 @@ impl Texel {
         };
         let block = match self.block {
             Pixel | Sub1x2 | Sub1x4 | Sub2x2 | Sub2x4 | Sub4x4 => self.block,
+            // FIXME: really?
+            Yuv422 | Yuy2 | Yuv411 => return None,
         };
         Some(Texel { bits, parts, block })
     }
@@ -562,11 +555,7 @@ impl SampleParts {
     pub fn new(parts: [Option<ColorChannel>; 4], model: ColorChannelModel) -> Option<Self> {
         let color_index = Self::color_index(&parts, model)?;
 
-        Some(SampleParts {
-            parts,
-            color_index,
-            pitch: SamplePitch::PixelBits,
-        })
+        Some(SampleParts { parts, color_index })
     }
 
     fn color_index(parts: &[Option<ColorChannel>; 4], model: ColorChannelModel) -> Option<u8> {
@@ -602,11 +591,7 @@ impl SampleParts {
         // Or do we need to perform stronger checks on the `ColorChannel` input?
         let color_index = Self::color_index(&parts, model)?;
 
-        Some(SampleParts {
-            parts,
-            color_index,
-            pitch: SamplePitch::Yuv422,
-        })
+        Some(SampleParts { parts, color_index })
     }
 
     /// Create parts that describe 4:1:1 subsampled color channels.
@@ -620,11 +605,7 @@ impl SampleParts {
         let parts = [parts[0], parts[1], parts[2], None];
         let color_index = Self::color_index(&parts, model)?;
 
-        Some(SampleParts {
-            parts,
-            color_index,
-            pitch: SamplePitch::Yuv411,
-        })
+        Some(SampleParts { parts, color_index })
     }
 
     pub fn num_components(self) -> u8 {
@@ -647,15 +628,15 @@ impl Block {
         use Block::*;
         match self {
             Pixel => 1,
-            Sub1x2 | Sub2x2 => 2,
-            Sub1x4 | Sub2x4 | Sub4x4 => 4,
+            Sub1x2 | Sub2x2 | Yuv422 | Yuy2 => 2,
+            Sub1x4 | Sub2x4 | Sub4x4 | Yuv411 => 4,
         }
     }
 
     pub fn height(&self) -> u32 {
         use Block::*;
         match self {
-            Pixel | Sub1x2 | Sub1x4 => 1,
+            Pixel | Sub1x2 | Sub1x4 | Yuv422 | Yuy2 | Yuv411 => 1,
             Sub2x2 | Sub2x4 => 2,
             Sub4x4 => 3,
         }

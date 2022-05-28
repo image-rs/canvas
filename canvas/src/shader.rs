@@ -8,7 +8,7 @@ use image_texel::{AsTexel, Texel, TexelBuffer};
 
 use crate::arch::ShuffleOps;
 use crate::layout::{
-    BitEncoding, Block, CanvasLayout, SampleBits, SampleParts, SamplePitch, Texel as TexelBits,
+    BitEncoding, Block, CanvasLayout, SampleBits, SampleParts, Texel as TexelBits,
 };
 use crate::Canvas;
 
@@ -327,23 +327,19 @@ impl Converter {
     /// This avoids expanding them into `pixel_in_buffer` where they'd be represented as `f32x4`
     /// and thus undergo an expensive `u8->f32->u8` cast chain.
     fn convert_intbuf_with_nocolor_ops(&mut self, info: &Info) -> Option<IntShuffleOps> {
+        // Not yet handled, we need independent channels and the same amount.
+        // FIXME(perf): we could use very similar code to expand pixels from blocks but that
+        // requires specialized shuffle methods.
+        // FIXME(perf): for simple linear combinations in non-linear space (e.g. both Rec.601
+        // and Rec.709 specify their YUV in the electric domain even though that's not
+        // accurate) we could do them here, too.
+        // FIXME(perf): Utilize a library for this, e.g. `dcv-color-primitives`, but those are
+        // heavy and may have different implementation goals.
+        // - `dvc-color-primitives` uses an unsafe globals to fetch the `fn` to use...
+        // - `dvc-color-primitives` also depends on `paste`, a proc-macro crate.
         fn determine_shuffle(inp: SampleParts, outp: SampleParts) -> Option<[u8; 4]> {
             let mut ch_from_common = [0x80u8; 4];
             let mut ch_from_input = [0x80u8; 4];
-
-            // Not yet handled, we need independent channels and the same amount.
-            // FIXME(perf): we could use very similar code to expand pixels from blocks but that
-            // requires specialized shuffle methods.
-            // FIXME(perf): for simple linear combinations in non-linear space (e.g. both Rec.601
-            // and Rec.709 specify their YUV in the electric domain even though that's not
-            // accurate) we could do them here, too.
-            // FIXME(perf): Utilize a library for this, e.g. `dcv-color-primitives`, but those are
-            // heavy and may have different implementation goals.
-            // - `dvc-color-primitives` uses an unsafe globals to fetch the `fn` to use...
-            // - `dvc-color-primitives` also depends on `paste`, a proc-macro crate.
-            if inp.pitch != SamplePitch::PixelBits || outp.pitch != SamplePitch::PixelBits {
-                return None;
-            }
 
             for ((ch, common_pos), idx) in inp.channels().zip(0..4) {
                 if ch.is_some() {
@@ -362,6 +358,10 @@ impl Converter {
 
         let in_texel = &info.in_layout.texel;
         let out_texel = &info.out_layout.texel;
+
+        if in_texel.block != Block::Pixel || out_texel.block != Block::Pixel {
+            return None;
+        }
 
         // We can't handle color conversion inside the shuffles.
         if info.in_layout.color != info.out_layout.color {
@@ -956,23 +956,18 @@ impl CommonPixel {
         // FIXME(perf): some bit/part combinations require no reordering of bits and could skip
         // large parts of this phase, or be done vectorized, effectively amounting to a memcpy when
         // the expanded value has the same representation as the texel.
-        let TexelBits { bits, parts, .. } = info.in_layout.texel;
+        let TexelBits { bits, parts, block } = info.in_layout.texel;
 
-        match parts.pitch {
-            SamplePitch::PixelBits => {
+        match block {
+            Block::Pixel => {
                 Self::expand_bits(info, FromBits::for_pixel(bits, parts), in_texel, pixel_buf)
             }
-            SamplePitch::Yuv422 => {
+            Block::Yuv422 => {
                 debug_assert!(matches!(info.in_layout.texel.block, Block::Sub1x2));
                 debug_assert!(matches!(info.in_layout.texel.parts.num_components(), 3));
                 Self::expand_yuv422(info, in_texel, pixel_buf);
             }
-            SamplePitch::Yuy2 => {
-                debug_assert!(matches!(info.in_layout.texel.block, Block::Sub1x2));
-                debug_assert!(matches!(info.in_layout.texel.parts.num_components(), 3));
-                Self::expand_yuy2(info, in_texel, pixel_buf);
-            }
-            SamplePitch::Yuv411 => {
+            Block::Yuv411 => {
                 debug_assert!(matches!(info.in_layout.texel.block, Block::Sub1x4));
                 debug_assert!(matches!(info.in_layout.texel.parts.num_components(), 3));
                 Self::expand_yuv411(info, in_texel, pixel_buf);
@@ -1254,17 +1249,17 @@ impl CommonPixel {
         // FIXME(perf): some bit/part combinations require no reordering of bits and could skip
         // large parts of this phase, or be done vectorized, effectively amounting to a memcpy when
         // the expanded value had the same representation as the texel.
-        let TexelBits { bits, parts, .. } = info.out_layout.texel;
+        let TexelBits { bits, parts, block } = info.out_layout.texel;
 
-        match parts.pitch {
-            SamplePitch::PixelBits => Self::join_bits(
+        match block {
+            Block::Pixel => Self::join_bits(
                 info,
                 ops,
                 FromBits::for_pixel(bits, parts),
                 pixel_buf,
                 out_texels,
             ),
-            SamplePitch::Yuv422 => {
+            Block::Yuv422 => {
                 // Debug assert: common_pixel
                 debug_assert!(matches!(info.out_layout.texel.block, Block::Sub1x2));
                 debug_assert!(matches!(info.out_layout.texel.parts.num_components(), 3));
@@ -1622,7 +1617,6 @@ impl FromBits {
     }
 
     pub(crate) fn for_pixel(bits: SampleBits, parts: SampleParts) -> [Self; 4] {
-        assert_eq!(parts.pitch, SamplePitch::PixelBits);
         let mut vals = [Self::NO_BITS; 4];
 
         let bits = Self::bits(bits);
