@@ -1,5 +1,5 @@
 use crate::color::Color;
-use crate::layout::{CanvasLayout, LayoutError, SampleBits, SampleParts, Texel};
+use crate::layout::{Block, CanvasLayout, LayoutError, SampleBits, SampleParts, Texel};
 use crate::Canvas;
 
 #[test]
@@ -258,5 +258,46 @@ fn split_to_planes() -> Result<(), LayoutError> {
     let [_] = from
         .planes_mut::<1>()
         .expect("single plane always possible");
+    Ok(())
+}
+
+#[test]
+fn expand_bits() -> Result<(), LayoutError> {
+    let source_layout = CanvasLayout::with_texel(
+        &Texel {
+            block: Block::Sub1x4,
+            parts: SampleParts::Rgb,
+            bits: SampleBits::UInt8x3,
+        },
+        32,
+        32,
+    )?;
+
+    let mut from = Canvas::new(source_layout);
+    from.set_color(Color::SRGB)?;
+
+    assert_eq!(
+        from.as_texels(<[u8; 3] as image_texel::AsTexel>::texel())
+            .len(),
+        8 * 32
+    );
+
+    let texel = Texel::new_u8(SampleParts::BgrA);
+    let target_layout = CanvasLayout::with_texel(&texel, 32, 32)?;
+
+    let mut into = Canvas::new(target_layout);
+    into.set_color(Color::SRGB)?;
+
+    from.as_texels_mut(<[u8; 3] as image_texel::AsTexel>::texel())
+        .iter_mut()
+        .for_each(|b| *b = [0x40, 0x41, 0x42]);
+
+    from.convert(&mut into);
+
+    into.as_texels(<[u8; 4] as image_texel::AsTexel>::texel())
+        .iter()
+        .enumerate()
+        .for_each(|(idx, b)| assert_eq!(*b, [0x42, 0x41, 0x40, 0xff], "at {}", idx));
+
     Ok(())
 }

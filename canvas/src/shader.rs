@@ -61,6 +61,8 @@ struct Info {
     /// The selected common color space, midpoint for conversion.
     #[allow(unused)]
     common_color: CommonColor,
+    /// How pixels from blocks are ordered in the `pixel_buf`.
+    common_blocks: CommonPixelOrder,
     /// The texel fetch we perform for input.
     /// Note that this is not necessarily the underlying texel as we throw away parts of
     /// interpretation, as long as it preserves size and alignment in a matter that produces the
@@ -128,6 +130,14 @@ enum CommonPixel {
 #[derive(Clone, Copy, Debug)]
 enum CommonColor {
     CieXyz,
+}
+
+/// The order of pixels in their super blocks, when in the internal pixel buffer. For 1×1 blocks
+/// (=pixels) this doesn't matter.
+#[derive(Clone, Copy, Debug)]
+enum CommonPixelOrder {
+    /// Blocks are expanded such that all pixels are in row order.
+    PixelsInRowOrder,
 }
 
 type PlaneSource<'data, 'layout> = ImageRef<'data, &'layout CanvasLayout>;
@@ -232,6 +242,8 @@ impl Converter {
             // FIXME(color): currently the only case, we also go through this if any conversion is
             // required, but of course in general a potential loss of accuracy. General enough?
             common_color: CommonColor::CieXyz,
+            // FIXME(perf): optimal order? Or require block join to implement arbitrary reorder.
+            common_blocks: CommonPixelOrder::PixelsInRowOrder,
             in_kind: TexelKind::from(frame_in.layout().texel.bits),
             out_kind: TexelKind::from(frame_out.layout().texel.bits),
         };
@@ -962,6 +974,11 @@ impl CommonPixel {
             Block::Pixel => {
                 Self::expand_bits(info, FromBits::for_pixel(bits, parts), in_texel, pixel_buf)
             }
+            Block::Sub1x2 | Block::Sub1x4 | Block::Sub2x2 | Block::Sub2x4 | Block::Sub4x4 => {
+                // On these blocks, all pixels take the *same* channels.
+                Self::expand_bits(info, FromBits::for_pixel(bits, parts), in_texel, pixel_buf);
+                Self::expand_sub_blocks(pixel_buf, info, info.common_blocks);
+            }
             Block::Yuv422 => {
                 debug_assert!(matches!(info.in_layout.texel.block, Block::Sub1x2));
                 debug_assert!(matches!(info.in_layout.texel.parts.num_components(), 3));
@@ -995,6 +1012,26 @@ impl CommonPixel {
             // FIXME(color): error treatment..
             debug_assert!(false, "{:?}", &encoding[..len as usize]);
         }
+    }
+
+    /// Expand into pixel normal form, an n×m array based on super blocks.
+    fn expand_sub_blocks(pixel_buf: &mut TexelBuffer, info: &Info, order: CommonPixelOrder) {
+        debug_assert!(matches!(order, CommonPixelOrder::PixelsInRowOrder));
+        let block = info.in_layout.texel.block;
+        let (bwidth, bheight) = (block.width(), block.height());
+
+        let pixels = pixel_buf.as_mut_texels(<[f32; 4]>::texel());
+        let texlen = pixels.len() / (bwidth as usize) / (bheight as usize);
+        let block = bwidth as usize * bheight as usize;
+
+        for i in (0..texlen).rev() {
+            let source = pixels[i];
+            for target in &mut pixels[block * i..][..block] {
+                *target = source;
+            }
+        }
+
+        // FIXME(color): reorder within super blocks.
     }
 
     /// Expand integer components into shader floats.
@@ -1259,6 +1296,17 @@ impl CommonPixel {
                 pixel_buf,
                 out_texels,
             ),
+            Block::Sub1x2 | Block::Sub1x4 | Block::Sub2x2 | Block::Sub2x4 | Block::Sub4x4 => {
+                // On these blocks, all pixels take the *same* channels.
+                Self::join_bits(
+                    info,
+                    ops,
+                    FromBits::for_pixel(bits, parts),
+                    pixel_buf,
+                    out_texels,
+                );
+                Self::join_sub_blocks(out_texels, info, info.common_blocks);
+            }
             Block::Yuv422 => {
                 // Debug assert: common_pixel
                 debug_assert!(matches!(info.out_layout.texel.block, Block::Sub1x2));
@@ -1355,6 +1403,31 @@ impl CommonPixel {
                 out_texels,
                 pixel_buf,
             }),
+        }
+    }
+
+    /// Expand into pixel normal form, an n×m array based on super blocks.
+    fn join_sub_blocks(pixel_buf: &mut TexelBuffer, info: &Info, order: CommonPixelOrder) {
+        debug_assert!(matches!(order, CommonPixelOrder::PixelsInRowOrder));
+        let block = info.out_layout.texel.block;
+        let (bwidth, bheight) = (block.width(), block.height());
+
+        let pixels = pixel_buf.as_mut_texels(<[f32; 4]>::texel());
+        let texlen = pixels.len() / (bwidth as usize) / (bheight as usize);
+        let block = bwidth as usize * bheight as usize;
+
+        // FIXME(color): reorder within super blocks.
+
+        for i in (0..texlen).rev() {
+            let mut sum = [0.0, 0.0, 0.0, 0.0];
+            // This is really not an optimal way to approximate the mean.
+            for &[a, b, c, d] in &pixels[block * i..][..block] {
+                sum[0] += a;
+                sum[1] += b;
+                sum[2] += c;
+                sum[3] += d;
+            }
+            pixels[i] = sum.map(|i| i / block as f32);
         }
     }
 

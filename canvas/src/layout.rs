@@ -90,6 +90,11 @@ pub struct ChannelLayout<T> {
 pub struct PlaneBytes {
     /// The texel in this plane.
     texel: Texel,
+    // FIXME: we could store merely the diff to the block-width.
+    /// The actual pixel width of this plane.
+    width: u32,
+    /// The actual pixel height of this plane.
+    height: u32,
     /// The matrix descriptor of this plane.
     matrix: StridedBytes,
 }
@@ -641,6 +646,16 @@ impl Block {
             Sub4x4 => 3,
         }
     }
+
+    pub(crate) fn block_width(&self, pixels: u32) -> u32 {
+        let div = self.width();
+        pixels / div + if pixels % div == 0 { 0 } else { 1 }
+    }
+
+    pub(crate) fn block_height(&self, pixels: u32) -> u32 {
+        let div = self.height();
+        pixels / div + if pixels % div == 0 { 0 } else { 1 }
+    }
 }
 
 impl CanvasLayout {
@@ -685,8 +700,8 @@ impl CanvasLayout {
 
         let stride = StrideSpec {
             offset: 0,
-            width: rows.width as usize,
-            height: rows.height as usize,
+            width: rows.texel.block.block_width(rows.width) as usize,
+            height: rows.texel.block.block_height(rows.height) as usize,
             element: rows.texel.bits.layout(),
             height_stride: bytes_per_row,
             width_stride: bytes_per_texel.into(),
@@ -694,6 +709,8 @@ impl CanvasLayout {
 
         let bytes = PlaneBytes {
             texel: rows.texel.clone(),
+            width: rows.width,
+            height: rows.height,
             matrix: StridedBytes::new(stride).map_err(LayoutError::stride_error)?,
         };
 
@@ -870,14 +887,16 @@ impl CanvasLayout {
         let matrix = StridedBytes::with_row_major(
             MatrixBytes::from_width_height(
                 self.texel.bits.layout(),
-                self.bytes.width as usize,
-                self.bytes.height as usize,
+                self.texel.block.block_width(self.bytes.width) as usize,
+                self.texel.block.block_height(self.bytes.height) as usize,
             )
             .unwrap(),
         );
 
         Some(PlaneBytes {
             texel: self.texel.clone(),
+            width: self.bytes.width,
+            height: self.bytes.height,
             matrix,
         })
     }
@@ -1143,8 +1162,12 @@ impl<T> Raster<T> for PlanarLayout<T> {
 
 impl<T> Decay<PlanarLayout<T>> for PlaneBytes {
     fn decay(from: PlanarLayout<T>) -> Self {
+        let spec = from.matrix.spec();
+        // This is a pixel layout.
         PlaneBytes {
             texel: from.texel,
+            width: spec.width as u32,
+            height: spec.height as u32,
             matrix: StridedBytes::decay(from.matrix),
         }
     }
@@ -1203,8 +1226,8 @@ impl<T> Decay<ChannelLayout<T>> for ChannelBytes {
 impl From<&'_ PlaneBytes> for CanvasLayout {
     fn from(plane: &PlaneBytes) -> Self {
         let StrideSpec {
-            width,
-            height,
+            width: _,
+            height: _,
             width_stride: _,
             height_stride,
             element: _,
@@ -1213,8 +1236,8 @@ impl From<&'_ PlaneBytes> for CanvasLayout {
 
         CanvasLayout {
             bytes: ByteLayout {
-                width: width as u32,
-                height: height as u32,
+                width: plane.width,
+                height: plane.height,
                 bytes_per_row: height_stride as u32,
             },
             texel: plane.texel.clone(),
