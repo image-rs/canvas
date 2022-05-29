@@ -187,6 +187,7 @@ struct IntShuffleOps {
     should_defer_texel_write: bool,
 }
 
+#[derive(Debug)]
 struct SuperTexel {
     blocks: Range<u32>,
     /// In blocks per super block.
@@ -552,6 +553,9 @@ impl Converter {
             }
 
             self.generate_coords(info, ops, &texel_conversion, &sb_x, &sb_y);
+            eprintln!("{:?}", self.super_blocks);
+            eprintln!("{:?}", self.in_coords);
+            eprintln!("{:?}", self.out_coords);
             self.reserve_buffers(info, ops);
             // FIXME(planar): should be repeated for all planes?
             self.read_texels(info, ops, &texel_conversion, frame_in.as_ref());
@@ -571,6 +575,10 @@ impl Converter {
 
         let super_width = core::cmp::max(b0.width(), b1.width());
         let super_height = core::cmp::max(b0.height(), b1.height());
+        assert!(super_width % b0.width() == 0);
+        assert!(super_width % b1.width() == 0);
+        assert!(super_height % b0.height() == 0);
+        assert!(super_height % b1.height() == 0);
 
         let sampled_with = |w, bs| w / bs + if w % bs == 0 { 0 } else { 1 };
 
@@ -636,20 +644,23 @@ impl Converter {
                 .out_coords
                 .as_mut_slice()
                 .chunks_exact_mut(out_chunk_len);
+
             for &[bx, by] in self.super_blocks.as_slice().iter() {
+                let (sx, sy) = (bx * sb_x.in_super, by * sb_y.in_super);
                 if let Some(chunk) = in_chunks.next() {
                     Self::blocks(0..sb_x.in_super, 0..sb_y.in_super)(chunk);
                     for p in chunk.iter_mut() {
                         let [ix, iy] = *p;
-                        *p = [bx + ix, by + iy];
+                        *p = [sx + ix, sy + iy];
                     }
                 }
 
+                let (sx, sy) = (bx * sb_x.out_super, by * sb_y.out_super);
                 if let Some(chunk) = out_chunks.next() {
                     Self::blocks(0..sb_x.out_super, 0..sb_y.out_super)(chunk);
                     for p in chunk.iter_mut() {
                         let [ox, oy] = *p;
-                        *p = [bx + ox, by + oy];
+                        *p = [sx + ox, sy + oy];
                     }
                 }
             }

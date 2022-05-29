@@ -676,13 +676,12 @@ impl CanvasLayout {
         }
 
         let spec = layers[0].matrix.spec();
-        let width = spec.width.try_into().map_err(LayoutError::width_error)?;
-        let height = spec.height.try_into().map_err(LayoutError::height_error)?;
+        let width: u32 = spec.width.try_into().map_err(LayoutError::width_error)?;
 
         Self::validate(CanvasLayout {
             bytes: ByteLayout {
-                width,
-                height,
+                width: layers[0].width,
+                height: layers[0].height,
                 bytes_per_row: (spec.width_stride as u32) * width,
             },
             planes: Box::default(),
