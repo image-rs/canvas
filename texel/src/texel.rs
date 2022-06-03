@@ -470,7 +470,7 @@ impl<P> Texel<P> {
             // - The `pod`-ness is certified by `self`, which makes the bytes a valid
             //   representation of P. Conversely, it makes any P valid as bytes.
             let len = slice.len();
-            Some(unsafe { &mut *ptr::slice_from_raw_parts_mut(bytes.as_ptr() as *mut P, len) })
+            Some(unsafe { &mut *ptr::slice_from_raw_parts_mut(bytes.as_mut_ptr() as *mut P, len) })
         } else {
             None
         }
@@ -537,7 +537,7 @@ impl<P> Texel<P> {
         // * lifetime is not changed
         // * keeps the exact same size
         // * validity as bytes checked by Texel constructor
-        unsafe { slice::from_raw_parts_mut(texel.as_ptr() as *mut u8, mem::size_of_val(texel)) }
+        unsafe { slice::from_raw_parts_mut(texel.as_mut_ptr() as *mut u8, mem::size_of_val(texel)) }
     }
 }
 
