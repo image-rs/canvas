@@ -28,6 +28,13 @@ pub enum Color {
         whitepoint: Whitepoint,
         luminance: Luminance,
     },
+    /// A lightness, chroma difference scheme.
+    Yuv {
+        primary: Primaries,
+        whitepoint: Whitepoint,
+        transfer: Transfer,
+        luminance: Luminance,
+    },
     /// The simple but perceptual space Oklab by Björn Ottoson.
     ///
     /// The _linear_ representation of this color is Lab but its quantized components are may be
@@ -320,7 +327,7 @@ impl Color {
         whitepoint: Whitepoint::D65,
     };
 
-    pub const BT709: Color = Color::Rgb {
+    pub const BT709: Color = Color::Yuv {
         luminance: Luminance::Sdr,
         primary: Primaries::Bt709,
         transfer: Transfer::Bt709,
@@ -427,6 +434,14 @@ impl Color {
                 let [x, y, z] = to_xyz.mul_vec([r, g, b]);
                 [x, y, z, a]
             }
+            Color::Yuv {
+                primary,
+                transfer,
+                whitepoint,
+                luminance: _,
+            } => {
+                todo!()
+            }
             Color::Scalars { transfer } => transfer.to_optical_display(value),
             Color::SrLab2 { whitepoint } => {
                 let [x, y, z, a] = value;
@@ -450,6 +465,14 @@ impl Color {
                 let [r, g, b] = from_xyz.mul_vec([x, y, z]);
                 transfer.from_optical_display([r, g, b, a])
             }
+            Color::Yuv {
+                primary,
+                transfer,
+                whitepoint,
+                luminance: _,
+            } => {
+                todo!()
+            }
             Color::Scalars { transfer } => transfer.from_optical_display(value),
             Color::SrLab2 { whitepoint } => {
                 let [x, y, z, a] = value;
@@ -463,6 +486,7 @@ impl Color {
         Some(match self {
             Color::Rgb { .. } => ColorChannelModel::Rgb,
             Color::Oklab | Color::SrLab2 { .. } => ColorChannelModel::Lab,
+            Color::Yuv { .. } => ColorChannelModel::Yuv,
             Color::Scalars { .. } => return None,
         })
     }
