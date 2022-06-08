@@ -749,8 +749,9 @@ impl Converter {
 
             // FIXME(planar):
             // FIXME(color): multi-planar texel fetch.
+            let texel_slice = from.as_texels(texel);
             for (&index, into) in idx.zip(texels) {
-                if let Some(from) = from.as_texels(texel).get(index) {
+                if let Some(from) = texel_slice.get(index) {
                     *into = texel.copy_val(from);
                 }
             }
@@ -828,9 +829,10 @@ impl Converter {
             // FIXME(color): multi-planar texel write.
             let idx = idx[range.clone()].iter();
             let texels = &from.as_texels(texel)[range];
+            let texel_slice = into.as_mut_texels(texel);
 
             for (&index, from) in idx.zip(texels) {
-                if let Some(into) = into.as_mut_texels(texel).get_mut(index) {
+                if let Some(into) = texel_slice.get_mut(index) {
                     *into = texel.copy_val(from);
                 }
             }
