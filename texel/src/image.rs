@@ -329,8 +329,11 @@ impl<L> Image<L> {
     ///
     /// An alternative way to get a slice of texels when a layout has an inherent texel type is
     /// [`Self::as_slice`].
-    pub fn as_texels<P>(&self, pixel: Texel<P>) -> &[P] {
-        self.inner.buffer.as_texels(pixel)
+    pub fn as_texels<P>(&self, pixel: Texel<P>) -> &[P]
+    where
+        L: Layout,
+    {
+        pixel.cast_buf(self.inner.as_buf())
     }
 
     /// View this buffer as a slice of pixels.
@@ -340,8 +343,11 @@ impl<L> Image<L> {
     ///
     /// An alternative way to get a slice of texels when a layout has an inherent texel type is
     /// [`Self::as_mut_slice`].
-    pub fn as_mut_texels<P>(&mut self, pixel: Texel<P>) -> &mut [P] {
-        self.inner.buffer.as_mut_texels(pixel)
+    pub fn as_mut_texels<P>(&mut self, pixel: Texel<P>) -> &mut [P]
+    where
+        L: Layout,
+    {
+        pixel.cast_mut_buf(self.inner.as_mut_buf())
     }
 
     /// Get a reference to the layout.
@@ -547,8 +553,11 @@ impl<'data, L> ImageRef<'data, L> {
     ///
     /// An alternative way to get a slice of texels when a layout has an inherent texel type is
     /// [`Self::as_slice`].
-    pub fn as_texels<P>(&self, pixel: Texel<P>) -> &[P] {
-        self.inner.buffer.as_texels(pixel)
+    pub fn as_texels<P>(&self, pixel: Texel<P>) -> &[P]
+    where
+        L: Layout,
+    {
+        pixel.cast_buf(self.inner.as_buf())
     }
 
     /// Turn into a slice of the individual samples in the layout.
@@ -559,7 +568,8 @@ impl<'data, L> ImageRef<'data, L> {
     where
         L: SliceLayout,
     {
-        self.inner.buffer.as_texels(self.inner.layout.sample())
+        let buf = self.inner.buffer.truncate(self.inner.layout.len());
+        self.inner.layout.sample().cast_buf(buf)
     }
 
     /// Retrieve a single texel from a raster image.
@@ -718,8 +728,11 @@ impl<'data, L> ImageMut<'data, L> {
     ///
     /// An alternative way to get a slice of texels when a layout has an inherent texel type is
     /// [`Self::as_slice`].
-    pub fn as_texels<P>(&self, pixel: Texel<P>) -> &[P] {
-        self.inner.buffer.as_texels(pixel)
+    pub fn as_texels<P>(&self, pixel: Texel<P>) -> &[P]
+    where
+        L: Layout,
+    {
+        pixel.cast_buf(self.inner.as_buf())
     }
 
     /// View this buffer as a slice of pixels.
@@ -729,8 +742,11 @@ impl<'data, L> ImageMut<'data, L> {
     ///
     /// An alternative way to get a slice of texels when a layout has an inherent texel type is
     /// [`Self::as_mut_slice`].
-    pub fn as_mut_texels<P>(&mut self, pixel: Texel<P>) -> &mut [P] {
-        self.inner.buffer.as_mut_texels(pixel)
+    pub fn as_mut_texels<P>(&mut self, pixel: Texel<P>) -> &mut [P]
+    where
+        L: Layout,
+    {
+        pixel.cast_mut_buf(self.inner.as_mut_buf())
     }
 
     /// Turn into a slice of the individual samples in the layout.
@@ -741,7 +757,8 @@ impl<'data, L> ImageMut<'data, L> {
     where
         L: SliceLayout,
     {
-        self.inner.buffer.as_texels(self.inner.layout.sample())
+        let buf = self.inner.buffer.truncate(self.inner.layout.len());
+        self.inner.layout.sample().cast_buf(buf)
     }
 
     /// Turn into a mutable slice of the individual samples in the layout.
@@ -752,7 +769,8 @@ impl<'data, L> ImageMut<'data, L> {
     where
         L: SliceLayout,
     {
-        self.inner.buffer.as_mut_texels(self.inner.layout.sample())
+        let buf = self.inner.buffer.truncate_mut(self.inner.layout.len());
+        self.inner.layout.sample().cast_mut_buf(buf)
     }
 
     /// Retrieve a single texel from a raster image.
@@ -1038,12 +1056,31 @@ impl<B, L> RawImage<B, L> {
         &self.as_capacity_bytes()[..self.layout.byte_len()]
     }
 
+    pub fn as_buf(&self) -> &buf
+    where
+        B: ops::Deref<Target = buf>,
+        L: Layout,
+    {
+        let byte_len = self.layout.byte_len();
+        self.buffer.truncate(byte_len)
+    }
+
+    pub fn as_mut_buf(&mut self) -> &mut buf
+    where
+        B: ops::DerefMut<Target = buf>,
+        L: Layout,
+    {
+        let byte_len = self.layout.byte_len();
+        self.buffer.truncate_mut(byte_len)
+    }
+
     pub(crate) fn as_slice(&self) -> &[L::Sample]
     where
         B: ops::Deref<Target = buf>,
         L: SliceLayout,
     {
-        self.buffer.as_texels(self.layout.sample())
+        let texel = self.layout.sample();
+        texel.cast_buf(self.as_buf())
     }
 
     /// Borrow the buffer with the same layout.
@@ -1183,7 +1220,7 @@ impl<B: BufferLike, L: SliceLayout> RawImage<B, L> {
     where
         B: BufferMut,
     {
-        self.buffer.as_mut_texels(self.layout.sample())
+        self.layout.sample().cast_mut_buf(self.as_mut_buf())
     }
 
     /// Convert back into an vector-like of sample types.
@@ -1238,6 +1275,7 @@ impl<'lt, L: Layout + Clone> From<&'lt mut Image<L>> for ImageMut<'lt, L> {
     }
 }
 
+/* FIXME: decide if this should be an explicit method. */
 impl<'lt, L: Layout + Clone> From<ImageRef<'lt, &'_ L>> for ImageRef<'lt, L> {
     fn from(image: ImageRef<'lt, &'_ L>) -> Self {
         let layout: L = (*image.layout()).clone();
@@ -1265,6 +1303,7 @@ impl<'lt, L: Layout + Clone> From<ImageMut<'lt, &'_ mut L>> for ImageMut<'lt, L>
         RawImage::with_buffer(layout, image.inner.buffer).into()
     }
 }
+/* FIXME: until here */
 
 impl<L> From<RawImage<Buffer, L>> for Image<L> {
     fn from(image: RawImage<Buffer, L>) -> Self {

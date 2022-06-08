@@ -319,7 +319,7 @@ fn unpack_bits() -> Result<(), LayoutError> {
 
     assert_eq!(
         from.as_texels(<u8 as image_texel::AsTexel>::texel()).len(),
-        4 * 8
+        1 * 8
     );
 
     let texel = Texel::new_u8(SampleParts::LumaA);
@@ -345,6 +345,46 @@ fn unpack_bits() -> Result<(), LayoutError> {
                 idx
             )
         });
+
+    Ok(())
+}
+
+#[test]
+fn pack_bits() -> Result<(), LayoutError> {
+    let texel = Texel::new_u8(SampleParts::LumaA);
+    let source_layout = CanvasLayout::with_texel(&texel, 8, 8)?;
+
+    let mut from = Canvas::new(source_layout);
+    from.set_color(Color::BT709)?;
+
+    let target_layout = CanvasLayout::with_texel(
+        &Texel {
+            block: Block::Pack1x8,
+            parts: SampleParts::Luma,
+            bits: SampleBits::UInt1x8,
+        },
+        8,
+        8,
+    )?;
+
+    let mut into = Canvas::new(target_layout);
+    into.set_color(Color::BT709)?;
+
+    assert_eq!(
+        into.as_texels(<u8 as image_texel::AsTexel>::texel()).len(),
+        1 * 8
+    );
+
+    from.as_texels_mut(<[u8; 8] as image_texel::AsTexel>::texel())
+        .iter_mut()
+        .for_each(|b| *b = [0x00, 0xff, 0xff, 0xff, 0x00, 0xff, 0x00, 0xff]);
+
+    from.convert(&mut into);
+
+    into.as_texels(<u8 as image_texel::AsTexel>::texel())
+        .iter()
+        .enumerate()
+        .for_each(|(idx, b)| assert_eq!(*b, 0x44, "at {}", idx));
 
     Ok(())
 }
