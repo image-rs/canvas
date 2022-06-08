@@ -1734,9 +1734,9 @@ impl From<SampleBits> for TexelKind {
 fn from_bits() {
     let bits = FromBits::for_pixel(SampleBits::UInt332, SampleParts::Rgb);
     let (texel, value) = (u8::texel(), &0b01010110);
-    assert_eq!(bits[0].extract_as_lsb(texel, value), 0b110);
-    assert_eq!(bits[1].extract_as_lsb(texel, value), 0b010);
-    assert_eq!(bits[2].extract_as_lsb(texel, value), 0b01);
+    assert_eq!(bits[0].extract_as_lsb(texel, value), 0b010);
+    assert_eq!(bits[1].extract_as_lsb(texel, value), 0b101);
+    assert_eq!(bits[2].extract_as_lsb(texel, value), 0b10);
     assert_eq!(bits[3].extract_as_lsb(texel, value), 0b0);
 }
 
@@ -1744,9 +1744,9 @@ fn from_bits() {
 fn to_bits() {
     let bits = FromBits::for_pixel(SampleBits::UInt332, SampleParts::Rgb);
     let (texel, ref mut value) = (u8::texel(), 0);
-    bits[0].insert_as_lsb(texel, value, 0b110);
-    bits[1].insert_as_lsb(texel, value, 0b010);
-    bits[2].insert_as_lsb(texel, value, 0b01);
+    bits[0].insert_as_lsb(texel, value, 0b010);
+    bits[1].insert_as_lsb(texel, value, 0b101);
+    bits[2].insert_as_lsb(texel, value, 0b10);
     bits[3].insert_as_lsb(texel, value, 0b0);
     assert_eq!(*value, 0b01010110);
 }

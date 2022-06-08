@@ -21,15 +21,15 @@ fn simple_conversion() -> Result<(), LayoutError> {
 
     from.as_texels_mut(<[u8; 4] as image_texel::AsTexel>::texel())
         .iter_mut()
-        .for_each(|b| *b = [0xff, 0xff, 0x0, 0xff]);
+        .for_each(|b| *b = [0x7f, 0xff, 0x0, 0xff]);
 
     // Expecting conversion [0xff, 0xff, 0x0, 0xff] to 0–ff—ff
     from.convert(&mut into);
 
-    into.as_texels_mut(<u16 as image_texel::AsTexel>::texel())
+    into.as_texels_mut(<[u8; 2] as image_texel::AsTexel>::texel())
         .iter()
         .enumerate()
-        .for_each(|(idx, b)| assert_eq!(*b, 0xffe0, "at {}", idx));
+        .for_each(|(idx, b)| assert_eq!(u16::from_be_bytes(*b), 0x07ef, "at {}", idx));
 
     Ok(())
 }

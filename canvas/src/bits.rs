@@ -170,10 +170,11 @@ impl FromBits {
         // Grab up to 8 bytes surrounding the bits, convert using u64 intermediate, then shift
         // upwards (by at most 7 bit) and mask off any remaining bits.
         let ne_bytes = texel.to_bytes(core::slice::from_ref(val));
-        let startu64 = self.begin / 8;
-        let from_bytes = &ne_bytes[startu64.min(ne_bytes.len())..];
+        let start_byte = self.begin / 8;
+        let from_bytes = &ne_bytes[start_byte.min(ne_bytes.len())..];
+        assert!(self.len <= 32);
 
-        let shift = self.begin - startu64 * 8;
+        let shift = self.begin - start_byte * 8;
         let bitlen = self.len + shift;
         let copylen = if bitlen % 8 == 0 {
             bitlen / 8
@@ -185,7 +186,7 @@ impl FromBits {
         let initlen = copylen.min(8).min(from_bytes.len());
         be_bytes[..initlen].copy_from_slice(&from_bytes[..initlen]);
 
-        let val = u64::from_le_bytes(be_bytes) >> shift.min(63);
+        let val = u64::from_be_bytes(be_bytes) >> (64 - bitlen).min(63);
         // Start with a value where the 32-low bits are clear, high bits are set.
         val as u32 & self.mask()
     }
@@ -193,11 +194,11 @@ impl FromBits {
     pub(crate) fn insert_as_lsb<T>(&self, texel: Texel<T>, val: &mut T, bits: u32) {
         // FIXME(perf): vectorized form for all texels where possible.
         let ne_bytes = texel.to_mut_bytes(core::slice::from_mut(val));
-        let startu64 = self.begin / 8;
-        let bytestart = startu64.min(ne_bytes.len());
+        let start_byte = self.begin / 8;
+        let bytestart = start_byte.min(ne_bytes.len());
         let texel_bytes = &mut ne_bytes[bytestart..];
 
-        let shift = self.begin - startu64 * 8;
+        let shift = self.begin - start_byte * 8;
         let bitlen = self.len + shift;
         let copylen = if bitlen % 8 == 0 {
             bitlen / 8
@@ -212,10 +213,11 @@ impl FromBits {
         let mask = ((-1i64 as u64) ^ u32::MAX as u64).rotate_left((self.len as u32).min(32))
             & (u32::MAX as u64);
 
-        let newval =
-            (u64::from_le_bytes(be_bytes) & !(mask << shift)) | (u64::from(bits) & mask) << shift;
+        let bitshift = (64 - bitlen).min(63);
+        let newval = (u64::from_be_bytes(be_bytes) & !(mask << bitshift))
+            | (u64::from(bits) & mask) << bitshift;
 
-        be_bytes = newval.to_le_bytes();
+        be_bytes = newval.to_be_bytes();
         texel_bytes[..initlen].copy_from_slice(&be_bytes[..initlen]);
     }
 }
@@ -241,9 +243,34 @@ mod tests {
         assert_eq!(extract_simple(2..3, &val), 0);
         assert_eq!(extract_simple(6..7, &val), 1);
         assert_eq!(extract_simple(0..7, &val), val as u32 >> 1);
-        assert_eq!(extract_simple(1..8, &val), val as u32);
+        assert_eq!(extract_simple(1..8, &val), (val & 0x7f) as u32);
 
         assert_eq!(extract_simple(0..0, &val), 0);
         assert_eq!(extract_simple(1..1, &val), 0);
+    }
+
+    #[test]
+    fn bit_insertion() {
+        // Return the binary diff of insertion.
+        fn insert_simple(r: core::ops::Range<usize>, bits: u32, val: &mut u8) -> u8 {
+            let before = *val;
+            FromBits {
+                begin: r.start,
+                len: r.len(),
+            }
+            .insert_as_lsb(u8::texel(), val, bits);
+            before ^ *val
+        }
+
+        let mut val = 0b1000_1010u8;
+        assert_eq!(insert_simple(0..1, 1, &mut val), 0);
+        assert_eq!(insert_simple(1..2, 0, &mut val), 0);
+        assert_eq!(insert_simple(2..3, 0, &mut val), 0);
+        assert_eq!(insert_simple(6..7, 1, &mut val), 0);
+        assert_eq!(insert_simple(0..7, val as u32 >> 1, &mut val), 0);
+        assert_eq!(insert_simple(1..8, (val & 0x7f) as u32, &mut val), 0);
+
+        assert_eq!(insert_simple(0..0, 0, &mut val), 0);
+        assert_eq!(insert_simple(1..1, 0, &mut val), 0);
     }
 }
