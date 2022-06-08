@@ -29,6 +29,8 @@ pub enum Color {
         luminance: Luminance,
     },
     /// A lightness, chroma difference scheme.
+    #[doc(hidden)]
+    #[deprecated = "DO NOT USE THIS YET! It's members are not final."]
     Yuv {
         primary: Primaries,
         whitepoint: Whitepoint,
@@ -327,6 +329,7 @@ impl Color {
         whitepoint: Whitepoint::D65,
     };
 
+    #[allow(deprecated)]
     pub const BT709: Color = Color::Yuv {
         luminance: Luminance::Sdr,
         primary: Primaries::Bt709,
