@@ -57,6 +57,7 @@
 #![deny(unsafe_code)]
 
 mod arch;
+mod bits;
 /// Putting it all together with a buffer type.
 pub mod color;
 mod color_matrix;

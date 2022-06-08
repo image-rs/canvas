@@ -151,6 +151,16 @@ impl buf {
         Self::from_bytes_mut(bytes).unwrap()
     }
 
+    pub fn truncate(&self, at: usize) -> &Self {
+        // TODO: worth it to use unsafe for avoiding unwrap checks?
+        Self::from_bytes(&self.as_bytes()[..at]).unwrap()
+    }
+
+    pub fn truncate_mut(&mut self, at: usize) -> &mut Self {
+        // TODO: worth it to use unsafe for avoiding unwrap checks?
+        Self::from_bytes_mut(&mut self.as_bytes_mut()[..at]).unwrap()
+    }
+
     pub fn as_bytes(&self) -> &[u8] {
         &self.0
     }

@@ -90,6 +90,11 @@ pub struct ChannelLayout<T> {
 pub struct PlaneBytes {
     /// The texel in this plane.
     texel: Texel,
+    // FIXME: we could store merely the diff to the block-width.
+    /// The actual pixel width of this plane.
+    width: u32,
+    /// The actual pixel height of this plane.
+    height: u32,
     /// The matrix descriptor of this plane.
     matrix: StridedBytes,
 }
@@ -134,6 +139,10 @@ pub struct Texel {
 }
 
 /// How many pixels are described by a single texel unit.
+///
+/// Also each pixel in a block to order of channels, i.e. provides the link between SampleParts and
+/// SampleBits. Note that some block layouts may have _less_ channel than the sample if channels
+/// are not encoded separately, for example block compressed layouts.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 #[non_exhaustive]
 #[repr(u8)]
@@ -150,6 +159,18 @@ pub enum Block {
     Sub2x4 = 4,
     /// Each texel refers to a four-by-four block.
     Sub4x4 = 5,
+    /// Each texel contains channels for two pixels, consecutively.
+    Pack1x2,
+    /// Each texel contains channels for four pixels, consecutively.
+    Pack1x4,
+    /// Each texel contains channels for eight pixels, consecutively.
+    Pack1x8,
+    /* Special block layouts */
+    Yuv422,
+    /// Yuv422 with different order of channels.
+    Yuy2,
+    Yuv411,
+    /* TODO: Bc1, Astc, EAC */
 }
 
 /// Describes which values are present in a texel.
@@ -168,24 +189,6 @@ pub struct SampleParts {
     /// The position of each channel as a 2-bit number.
     /// This is the index into which the channel is written.
     pub(crate) color_index: u8,
-    /// How the samples are recovered from a texel.
-    pub(crate) pitch: SamplePitch,
-}
-
-/// Defines the method by which parts from a texel are expanded into bits.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub(crate) enum SamplePitch {
-    /// Parts are expanded by extracting bit fields from the texel.
-    PixelBits,
-    // Subsampled chroma, in order uyvy.
-    Yuv422,
-    // Like Yuv422 but yuyv.
-    Yuy2,
-    // Subsampled chroma, uyyvyy.
-    Yuv411,
-    // Subsampled blocks.
-    Yuv420,
-    Bc1,
 }
 
 macro_rules! sample_parts {
@@ -203,7 +206,6 @@ macro_rules! sample_parts {
             color_index: (
                 $ch0.canonical_index_in_surely(ColorChannelModel::$color)
             ),
-            pitch: SamplePitch::PixelBits,
         };
     };
     (@$color:ident: $(#[$attr:meta])* $name:ident = $ch0:path,$ch1:path) => {
@@ -214,7 +216,6 @@ macro_rules! sample_parts {
                 $ch0.canonical_index_in_surely(ColorChannelModel::$color)
                 | $ch1.canonical_index_in_surely(ColorChannelModel::$color) << 2
             ),
-            pitch: SamplePitch::PixelBits,
         };
     };
     (@$color:ident: $(#[$attr:meta])* $name:ident = $ch0:path,$ch1:path,$ch2:path) => {
@@ -226,7 +227,6 @@ macro_rules! sample_parts {
                 | $ch1.canonical_index_in_surely(ColorChannelModel::$color) << 2
                 | $ch2.canonical_index_in_surely(ColorChannelModel::$color) << 4
             ),
-            pitch: SamplePitch::PixelBits,
         };
     };
     (@$color:ident: $(#[$attr:meta])* $name:ident = $ch0:path,$ch1:path,$ch2:path,$ch3:path) => {
@@ -239,7 +239,6 @@ macro_rules! sample_parts {
                 | $ch2.canonical_index_in_surely(ColorChannelModel::$color) << 4
                 | $ch3.canonical_index_in_surely(ColorChannelModel::$color) << 6
             ),
-            pitch: SamplePitch::PixelBits,
         };
     };
 }
@@ -252,7 +251,6 @@ mod sample_parts {
     type Cc = super::ColorChannel;
     use super::ColorChannelModel;
     use super::SampleParts;
-    use super::SamplePitch;
 
     sample_parts! {
         /// A pure alpha part.
@@ -269,7 +267,8 @@ mod sample_parts {
         Rgb: Bgr = Cc::B,Cc::G,Cc::R;
         Rgb: BgrA = Cc::B,Cc::G,Cc::R,Cc::Alpha;
         Rgb: ABgr = Cc::Alpha,Cc::B,Cc::G,Cc::R;
-        Yuv: Yuv = Cc::L,Cc::Cb,Cc::Cr;
+        Yuv: Yuv = Cc::Luma,Cc::Cb,Cc::Cr;
+        Yuv: YuvA = Cc::Luma,Cc::Cb,Cc::Cr,Cc::Alpha;
         Lab: Lab = Cc::L,Cc::LABa,Cc::LABb;
         Lab: LabA = Cc::L,Cc::LABa,Cc::LABb,Cc::Alpha;
         Lab: Lch = Cc::L,Cc::C,Cc::LABh;
@@ -301,6 +300,10 @@ pub enum SampleBits {
     Int8,
     /// A single 8-bit integer.
     UInt8,
+    /// Eight 1-bit integer.
+    UInt1x8,
+    /// Four 2-bit integer.
+    UInt2x4,
     /// Three packed integer.
     UInt332,
     /// Three packed integer.
@@ -378,7 +381,20 @@ pub(crate) enum BitEncoding {
 /// Error that occurs when constructing a layout.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct LayoutError {
-    inner: (),
+    inner: LayoutErrorInner,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum LayoutErrorInner {
+    NoInfo,
+    NoPlanes,
+    NoModel,
+    TooManyPlanes(usize),
+    WidthError(core::num::TryFromIntError),
+    HeightError(core::num::TryFromIntError),
+    StrideError,
+    NoChannelIndex(ColorChannel),
+    ValidationError(u32),
 }
 
 impl Texel {
@@ -407,10 +423,14 @@ impl Texel {
 
     /// Get the texel describing a single channel.
     /// Returns None if the channel is not contained, or if it can not be extracted on its own.
+    ///
+    /// FIXME(color): review what this means for block layouts. But since it only works for `UInt?x?`
+    /// this is not a big deal yet.
     pub fn channel_texel(&self, channel: ColorChannel) -> Option<Texel> {
         use sample_parts::*;
         use Block::*;
         use SampleBits::*;
+
         #[allow(non_upper_case_globals)]
         let parts = match self.parts {
             Rgb => match channel {
@@ -428,13 +448,18 @@ impl Texel {
             },
             _ => return None,
         };
+
         let bits = match self.bits {
             UInt8 | UInt8x3 | UInt8x4 => UInt8,
             _ => return None,
         };
+
         let block = match self.block {
-            Pixel | Sub1x2 | Sub1x4 | Sub2x2 | Sub2x4 | Sub4x4 => self.block,
+            // FIXME: really?
+            Yuv422 | Yuy2 | Yuv411 => return None,
+            _ => self.block,
         };
+
         Some(Texel { bits, parts, block })
     }
 }
@@ -451,6 +476,7 @@ impl ColorChannel {
     const fn canonical_index_in(self, model: ColorChannelModel) -> Option<u8> {
         use ColorChannel::*;
         use ColorChannelModel::*;
+
         Some(match (self, model) {
             (R | X, Rgb) => 0,
             (G | Y, Rgb) => 1,
@@ -480,9 +506,10 @@ impl SampleBits {
     /// Determine the number of bytes for texels containing these samples.
     pub fn bytes(self) -> u16 {
         use SampleBits::*;
+
         #[allow(non_upper_case_globals)]
         match self {
-            Int8 | UInt8 | UInt332 | UInt233 => 1,
+            Int8 | UInt8 | UInt1x8 | UInt2x4 | UInt332 | UInt233 => 1,
             Int8x2 | UInt8x2 | Int16 | UInt16 | UInt565 | UInt4x4 | UInt444_ | UInt_444 => 2,
             Int8x3 | UInt8x3 => 3,
             Int8x4 | UInt8x4 | Int16x2 | UInt16x2 | UInt1010102 | UInt2101010 | UInt101010_
@@ -498,6 +525,7 @@ impl SampleBits {
     fn as_array(self) -> Option<(TexelLayout, u8)> {
         use image_texel::AsTexel;
         use SampleBits::*;
+
         Some(match self {
             UInt8 | UInt8x2 | UInt8x3 | UInt8x4 | UInt8x6 => {
                 (u8::texel().into(), self.bytes() as u8)
@@ -527,26 +555,28 @@ impl SampleBits {
         TexelKind::from(self).action(ToLayout)
     }
 
-    pub(crate) fn bit_encoding(self) -> ([BitEncoding; 6], u8) {
+    pub(crate) fn bit_encoding(self) -> ([BitEncoding; 8], u8) {
         use SampleBits::*;
+
         match self {
             UInt8 | UInt8x2 | UInt8x3 | UInt8x4 | UInt8x6 => {
-                ([BitEncoding::UInt; 6], self.bytes() as u8)
+                ([BitEncoding::UInt; 8], self.bytes() as u8)
             }
-            Int8 | Int8x2 | Int8x3 | Int8x4 => ([BitEncoding::Int; 6], self.bytes() as u8),
+            UInt1x8 | UInt2x4 => ([BitEncoding::UInt; 8], 1),
+            Int8 | Int8x2 | Int8x3 | Int8x4 => ([BitEncoding::Int; 8], self.bytes() as u8),
             UInt16 | UInt16x2 | UInt16x3 | UInt16x4 | UInt16x6 => {
-                ([BitEncoding::UInt; 6], self.bytes() as u8 / 2)
+                ([BitEncoding::UInt; 8], self.bytes() as u8 / 2)
             }
-            Int16 | Int16x2 | Int16x3 | Int16x4 => ([BitEncoding::Int; 6], self.bytes() as u8 / 2),
+            Int16 | Int16x2 | Int16x3 | Int16x4 => ([BitEncoding::Int; 8], self.bytes() as u8 / 2),
             Float32 | Float32x2 | Float32x3 | Float32x4 | Float32x6 => {
-                ([BitEncoding::Float; 6], self.bytes() as u8 / 4)
+                ([BitEncoding::Float; 8], self.bytes() as u8 / 4)
             }
-            UInt332 | UInt233 | UInt565 => ([BitEncoding::UInt; 6], 3),
-            SampleBits::UInt4x4 => ([BitEncoding::UInt; 6], 4),
-            SampleBits::UInt_444 | SampleBits::UInt444_ => ([BitEncoding::UInt; 6], 3),
-            SampleBits::UInt101010_ | UInt_101010 => ([BitEncoding::Float; 6], 3),
-            SampleBits::UInt1010102 | UInt2101010 => ([BitEncoding::Float; 6], 4),
-            SampleBits::Float16x4 => ([BitEncoding::Float; 6], 4),
+            UInt332 | UInt233 | UInt565 => ([BitEncoding::UInt; 8], 3),
+            SampleBits::UInt4x4 => ([BitEncoding::UInt; 8], 4),
+            SampleBits::UInt_444 | SampleBits::UInt444_ => ([BitEncoding::UInt; 8], 3),
+            SampleBits::UInt101010_ | UInt_101010 => ([BitEncoding::Float; 8], 3),
+            SampleBits::UInt1010102 | UInt2101010 => ([BitEncoding::Float; 8], 4),
+            SampleBits::Float16x4 => ([BitEncoding::Float; 8], 4),
         }
     }
 }
@@ -562,11 +592,7 @@ impl SampleParts {
     pub fn new(parts: [Option<ColorChannel>; 4], model: ColorChannelModel) -> Option<Self> {
         let color_index = Self::color_index(&parts, model)?;
 
-        Some(SampleParts {
-            parts,
-            color_index,
-            pitch: SamplePitch::PixelBits,
-        })
+        Some(SampleParts { parts, color_index })
     }
 
     fn color_index(parts: &[Option<ColorChannel>; 4], model: ColorChannelModel) -> Option<u8> {
@@ -602,11 +628,7 @@ impl SampleParts {
         // Or do we need to perform stronger checks on the `ColorChannel` input?
         let color_index = Self::color_index(&parts, model)?;
 
-        Some(SampleParts {
-            parts,
-            color_index,
-            pitch: SamplePitch::Yuv422,
-        })
+        Some(SampleParts { parts, color_index })
     }
 
     /// Create parts that describe 4:1:1 subsampled color channels.
@@ -620,11 +642,7 @@ impl SampleParts {
         let parts = [parts[0], parts[1], parts[2], None];
         let color_index = Self::color_index(&parts, model)?;
 
-        Some(SampleParts {
-            parts,
-            color_index,
-            pitch: SamplePitch::Yuv411,
-        })
+        Some(SampleParts { parts, color_index })
     }
 
     pub fn num_components(self) -> u8 {
@@ -647,18 +665,30 @@ impl Block {
         use Block::*;
         match self {
             Pixel => 1,
-            Sub1x2 | Sub2x2 => 2,
-            Sub1x4 | Sub2x4 | Sub4x4 => 4,
+            Pack1x2 | Sub1x2 | Sub2x2 | Yuv422 | Yuy2 => 2,
+            Pack1x4 | Sub1x4 | Sub2x4 | Sub4x4 | Yuv411 => 4,
+            Pack1x8 => 8,
         }
     }
 
     pub fn height(&self) -> u32 {
         use Block::*;
         match self {
-            Pixel | Sub1x2 | Sub1x4 => 1,
+            Pixel | Sub1x2 | Sub1x4 | Yuv422 | Yuy2 | Yuv411 => 1,
+            Pack1x2 | Pack1x4 | Pack1x8 => 1,
             Sub2x2 | Sub2x4 => 2,
             Sub4x4 => 3,
         }
+    }
+
+    pub(crate) fn block_width(&self, pixels: u32) -> u32 {
+        let div = self.width();
+        pixels / div + if pixels % div == 0 { 0 } else { 1 }
+    }
+
+    pub(crate) fn block_height(&self, pixels: u32) -> u32 {
+        let div = self.height();
+        pixels / div + if pixels % div == 0 { 0 } else { 1 }
     }
 }
 
@@ -671,22 +701,21 @@ impl CanvasLayout {
     /// Create from a list of planes, and the texel they describe when merged.
     pub fn with_planes(layers: &[PlaneBytes], texel: Texel) -> Result<Self, LayoutError> {
         if layers.len() == 0 {
-            return Err(LayoutError::NO_INFO);
+            return Err(LayoutError::NO_PLANES);
         }
 
         if layers.len() > 1 {
             // FIXME(planar): should support validation of this.
-            return Err(LayoutError::NO_INFO);
+            return Err(LayoutError::bad_planes(layers.len()));
         }
 
         let spec = layers[0].matrix.spec();
-        let width = spec.width.try_into().map_err(LayoutError::width_error)?;
-        let height = spec.height.try_into().map_err(LayoutError::height_error)?;
+        let width: u32 = spec.width.try_into().map_err(LayoutError::width_error)?;
 
         Self::validate(CanvasLayout {
             bytes: ByteLayout {
-                width,
-                height,
+                width: layers[0].width,
+                height: layers[0].height,
                 bytes_per_row: (spec.width_stride as u32) * width,
             },
             planes: Box::default(),
@@ -694,7 +723,6 @@ impl CanvasLayout {
             texel,
             color: None,
         })
-        .ok_or(LayoutError::NO_INFO)
     }
 
     /// Create a buffer layout given the layout of a simple, strided matrix.
@@ -704,8 +732,8 @@ impl CanvasLayout {
 
         let stride = StrideSpec {
             offset: 0,
-            width: rows.width as usize,
-            height: rows.height as usize,
+            width: rows.texel.block.block_width(rows.width) as usize,
+            height: rows.texel.block.block_height(rows.height) as usize,
             element: rows.texel.bits.layout(),
             height_stride: bytes_per_row,
             width_stride: bytes_per_texel.into(),
@@ -713,6 +741,8 @@ impl CanvasLayout {
 
         let bytes = PlaneBytes {
             texel: rows.texel.clone(),
+            width: rows.width,
+            height: rows.height,
             matrix: StridedBytes::new(stride).map_err(LayoutError::stride_error)?,
         };
 
@@ -857,13 +887,13 @@ impl CanvasLayout {
 
     /// Set the color of the layout, if compatible with the texel.
     pub fn set_color(&mut self, color: Color) -> Result<(), LayoutError> {
-        let model = color.model().ok_or(LayoutError::NO_INFO)?;
+        let model = color.model().ok_or(LayoutError::NO_MODEL)?;
 
         for (channel, idx) in self.texel.parts.channels() {
             if let Some(channel) = channel {
                 let other_idx = match channel.canonical_index_in(model) {
                     Some(idx) => idx,
-                    None => return Err(LayoutError::NO_INFO),
+                    None => return Err(LayoutError::no_index(channel)),
                 };
 
                 if other_idx != idx {
@@ -889,14 +919,16 @@ impl CanvasLayout {
         let matrix = StridedBytes::with_row_major(
             MatrixBytes::from_width_height(
                 self.texel.bits.layout(),
-                self.bytes.width as usize,
-                self.bytes.height as usize,
+                self.texel.block.block_width(self.bytes.width) as usize,
+                self.texel.block.block_height(self.bytes.height) as usize,
             )
             .unwrap(),
         );
 
         Some(PlaneBytes {
             texel: self.texel.clone(),
+            width: self.bytes.width,
+            height: self.bytes.height,
             matrix,
         })
     }
@@ -919,50 +951,59 @@ impl CanvasLayout {
     }
 
     /// Verify that the byte-length is below `isize::MAX`.
-    fn validate(this: Self) -> Option<Self> {
+    fn validate(this: Self) -> Result<Self, LayoutError> {
         let mut start = this.offset;
         // For now, validation requires that planes are successive.
         // This can probably stay true for quite a while..
         for plane in 0..this.num_planes() {
             // Require that the number of planes actually works..
-            let plane = this.plane(plane)?;
+            let plane = this.plane(plane).ok_or(LayoutError::validation(line!()))?;
             let spec = plane.matrix.spec();
 
             let offset = plane.matrix.spec().offset;
-            let texel_offset = plane.offset_in_texels().checked_mul(spec.element.size())?;
+            let texel_offset = plane
+                .offset_in_texels()
+                .checked_mul(spec.element.size())
+                .ok_or(LayoutError::validation(line!()))?;
 
             // FIXME(planar): decide on this issue.
             if texel_offset != offset {
-                return None;
+                return Err(LayoutError::validation(line!()));
             }
 
             // TODO: should we require that planes are aligned to MAX_ALIGN?
             // Probably useful for some methods but that's something for planar layouts.
             if texel_offset % 256 != 0 {
-                return None;
+                return Err(LayoutError::validation(line!()));
             }
 
-            let plane_end = offset.checked_add(plane.matrix.byte_len())?;
+            let plane_end = offset
+                .checked_add(plane.matrix.byte_len())
+                .ok_or(LayoutError::validation(line!()))?;
 
             let texel_layout = plane.texel.bits.layout();
             if !spec.element.superset_of(texel_layout) {
-                return None;
+                return Err(LayoutError::validation(line!()));
             }
 
             if start > offset {
-                return None;
+                return Err(LayoutError::validation(line!()));
             }
 
             start = plane_end;
         }
 
-        let lines = usize::try_from(this.bytes.width).ok()?;
-        let height = usize::try_from(this.bytes.height).ok()?;
+        let lines = usize::try_from(this.bytes.width).map_err(LayoutError::width_error)?;
+        let height = usize::try_from(this.bytes.height).map_err(LayoutError::height_error)?;
         let ok = height
             .checked_mul(lines)
             .map_or(false, |len| len < isize::MAX as usize);
 
-        Some(this).filter(|_| ok)
+        if ok {
+            Ok(this)
+        } else {
+            Err(LayoutError::validation(line!()))
+        }
     }
 }
 
@@ -1076,18 +1117,52 @@ impl<T> ChannelLayout<T> {
 }
 
 impl LayoutError {
-    const NO_INFO: Self = LayoutError { inner: () };
+    const NO_INFO: Self = LayoutError {
+        inner: LayoutErrorInner::NoInfo,
+    };
 
-    fn width_error(_: core::num::TryFromIntError) -> Self {
-        Self::NO_INFO
+    const NO_PLANES: Self = LayoutError {
+        inner: LayoutErrorInner::NoPlanes,
+    };
+
+    const NO_MODEL: Self = LayoutError {
+        inner: LayoutErrorInner::NoModel,
+    };
+
+    fn validation(num: u32) -> Self {
+        LayoutError {
+            inner: LayoutErrorInner::ValidationError(num),
+        }
     }
 
-    fn height_error(_: core::num::TryFromIntError) -> Self {
-        Self::NO_INFO
+    fn bad_planes(num: usize) -> Self {
+        LayoutError {
+            inner: LayoutErrorInner::TooManyPlanes(num),
+        }
+    }
+
+    fn width_error(err: core::num::TryFromIntError) -> Self {
+        LayoutError {
+            inner: LayoutErrorInner::WidthError(err),
+        }
+    }
+
+    fn height_error(err: core::num::TryFromIntError) -> Self {
+        LayoutError {
+            inner: LayoutErrorInner::HeightError(err),
+        }
     }
 
     fn stride_error(_: image_texel::layout::BadStrideError) -> Self {
-        Self::NO_INFO
+        LayoutError {
+            inner: LayoutErrorInner::StrideError,
+        }
+    }
+
+    fn no_index(ch: ColorChannel) -> Self {
+        LayoutError {
+            inner: LayoutErrorInner::NoChannelIndex(ch),
+        }
     }
 }
 
@@ -1162,8 +1237,12 @@ impl<T> Raster<T> for PlanarLayout<T> {
 
 impl<T> Decay<PlanarLayout<T>> for PlaneBytes {
     fn decay(from: PlanarLayout<T>) -> Self {
+        let spec = from.matrix.spec();
+        // This is a pixel layout.
         PlaneBytes {
             texel: from.texel,
+            width: spec.width as u32,
+            height: spec.height as u32,
             matrix: StridedBytes::decay(from.matrix),
         }
     }
@@ -1222,8 +1301,8 @@ impl<T> Decay<ChannelLayout<T>> for ChannelBytes {
 impl From<&'_ PlaneBytes> for CanvasLayout {
     fn from(plane: &PlaneBytes) -> Self {
         let StrideSpec {
-            width,
-            height,
+            width: _,
+            height: _,
             width_stride: _,
             height_stride,
             element: _,
@@ -1232,8 +1311,8 @@ impl From<&'_ PlaneBytes> for CanvasLayout {
 
         CanvasLayout {
             bytes: ByteLayout {
-                width: width as u32,
-                height: height as u32,
+                width: plane.width,
+                height: plane.height,
                 bytes_per_row: height_stride as u32,
             },
             texel: plane.texel.clone(),
