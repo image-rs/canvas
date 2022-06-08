@@ -1315,19 +1315,39 @@ impl CommonPixel {
         let TexelBits { bits, parts, block } = info.out_layout.texel;
 
         match block {
-            Block::Pixel => Self::join_bits(
-                info,
-                ops,
-                FromBits::for_pixel(bits, parts),
-                pixel_buf,
-                out_texels,
-            ),
+            Block::Pixel => {
+                let bits = FromBits::for_pixel(bits, parts);
+                // TODO: pre-select SIMD version from `info.ops`?
+                if let SampleBits::UInt8x4 = info.out_layout.texel.bits {
+                    return Self::join_uint8x4(ops, bits, pixel_buf, out_texels);
+                } else if let SampleBits::UInt16x4 = info.out_layout.texel.bits {
+                    return Self::join_uint16x4(ops, bits, pixel_buf, out_texels);
+                } else if let SampleBits::UInt8x3 = info.out_layout.texel.bits {
+                    return Self::join_uint8x3(ops, bits, pixel_buf, out_texels);
+                } else if let SampleBits::UInt16x3 = info.out_layout.texel.bits {
+                    return Self::join_uint16x3(ops, bits, pixel_buf, out_texels);
+                } else {
+                    Self::join_bits(info, ops, [bits], pixel_buf, out_texels)
+                }
+            }
+            Block::Pack1x2 => {
+                let bits = FromBits::for_pixels::<2>(bits, parts);
+                Self::join_bits(info, ops, bits, pixel_buf, out_texels)
+            }
+            Block::Pack1x4 => {
+                let bits = FromBits::for_pixels::<4>(bits, parts);
+                Self::join_bits(info, ops, bits, pixel_buf, out_texels)
+            }
+            Block::Pack1x8 => {
+                let bits = FromBits::for_pixels::<8>(bits, parts);
+                Self::join_bits(info, ops, bits, pixel_buf, out_texels)
+            }
             Block::Sub1x2 | Block::Sub1x4 | Block::Sub2x2 | Block::Sub2x4 | Block::Sub4x4 => {
                 // On these blocks, all pixels take the *same* channels.
                 Self::join_bits(
                     info,
                     ops,
-                    FromBits::for_pixel(bits, parts),
+                    [FromBits::for_pixel(bits, parts)],
                     pixel_buf,
                     out_texels,
                 );
@@ -1347,31 +1367,19 @@ impl CommonPixel {
 
     // FIXME(perf): for single-plane, in particular integer cases, we could write directly into the
     // target buffer by chunks if this is available.
-    fn join_bits(
+    fn join_bits<const N: usize>(
         info: &Info,
         ops: &ConvertOps,
-        bits: [FromBits; 4],
+        bits: [[FromBits; 4]; N],
         pixel_buf: &TexelBuffer,
         out_texels: &mut TexelBuffer,
     ) {
         let (encoding, len) = info.out_layout.texel.bits.bit_encoding();
 
-        if let SampleBits::UInt8x4 = info.out_layout.texel.bits {
-            // TODO: pre-select SIMD version from info.ops.
-            return Self::join_uint8x4(ops, bits, pixel_buf, out_texels);
-        } else if let SampleBits::UInt16x4 = info.out_layout.texel.bits {
-            // TODO: pre-select SIMD version from info.ops.
-            return Self::join_uint16x4(ops, bits, pixel_buf, out_texels);
-        } else if let SampleBits::UInt8x3 = info.out_layout.texel.bits {
-            // TODO: pre-select version from info.ops.
-            return Self::join_uint8x3(ops, bits, pixel_buf, out_texels);
-        } else if let SampleBits::UInt16x3 = info.out_layout.texel.bits {
-            // TODO: pre-select SIMD version from info.ops.
-            return Self::join_uint16x3(ops, bits, pixel_buf, out_texels);
-        } else if encoding[..len as usize] == [BitEncoding::UInt; 6][..len as usize] {
+        if encoding[..len as usize] == [BitEncoding::UInt; 6][..len as usize] {
             return Self::join_ints(info, bits, pixel_buf, out_texels);
         } else if encoding[..len as usize] == [BitEncoding::Float; 6][..len as usize] {
-            return Self::join_floats(info, bits, pixel_buf, out_texels);
+            return Self::join_floats(info, bits[0], pixel_buf, out_texels);
         } else {
             // FIXME(color): error treatment..
             debug_assert!(false, "{:?}", &encoding[..len as usize]);
@@ -1379,35 +1387,36 @@ impl CommonPixel {
     }
 
     // FIXME(color): int component bias
-    fn join_ints(
+    fn join_ints<const N: usize>(
         info: &Info,
-        bits: [FromBits; 4],
+        bits: [[FromBits; 4]; N],
         pixel_buf: &TexelBuffer,
         out_texels: &mut TexelBuffer,
     ) {
-        struct JoinAction<'data, T, F: FnMut(&T, &FromBits, u8) -> u32> {
+        struct JoinAction<'data, T, F: FnMut(&T, &FromBits, u8) -> u32, const N: usize> {
             join: Texel<T>,
             join_fn: F,
-            bits: [FromBits; 4],
+            bits: [[FromBits; 4]; N],
             out_texels: &'data mut TexelBuffer,
             pixel_buf: &'data TexelBuffer,
         }
 
-        impl<Expanded, F> GenericTexelAction<()> for JoinAction<'_, Expanded, F>
+        impl<Expanded, F, const N: usize> GenericTexelAction<()> for JoinAction<'_, Expanded, F, N>
         where
             F: FnMut(&Expanded, &FromBits, u8) -> u32,
         {
             fn run<T>(mut self, texel: Texel<T>) -> () {
                 let texel_slice = self.out_texels.as_mut_texels(texel);
-                let pixel_slice = self.pixel_buf.as_texels(self.join);
+                let pixel_slice = self.pixel_buf.as_texels(self.join.array::<N>());
 
-                for idx in [0u8, 1, 2, 3] {
-                    let bits = &self.bits[idx as usize];
-                    // FIXME(color): block from multiple pixels—how to?
-                    // FIXME(color): adjust the FromBits for multiple planes.
-                    for (texbits, joined) in texel_slice.iter_mut().zip(pixel_slice) {
-                        let value = (self.join_fn)(joined, bits, idx);
-                        bits.insert_as_lsb(texel, texbits, value);
+                for ch in [0u8, 1, 2, 3] {
+                    for (texbits, pixels) in texel_slice.iter_mut().zip(pixel_slice) {
+                        for (pixel_bits, joined) in self.bits.iter().zip(pixels) {
+                            let bits = pixel_bits[ch as usize];
+                            // FIXME(color): adjust the FromBits for multiple planes.
+                            let value = (self.join_fn)(joined, &bits, ch);
+                            bits.insert_as_lsb(texel, texbits, value);
+                        }
                     }
                 }
             }

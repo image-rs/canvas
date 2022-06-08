@@ -2,7 +2,7 @@
 use brunch::Bench;
 
 use image_canvas::color::Color;
-use image_canvas::layout::{Block, CanvasLayout, LayoutError, SampleParts, SampleBits, Texel};
+use image_canvas::layout::{Block, CanvasLayout, LayoutError, SampleBits, SampleParts, Texel};
 use image_canvas::Canvas;
 
 struct Convert {
@@ -16,8 +16,8 @@ struct Convert {
 impl Convert {
     fn name(&self) -> String {
         format!(
-            "intcast({:?}, {:?}, {})",
-            self.texel_in, self.texel_out, self.sz
+            "bitpack({:?}/{:?}, {:?}/{:?}, {})",
+            self.texel_in, self.color_in, self.texel_out, self.color_out, self.sz
         )
     }
 

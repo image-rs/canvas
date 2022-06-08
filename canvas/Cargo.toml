@@ -23,6 +23,11 @@ default-features = false
 features = ["png"]
 
 [[bench]]
+name = "bitpack"
+path = "benchmarks/bitpack.rs"
+harness = false
+
+[[bench]]
 name = "conversion"
 path = "benchmarks/conversion.rs"
 harness = false
@@ -30,9 +35,4 @@ harness = false
 [[bench]]
 name = "intcast"
 path = "benchmarks/intcast.rs"
-harness = false
-
-[[bench]]
-name = "expand"
-path = "benchmarks/expand.rs"
 harness = false
