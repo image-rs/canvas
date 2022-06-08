@@ -4,6 +4,7 @@ use image_canvas::color::{Color, Whitepoint};
 use image_canvas::layout::{CanvasLayout, LayoutError, SampleParts, Texel};
 use image_canvas::Canvas;
 
+#[derive(Debug)]
 struct Convert {
     texel_in: Texel,
     color_in: Color,
@@ -20,14 +21,14 @@ impl Convert {
         )
     }
 
-    fn prepare(self) -> Result<impl FnMut(), LayoutError> {
+    fn prepare(&self) -> Result<impl FnMut(), LayoutError> {
         let layout = CanvasLayout::with_texel(&self.texel_in, self.sz, self.sz)?;
         let mut from = Canvas::new(layout.clone());
-        from.set_color(self.color_in)?;
+        from.set_color(self.color_in.clone())?;
 
         let layout = CanvasLayout::with_texel(&self.texel_out, self.sz, self.sz)?;
         let mut into = Canvas::new(layout);
-        into.set_color(self.color_out)?;
+        into.set_color(self.color_out.clone())?;
 
         Ok(move || from.convert(&mut into))
     }
@@ -57,25 +58,26 @@ fn main() {
             color_out: Color::Oklab,
             sz: 128,
         },
-        /* rgb conversion with different depths */
+        /* rgb to yuv conversion with different depths */
+        /*
         Convert {
             texel_in: Texel::new_u8(SampleParts::Rgb),
             color_in: Color::SRGB,
-            texel_out: Texel::new_u8(SampleParts::Rgb),
+            texel_out: Texel::new_u8(SampleParts::Yuv),
             color_out: Color::BT709,
             sz: 128,
         },
         Convert {
             texel_in: Texel::new_u16(SampleParts::Rgb),
             color_in: Color::SRGB,
-            texel_out: Texel::new_u16(SampleParts::Rgb),
+            texel_out: Texel::new_u16(SampleParts::Yuv),
             color_out: Color::BT709,
             sz: 128,
         },
         Convert {
             texel_in: Texel::new_f32(SampleParts::Rgb),
             color_in: Color::SRGB,
-            texel_out: Texel::new_f32(SampleParts::Rgb),
+            texel_out: Texel::new_f32(SampleParts::Yuv),
             color_out: Color::BT709,
             sz: 128,
         },
@@ -83,10 +85,11 @@ fn main() {
         Convert {
             texel_in: Texel::new_u8(SampleParts::RgbA),
             color_in: Color::SRGB,
-            texel_out: Texel::new_u8(SampleParts::RgbA),
+            texel_out: Texel::new_u8(SampleParts::YuvA),
             color_out: Color::BT709,
             sz: 128,
         },
+        */
         /* Mainly texel conversion */
         Convert {
             texel_in: Texel::new_u8(SampleParts::Rgb),
@@ -211,8 +214,12 @@ fn main() {
     ];
 
     let mut benches = tests.map(|convert| {
-        Bench::new("framebuf::conversion::main", &convert.name())
-            .with(convert.prepare().expect("Failed to setup benchmark"))
+        let bench = match convert.prepare() {
+            Ok(bench) => bench,
+            Err(err) => panic!("Failed to setup benchmark {:?}: {:?}", convert, err),
+        };
+
+        Bench::new("framebuf::conversion::main", &convert.name()).with(bench)
     });
 
     // Technically, we're not meant to call this directly but this makes me sad.. Why are we forced

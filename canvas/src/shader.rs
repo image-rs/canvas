@@ -1126,9 +1126,6 @@ impl CommonPixel {
                 }
             }
         }
-
-        eprintln!("{:?}", bits);
-        eprintln!("{:?}", pixel_buf.as_texels(expanded));
     }
 
     fn expand_floats(

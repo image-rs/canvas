@@ -267,7 +267,8 @@ mod sample_parts {
         Rgb: Bgr = Cc::B,Cc::G,Cc::R;
         Rgb: BgrA = Cc::B,Cc::G,Cc::R,Cc::Alpha;
         Rgb: ABgr = Cc::Alpha,Cc::B,Cc::G,Cc::R;
-        Yuv: Yuv = Cc::L,Cc::Cb,Cc::Cr;
+        Yuv: Yuv = Cc::Luma,Cc::Cb,Cc::Cr;
+        Yuv: YuvA = Cc::Luma,Cc::Cb,Cc::Cr,Cc::Alpha;
         Lab: Lab = Cc::L,Cc::LABa,Cc::LABb;
         Lab: LabA = Cc::L,Cc::LABa,Cc::LABb,Cc::Alpha;
         Lab: Lch = Cc::L,Cc::C,Cc::LABh;

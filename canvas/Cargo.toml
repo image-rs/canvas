@@ -31,3 +31,8 @@ harness = false
 name = "intcast"
 path = "benchmarks/intcast.rs"
 harness = false
+
+[[bench]]
+name = "expand"
+path = "benchmarks/expand.rs"
+harness = false
