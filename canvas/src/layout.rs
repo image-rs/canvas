@@ -312,8 +312,12 @@ pub enum SampleBits {
     Int16,
     /// A single 16-bit integer.
     UInt16,
+    /// Two packed integer.
+    UInt4x2,
     /// Four packed integer.
     UInt4x4,
+    /// Six packed integer.
+    UInt4x6,
     /// Four packed integer, one component ignored.
     UInt_444,
     /// Four packed integer, one component ignored.
@@ -509,9 +513,9 @@ impl SampleBits {
 
         #[allow(non_upper_case_globals)]
         match self {
-            Int8 | UInt8 | UInt1x8 | UInt2x4 | UInt332 | UInt233 => 1,
+            Int8 | UInt8 | UInt1x8 | UInt2x4 | UInt332 | UInt233 | UInt4x2 => 1,
             Int8x2 | UInt8x2 | Int16 | UInt16 | UInt565 | UInt4x4 | UInt444_ | UInt_444 => 2,
-            Int8x3 | UInt8x3 => 3,
+            Int8x3 | UInt8x3 | UInt4x6 => 3,
             Int8x4 | UInt8x4 | Int16x2 | UInt16x2 | UInt1010102 | UInt2101010 | UInt101010_
             | UInt_101010 | Float32 => 4,
             UInt8x6 | Int16x3 | UInt16x3 => 6,
@@ -562,7 +566,8 @@ impl SampleBits {
             UInt8 | UInt8x2 | UInt8x3 | UInt8x4 | UInt8x6 => {
                 ([BitEncoding::UInt; 8], self.bytes() as u8)
             }
-            UInt1x8 | UInt2x4 => ([BitEncoding::UInt; 8], 1),
+            UInt1x8 => ([BitEncoding::UInt; 8], 8),
+            UInt2x4 => ([BitEncoding::UInt; 8], 4),
             Int8 | Int8x2 | Int8x3 | Int8x4 => ([BitEncoding::Int; 8], self.bytes() as u8),
             UInt16 | UInt16x2 | UInt16x3 | UInt16x4 | UInt16x6 => {
                 ([BitEncoding::UInt; 8], self.bytes() as u8 / 2)
@@ -572,11 +577,13 @@ impl SampleBits {
                 ([BitEncoding::Float; 8], self.bytes() as u8 / 4)
             }
             UInt332 | UInt233 | UInt565 => ([BitEncoding::UInt; 8], 3),
-            SampleBits::UInt4x4 => ([BitEncoding::UInt; 8], 4),
-            SampleBits::UInt_444 | SampleBits::UInt444_ => ([BitEncoding::UInt; 8], 3),
-            SampleBits::UInt101010_ | UInt_101010 => ([BitEncoding::Float; 8], 3),
-            SampleBits::UInt1010102 | UInt2101010 => ([BitEncoding::Float; 8], 4),
-            SampleBits::Float16x4 => ([BitEncoding::Float; 8], 4),
+            UInt4x2 => ([BitEncoding::UInt; 8], 2),
+            UInt4x4 => ([BitEncoding::UInt; 8], 4),
+            UInt4x6 => ([BitEncoding::UInt; 8], 6),
+            UInt_444 | SampleBits::UInt444_ => ([BitEncoding::UInt; 8], 3),
+            UInt101010_ | UInt_101010 => ([BitEncoding::Float; 8], 3),
+            UInt1010102 | UInt2101010 => ([BitEncoding::Float; 8], 4),
+            Float16x4 => ([BitEncoding::Float; 8], 4),
         }
     }
 }

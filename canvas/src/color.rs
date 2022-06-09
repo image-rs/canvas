@@ -1,6 +1,7 @@
 mod oklab;
 mod srlab2;
 mod transfer;
+mod yuv;
 
 use crate::color_matrix::{ColMatrix, RowMatrix};
 
@@ -29,13 +30,12 @@ pub enum Color {
         luminance: Luminance,
     },
     /// A lightness, chroma difference scheme.
-    #[doc(hidden)]
-    #[deprecated = "DO NOT USE THIS YET! It's members are not final."]
     Yuv {
         primary: Primaries,
         whitepoint: Whitepoint,
         transfer: Transfer,
         luminance: Luminance,
+        differencing: Differencing,
     },
     /// The simple but perceptual space Oklab by Björn Ottoson.
     ///
@@ -290,6 +290,52 @@ pub enum Primaries {
     Bt2100,
 }
 
+/// The differencing scheme used in a Yuv construction.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[non_exhaustive]
+pub enum Differencing {
+    /// Rec BT.470 M/PAL differencing scheme for E_U and E_V, the naming origin for 'YUV'.
+    /// FIXME: add YIQ proper, to add BT.470 M/NTSC?
+    ///
+    /// Note this same differencing scheme is used with different color primaries and whitepoints.
+    /// With those shared with BT601_625 and D65 in more modern systems and a different one under
+    /// illuminant C.
+    Bt407MPal,
+    /// Rec BT.601 luminance differencing.
+    Bt601,
+    /// Rec BT.601 luminance differencing, quantized with headroom.
+    /// This is intended for analog use, not for digital images.
+    Bt601Quantized,
+    /// Rec BT.601 luminance differencing, quantized without headroom.
+    ///
+    /// Please tell the crate author where it's used but this makes it easy to quantize to 8-bit
+    /// unsigned integers.
+    Bt601FullSwing,
+    /// Rec BT.709 luminance differencing.
+    Bt709,
+    /// Analog form
+    Bt709Quantized,
+    /// Rec BT.709 luminance differencing, quantized without headroom.
+    /// Not technically an ITU BT recommendation, but introduced in h.264.
+    Bt709FullSwing,
+    /// Factors from analog SECAM standard.
+    YDbDr,
+    /// Rec BT.2020 luminance differencing.
+    Bt2020,
+    /// Rec BT.2100 luminance differencing.
+    /// Same coefficients as the BT2020 scheme.
+    Bt2100,
+    /// Differencing scheme from NTSC in 1953, a rotated version of Yuv.
+    /// FIXME: should we call these components YIQ proper?
+    Ntsc1953,
+    /// Differencing scheme from NTSC SMPTE, a rotated version of Yuv.
+    /// Also known as FCC NTSC.
+    /// FIXME: should we call these components YIQ proper?
+    SmpteC,
+    /// Differencing scheme from YCoCb/ITU-T H.273.
+    YCoCg,
+}
+
 /// The whitepoint/standard illuminant.
 ///
 /// | Illuminant | X       | Y       | Z       |
@@ -335,6 +381,7 @@ impl Color {
         primary: Primaries::Bt709,
         transfer: Transfer::Bt709,
         whitepoint: Whitepoint::D65,
+        differencing: Differencing::Bt709,
     };
 
     pub(crate) fn to_xyz_slice(&self, pixel: &[[f32; 4]], xyz: &mut [[f32; 4]]) {
@@ -442,6 +489,7 @@ impl Color {
                 transfer,
                 whitepoint,
                 luminance: _,
+                differencing,
             } => {
                 todo!()
             }
@@ -473,6 +521,7 @@ impl Color {
                 transfer,
                 whitepoint,
                 luminance: _,
+                differencing,
             } => {
                 todo!()
             }
