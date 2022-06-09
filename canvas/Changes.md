@@ -1,3 +1,21 @@
+## 0.4.0
+
+This adds support for packed blocks and incomplete YUV color support.
+
+Bug fixes:
+- Fixed a buf where bitfield sample parts referred to the wrong bits.
+
+New features:
+- Added `Block::Pack1x{2,4,8}` which refer to texel containing multiple pixels
+  by bit-packing their sample parts in sequence.
+- Added `Block::Yuv422,Yuy2,Yuv411` which refer to texels containing multiple
+  pixels by subsampling some of their sample parts. Their implementation with
+  regards to bit packing and unpacking is not yet final.
+- Added `SampleParts::{UInt1x8,UInt2x4}` to complement bit packing blocks with
+  more low-depth channels in a single texel.
+- More information in `LayoutError` for debugging.
+- Added a hidden `Color::Yuv`, not part of the official SemVer interface yet.
+
 ## 0.3.1 (Mustafar)
 
 This release is complete enough to provide all relevant RGB-Lab interaction.

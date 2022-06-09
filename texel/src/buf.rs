@@ -561,13 +561,13 @@ impl ops::Index<ops::RangeTo<usize>> for buf {
     type Output = buf;
 
     fn index(&self, idx: ops::RangeTo<usize>) -> &buf {
-        Self::from_bytes(&self.0[idx]).unwrap()
+        self.truncate(idx.end)
     }
 }
 
 impl ops::IndexMut<ops::RangeTo<usize>> for buf {
     fn index_mut(&mut self, idx: ops::RangeTo<usize>) -> &mut buf {
-        Self::from_bytes_mut(&mut self.0[idx]).unwrap()
+        self.truncate_mut(idx.end)
     }
 }
 

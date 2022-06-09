@@ -1,3 +1,13 @@
+## v0.3.0
+
+- UB: Fix `Texel::{try_to_slice_mut,cast_mut_bytes}` casting a non-mutable
+  pointer to a mutable slice. This is a local error, the input parameter was
+  properly mutable. Commit: 67b5bc9f54f2d348415d52aee34ee9b224860bc5
+  No LLVM analysis *can* make use of this UB / unsoundness as of LLVM 13.
+- `{Image,ImageRef,ImageMut,TexelBuffer}::{as_texels,as_mut_texels}` now return
+  a slice truncated to the portion covering the logical size of the respective
+  buffers. This is breaking as it required their layouts to be `Layout`.
+
 ## v0.2.1
 
 - Added `Image{Ref,Mut}::split_layout` to re-use excess storage with a
