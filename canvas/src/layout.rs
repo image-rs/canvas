@@ -507,6 +507,8 @@ impl ColorChannel {
 }
 
 impl SampleBits {
+    pub(crate) const MAX_COMPONENTS: usize = 8;
+
     /// Determine the number of bytes for texels containing these samples.
     pub fn bytes(self) -> u16 {
         use SampleBits::*;
@@ -559,31 +561,32 @@ impl SampleBits {
         TexelKind::from(self).action(ToLayout)
     }
 
-    pub(crate) fn bit_encoding(self) -> ([BitEncoding; 8], u8) {
+    pub(crate) fn bit_encoding(self) -> ([BitEncoding; Self::MAX_COMPONENTS], u8) {
+        const M: usize = SampleBits::MAX_COMPONENTS;
         use SampleBits::*;
 
         match self {
             UInt8 | UInt8x2 | UInt8x3 | UInt8x4 | UInt8x6 => {
-                ([BitEncoding::UInt; 8], self.bytes() as u8)
+                ([BitEncoding::UInt; M], self.bytes() as u8)
             }
-            UInt1x8 => ([BitEncoding::UInt; 8], 8),
-            UInt2x4 => ([BitEncoding::UInt; 8], 4),
-            Int8 | Int8x2 | Int8x3 | Int8x4 => ([BitEncoding::Int; 8], self.bytes() as u8),
+            UInt1x8 => ([BitEncoding::UInt; M], 8),
+            UInt2x4 => ([BitEncoding::UInt; M], 4),
+            Int8 | Int8x2 | Int8x3 | Int8x4 => ([BitEncoding::Int; M], self.bytes() as u8),
             UInt16 | UInt16x2 | UInt16x3 | UInt16x4 | UInt16x6 => {
-                ([BitEncoding::UInt; 8], self.bytes() as u8 / 2)
+                ([BitEncoding::UInt; M], self.bytes() as u8 / 2)
             }
-            Int16 | Int16x2 | Int16x3 | Int16x4 => ([BitEncoding::Int; 8], self.bytes() as u8 / 2),
+            Int16 | Int16x2 | Int16x3 | Int16x4 => ([BitEncoding::Int; M], self.bytes() as u8 / 2),
             Float32 | Float32x2 | Float32x3 | Float32x4 | Float32x6 => {
-                ([BitEncoding::Float; 8], self.bytes() as u8 / 4)
+                ([BitEncoding::Float; M], self.bytes() as u8 / 4)
             }
-            UInt332 | UInt233 | UInt565 => ([BitEncoding::UInt; 8], 3),
-            UInt4x2 => ([BitEncoding::UInt; 8], 2),
-            UInt4x4 => ([BitEncoding::UInt; 8], 4),
-            UInt4x6 => ([BitEncoding::UInt; 8], 6),
-            UInt_444 | SampleBits::UInt444_ => ([BitEncoding::UInt; 8], 3),
-            UInt101010_ | UInt_101010 => ([BitEncoding::Float; 8], 3),
-            UInt1010102 | UInt2101010 => ([BitEncoding::Float; 8], 4),
-            Float16x4 => ([BitEncoding::Float; 8], 4),
+            UInt332 | UInt233 | UInt565 => ([BitEncoding::UInt; M], 3),
+            UInt4x2 => ([BitEncoding::UInt; M], 2),
+            UInt4x4 => ([BitEncoding::UInt; M], 4),
+            UInt4x6 => ([BitEncoding::UInt; M], 6),
+            UInt_444 | SampleBits::UInt444_ => ([BitEncoding::UInt; M], 3),
+            UInt101010_ | UInt_101010 => ([BitEncoding::Float; M], 3),
+            UInt1010102 | UInt2101010 => ([BitEncoding::Float; M], 4),
+            Float16x4 => ([BitEncoding::Float; M], 4),
         }
     }
 }

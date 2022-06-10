@@ -1026,11 +1026,12 @@ impl CommonPixel {
         in_texel: &TexelBuffer,
         pixel_buf: &mut TexelBuffer,
     ) {
+        const M: usize = SampleBits::MAX_COMPONENTS;
         let (encoding, len) = info.in_layout.texel.bits.bit_encoding();
 
-        if encoding[..len as usize] == [BitEncoding::UInt; 6][..len as usize] {
+        if encoding[..len as usize] == [BitEncoding::UInt; M][..len as usize] {
             return Self::expand_ints::<N>(info, bits, in_texel, pixel_buf);
-        } else if encoding[..len as usize] == [BitEncoding::Float; 6][..len as usize] {
+        } else if encoding[..len as usize] == [BitEncoding::Float; M][..len as usize] {
             return Self::expand_floats(info, bits[0], in_texel, pixel_buf);
         } else {
             // FIXME(color): error treatment..
@@ -1376,11 +1377,12 @@ impl CommonPixel {
         pixel_buf: &TexelBuffer,
         out_texels: &mut TexelBuffer,
     ) {
+        const M: usize = SampleBits::MAX_COMPONENTS;
         let (encoding, len) = info.out_layout.texel.bits.bit_encoding();
 
-        if encoding[..len as usize] == [BitEncoding::UInt; 6][..len as usize] {
+        if encoding[..len as usize] == [BitEncoding::UInt; M][..len as usize] {
             return Self::join_ints(info, bits, pixel_buf, out_texels);
-        } else if encoding[..len as usize] == [BitEncoding::Float; 6][..len as usize] {
+        } else if encoding[..len as usize] == [BitEncoding::Float; M][..len as usize] {
             return Self::join_floats(info, bits[0], pixel_buf, out_texels);
         } else {
             // FIXME(color): error treatment..
