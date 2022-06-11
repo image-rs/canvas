@@ -346,6 +346,7 @@ pub enum Differencing {
     YCoCg,
 }
 
+#[non_exhaustive]
 pub enum DifferencingYiq {
     /// Differencing scheme from NTSC in 1953, a rotated version of Yuv.
     Ntsc1953,

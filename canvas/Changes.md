@@ -1,3 +1,9 @@
+## 0.4.1
+
+New features:
+- Added `Color::Yuv` (or rather exposed) and `Differencing` to support YUV color spaces.
+- Added `SampleParts::{UInt4x2,UInt4x6}`.
+
 ## 0.4.0
 
 This adds support for packed blocks and incomplete YUV color support.
