@@ -388,3 +388,48 @@ fn pack_bits() -> Result<(), LayoutError> {
 
     Ok(())
 }
+
+#[test]
+fn yuv_conversion() -> Result<(), LayoutError> {
+    let layout = CanvasLayout::with_texel(&Texel::new_u8(SampleParts::Rgb), 32, 32)?;
+    let mut from = Canvas::new(layout.clone());
+    from.set_color(Color::SRGB)?;
+
+    let layout = CanvasLayout::with_texel(&Texel::new_u8(SampleParts::Yuv), 32, 32)?;
+    let mut into = Canvas::new(layout);
+    into.set_color(Color::BT709)?;
+
+    let layout = CanvasLayout::with_texel(&Texel::new_f32(SampleParts::Yuv), 32, 32)?;
+    let mut rt = Canvas::new(layout);
+    rt.set_color(Color::BT709)?;
+
+    let mut check_color_pair = |rgb: [u8; 3], yuv: [u8; 3]| {
+        from.as_texels_mut(<[u8; 3] as image_texel::AsTexel>::texel())
+            .iter_mut()
+            .for_each(|b| *b = rgb);
+
+        from.convert(&mut into);
+
+        into.as_texels_mut(<[u8; 3] as image_texel::AsTexel>::texel())
+            .iter()
+            .enumerate()
+            .for_each(|(idx, b)| assert_eq!(*b, yuv, "at {}", idx));
+
+        from.convert(&mut rt);
+        rt.convert(&mut from);
+
+        from.as_texels_mut(<[u8; 3] as image_texel::AsTexel>::texel())
+            .iter()
+            .enumerate()
+            .for_each(|(idx, b)| assert_eq!(*b, rgb, "at {}", idx));
+    };
+
+    check_color_pair([255, 255, 0], [237, 0, 12]);
+    check_color_pair([128, 0, 80], [29, 19, 55]);
+    // easy check, full black is full black
+    check_color_pair([0, 0, 0], [0, 0, 0]);
+    // full white is only Luma, no chroma
+    check_color_pair([255, 255, 255], [255, 0, 0]);
+
+    Ok(())
+}

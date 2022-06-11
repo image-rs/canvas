@@ -15,6 +15,10 @@ use crate::color_matrix::{ColMatrix, RowMatrix};
 /// use an associated _linear_ representation of those colors instead. The choice here depends on
 /// the color and is documented for each variants. It is chosen to provide models for faithful
 /// linear operations on these colors such as mixing etc.
+///
+/// TODO: colors describe _paths_ to linear display, so we should somehow implement direction
+/// conversions such as "BT.2087 : Colour conversion from Recommendation ITU-R BT.709 to
+/// Recommendation ITU-R BT.2020" in a separate manner.
 #[derive(Clone, Debug, PartialEq, Eq)]
 #[non_exhaustive]
 pub enum Color {
@@ -76,6 +80,10 @@ pub enum Color {
     /// the transfer function in the cone response space, this achieves a good uniformity by
     /// simply modelling the human perception properly. It just leaves out the surround luminance
     /// model in the vastly more complex CIECAM02.
+    ///
+    /// This is lacking for HDR. This is because its based on L*ab which is inherently optimized
+    /// for the small gamut of SDR. It's not constant luminance at exceedingly bright colors where
+    /// ICtCp might provide a better estimate (compare ΔEITP, ITU-R Rec. BT.2124).
     ///
     /// Reference: <https://www.magnetkern.de/srlab2.html>
     SrLab2 { whitepoint: Whitepoint },
@@ -259,8 +267,9 @@ pub enum Luminance {
     Hdr,
     /// 160cd/m².
     AdobeRgb,
+    /// 1000 nits, optimized for projector use.
+    DciP3,
 }
-
 /// The relative stimuli of the three corners of a triangular RGBish gamut.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 #[non_exhaustive]
@@ -301,6 +310,9 @@ pub enum Differencing {
     /// With those shared with BT601_625 and D65 in more modern systems and a different one under
     /// illuminant C.
     Bt407MPal,
+    /// The BT.470 M/PAL has a typo and, based on its parameters, we can derive a more accurate
+    /// version than as what was published..
+    Bt407MPalPrecise,
     /// Rec BT.601 luminance differencing.
     Bt601,
     /// Rec BT.601 luminance differencing, quantized with headroom.
@@ -318,6 +330,11 @@ pub enum Differencing {
     /// Rec BT.709 luminance differencing, quantized without headroom.
     /// Not technically an ITU BT recommendation, but introduced in h.264.
     Bt709FullSwing,
+
+    // TODO: Rec. ITU-R BT.1361 = BT709 with a dash of questionable 'extended gamut quantization'.
+    // Suppressed at (suppressed on 12/02/15) in favor of BT2020 (published xx/10/15).
+    // But then again, it's referenced by EBU: https://tech.ebu.ch/docs/tech/tech3299.pdf
+    // Turtles all the way down.
     /// Factors from analog SECAM standard.
     YDbDr,
     /// Rec BT.2020 luminance differencing.
@@ -325,15 +342,16 @@ pub enum Differencing {
     /// Rec BT.2100 luminance differencing.
     /// Same coefficients as the BT2020 scheme.
     Bt2100,
+    /// Differencing scheme from YCoCb/ITU-T H.273.
+    YCoCg,
+}
+
+pub enum DifferencingYiq {
     /// Differencing scheme from NTSC in 1953, a rotated version of Yuv.
-    /// FIXME: should we call these components YIQ proper?
     Ntsc1953,
     /// Differencing scheme from NTSC SMPTE, a rotated version of Yuv.
     /// Also known as FCC NTSC.
-    /// FIXME: should we call these components YIQ proper?
     SmpteC,
-    /// Differencing scheme from YCoCb/ITU-T H.273.
-    YCoCg,
 }
 
 /// The whitepoint/standard illuminant.
@@ -491,7 +509,14 @@ impl Color {
                 luminance: _,
                 differencing,
             } => {
-                todo!()
+                let mut yuv = value;
+
+                yuv::to_rgb_slice(core::slice::from_mut(&mut yuv), *transfer, *differencing);
+
+                let [r, g, b, a] = yuv;
+                let from_xyz = primary.to_xyz(*whitepoint);
+                let [x, y, z] = from_xyz.mul_vec([r, g, b]);
+                [x, y, z, a]
             }
             Color::Scalars { transfer } => transfer.to_optical_display(value),
             Color::SrLab2 { whitepoint } => {
@@ -523,7 +548,14 @@ impl Color {
                 luminance: _,
                 differencing,
             } => {
-                todo!()
+                let [x, y, z, a] = value;
+                let from_xyz = primary.to_xyz(*whitepoint).inv();
+                let [r, g, b] = from_xyz.mul_vec([x, y, z]);
+                let mut rgb = [r, g, b, a];
+
+                yuv::from_rgb_slice(core::slice::from_mut(&mut rgb), *transfer, *differencing);
+
+                rgb
             }
             Color::Scalars { transfer } => transfer.from_optical_display(value),
             Color::SrLab2 { whitepoint } => {
@@ -642,6 +674,40 @@ impl Transfer {
 
         if let Transfer::Linear = self {
             return Some(|x, y| y.copy_from_slice(x));
+        }
+
+        use self::transfer::*;
+        optical_by_display!(self:
+            Transfer::Bt709 => transfer_eo_bt709,
+            Transfer::Bt470M => transfer_eo_bt470m,
+            Transfer::Bt601 => transfer_eo_bt601,
+            Transfer::Smpte240 => transfer_eo_smpte240,
+            Transfer::Srgb => transfer_eo_srgb,
+            Transfer::Bt2020_10bit => transfer_eo_bt2020_10b,
+        );
+    }
+
+    pub(crate) fn to_optical_display_slice_inplace(self) -> Option<fn(&mut [[f32; 4]])> {
+        macro_rules! optical_by_display {
+            ($what:ident: $($pattern:pat => $transfer:path,)*) => {
+                match $what {
+                    $($pattern => return optical_by_display! {@ $transfer },)*
+                    _ => return None,
+                }
+            };
+            (@ $transfer:path) => {
+                Some(|pixels: &mut [[f32; 4]]| {
+                    for pix in pixels {
+                        let [r, g, b, a] = *pix;
+                        let [r, g, b] = [r, g, b].map($transfer);
+                        *pix = [r, g, b, a];
+                    }
+                })
+            };
+        }
+
+        if let Transfer::Linear = self {
+            return Some(|_| {});
         }
 
         use self::transfer::*;
