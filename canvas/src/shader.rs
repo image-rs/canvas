@@ -1026,11 +1026,12 @@ impl CommonPixel {
         in_texel: &TexelBuffer,
         pixel_buf: &mut TexelBuffer,
     ) {
+        const M: usize = SampleBits::MAX_COMPONENTS;
         let (encoding, len) = info.in_layout.texel.bits.bit_encoding();
 
-        if encoding[..len as usize] == [BitEncoding::UInt; 6][..len as usize] {
+        if encoding[..len as usize] == [BitEncoding::UInt; M][..len as usize] {
             return Self::expand_ints::<N>(info, bits, in_texel, pixel_buf);
-        } else if encoding[..len as usize] == [BitEncoding::Float; 6][..len as usize] {
+        } else if encoding[..len as usize] == [BitEncoding::Float; M][..len as usize] {
             return Self::expand_floats(info, bits[0], in_texel, pixel_buf);
         } else {
             // FIXME(color): error treatment..
@@ -1376,11 +1377,12 @@ impl CommonPixel {
         pixel_buf: &TexelBuffer,
         out_texels: &mut TexelBuffer,
     ) {
+        const M: usize = SampleBits::MAX_COMPONENTS;
         let (encoding, len) = info.out_layout.texel.bits.bit_encoding();
 
-        if encoding[..len as usize] == [BitEncoding::UInt; 6][..len as usize] {
+        if encoding[..len as usize] == [BitEncoding::UInt; M][..len as usize] {
             return Self::join_ints(info, bits, pixel_buf, out_texels);
-        } else if encoding[..len as usize] == [BitEncoding::Float; 6][..len as usize] {
+        } else if encoding[..len as usize] == [BitEncoding::Float; M][..len as usize] {
             return Self::join_floats(info, bits[0], pixel_buf, out_texels);
         } else {
             // FIXME(color): error treatment..
@@ -1717,10 +1719,10 @@ impl From<SampleBits> for TexelKind {
         use SampleBits::*;
         // We only need to match size and align here.
         match bits {
-            Int8 | UInt8 | UInt1x8 | UInt2x4 | UInt332 | UInt233 => TexelKind::U8,
+            Int8 | UInt8 | UInt1x8 | UInt2x4 | UInt332 | UInt233 | UInt4x2 => TexelKind::U8,
             Int16 | UInt16 | UInt4x4 | UInt_444 | UInt444_ | UInt565 => TexelKind::U16,
             Int8x2 | UInt8x2 => TexelKind::U8x2,
-            Int8x3 | UInt8x3 => TexelKind::U8x3,
+            Int8x3 | UInt8x3 | UInt4x6 => TexelKind::U8x3,
             Int8x4 | UInt8x4 => TexelKind::U8x4,
             UInt8x6 => TexelKind::U8x6,
             Int16x2 | UInt16x2 => TexelKind::U16x2,
