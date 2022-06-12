@@ -407,9 +407,19 @@ impl Texel {
         Self::pixel_from_bits(parts, [UInt8, UInt8x2, UInt8x3, UInt8x4])
     }
 
+    pub fn new_i8(parts: SampleParts) -> Self {
+        use SampleBits::*;
+        Self::pixel_from_bits(parts, [Int8, Int8x2, Int8x3, Int8x4])
+    }
+
     pub fn new_u16(parts: SampleParts) -> Self {
         use SampleBits::*;
         Self::pixel_from_bits(parts, [UInt16, UInt16x2, UInt16x3, UInt16x4])
+    }
+
+    pub fn new_i16(parts: SampleParts) -> Self {
+        use SampleBits::*;
+        Self::pixel_from_bits(parts, [Int16, Int16x2, Int16x3, Int16x4])
     }
 
     pub fn new_f32(parts: SampleParts) -> Self {
