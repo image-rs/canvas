@@ -1,5 +1,7 @@
 use crate::color::Color;
-use crate::layout::{Block, CanvasLayout, LayoutError, SampleBits, SampleParts, Texel};
+use crate::layout::{
+    Block, CanvasLayout, LayoutError, RowLayoutDescription, SampleBits, SampleParts, Texel,
+};
 use crate::Canvas;
 
 #[test]
@@ -432,4 +434,32 @@ fn yuv_conversion() -> Result<(), LayoutError> {
     check_color_pair([255, 255, 255], [255, 0, 0]);
 
     Ok(())
+}
+
+#[test]
+fn strided() -> Result<(), LayoutError> {
+    let layout = CanvasLayout::with_row_layout(&RowLayoutDescription {
+        width: 32,
+        height: 32,
+        texel: Texel::new_u8(SampleParts::A),
+        // Overaligned.
+        row_stride: 256,
+    })?;
+
+    assert_eq!(layout.u64_len(), 256 * 32);
+
+    Ok(())
+}
+
+#[test]
+fn incorrect_strided() {
+    let layout = CanvasLayout::with_row_layout(&RowLayoutDescription {
+        width: 32,
+        height: 32,
+        texel: Texel::new_u8(SampleParts::A),
+        // Rows would alias, too few bytes.
+        row_stride: 16,
+    });
+
+    assert!(layout.is_err());
 }

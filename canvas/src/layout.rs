@@ -731,12 +731,19 @@ impl CanvasLayout {
 
         let spec = layers[0].matrix.spec();
         let width: u32 = spec.width.try_into().map_err(LayoutError::width_error)?;
+        let min_height_stride = spec.width_stride as u32 * width;
+        let height_stride = spec.height_stride.try_into().map_err(LayoutError::height_error)?;
+
+        if min_height_stride > height_stride {
+            // FIXME(planar): should support validation of this.
+            return Err(LayoutError::bad_planes(0));
+        }
 
         Self::validate(CanvasLayout {
             bytes: ByteLayout {
                 width: layers[0].width,
                 height: layers[0].height,
-                bytes_per_row: (spec.width_stride as u32) * width,
+                bytes_per_row: height_stride,
             },
             planes: Box::default(),
             offset: 0,
@@ -774,11 +781,13 @@ impl CanvasLayout {
     /// This is a simplification of `with_row_layout` which itself is a simplified `new`.
     pub fn with_texel(texel: &Texel, width: u32, height: u32) -> Result<Self, LayoutError> {
         let texel_stride = u64::from(texel.bits.bytes());
+        let width_sub = texel.block.block_width(width);
+
         Self::with_row_layout(&RowLayoutDescription {
             width,
             height,
             // Note: with_row_layout will do an overflow check anyways.
-            row_stride: u64::from(width) * texel_stride,
+            row_stride: u64::from(width_sub) * texel_stride,
             texel: texel.clone(),
         })
     }
