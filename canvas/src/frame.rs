@@ -7,11 +7,13 @@ use crate::layout::{CanvasLayout, ChannelLayout, LayoutError, PlanarLayout, Plan
 use crate::shader::Converter;
 
 /// A byte buffer with dynamic color contents.
+#[derive(Clone)]
 pub struct Canvas {
     inner: Image<CanvasLayout>,
 }
 
 /// A byte buffer containing a single plane.
+#[derive(Clone)]
 pub struct Plane {
     inner: Image<PlaneBytes>,
 }

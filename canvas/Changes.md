@@ -1,3 +1,25 @@
+## 0.4.2
+
+Bug fixes:
+- Layout calculation no longer ignores custom strides
+- Layout calculation for subsampled texels now yields the proper amount of
+  texels across its width, previously allocated too much memory
+
+New feature:
+- Added `Clone`-impls for `Canvas` and `Plane`.
+- Added `Whitepoint::to_xyz` for XYZ weights of a whitepoint.
+- Added `Primaries::{from,to}_xyz_row_matrix` to calculate the transfer matrix
+  for conversion to and from CIE XYZ space.
+- Added `Color::BT709_RGB` for the main RGB-like color space. Note that the
+  sole difference to sRGB is its transfer function.
+- Added `SampleParts::with_channel` to extract a single channel from a
+  multi-channel texel.
+- It's now possible to successfully call `Texel::channel_texel` with sample
+  parts of any integral array form.
+- Added `SampleParts::contains` as a utility.
+- Added `SampleParts::color_channels` to retrieve the set of channels that had
+  been used during construction.
+
 ## 0.4.1
 
 New features:
