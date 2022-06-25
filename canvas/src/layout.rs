@@ -465,6 +465,9 @@ impl Texel {
 
         let bits = match self.bits {
             UInt8 | UInt8x3 | UInt8x4 => UInt8,
+            Int8 | Int8x3 | Int8x4 => Int8,
+            UInt16 | UInt16x3 | UInt16x4 => UInt16,
+            Int16 | Int16x3 | Int16x4 => Int16,
             _ => return None,
         };
 
@@ -615,6 +618,29 @@ impl SampleParts {
         Some(SampleParts { parts, color_index })
     }
 
+    /// Extract a single channel.
+    ///
+    /// The channel is extract as if part of the ColorChannelModel used in the construction of
+    /// these sample parts.
+    pub fn with_channel(&self, ch: ColorChannel) -> Option<Self> {
+        let pos = self.parts.iter().position(|part| *part == Some(ch))?;
+        let mut parts = [None; 4];
+        parts[0] = self.parts[pos];
+        let color_index = (self.color_index >> (2 * pos)) & 0x3;
+
+        Some(SampleParts { parts, color_index })
+    }
+
+    /// Test if these parts contain the provided channel.
+    pub fn contains(&self, ch: ColorChannel) -> bool {
+        self.with_channel(ch).is_some()
+    }
+
+    /// Get an array of up to four color channel present.
+    pub fn color_channels(&self) -> [Option<ColorChannel>; 4] {
+        self.parts
+    }
+
     fn color_index(parts: &[Option<ColorChannel>; 4], model: ColorChannelModel) -> Option<u8> {
         let mut unused = [true; 4];
         let mut color_index = [0; 4];
@@ -732,7 +758,10 @@ impl CanvasLayout {
         let spec = layers[0].matrix.spec();
         let width: u32 = spec.width.try_into().map_err(LayoutError::width_error)?;
         let min_height_stride = spec.width_stride as u32 * width;
-        let height_stride = spec.height_stride.try_into().map_err(LayoutError::height_error)?;
+        let height_stride = spec
+            .height_stride
+            .try_into()
+            .map_err(LayoutError::height_error)?;
 
         if min_height_stride > height_stride {
             // FIXME(planar): should support validation of this.

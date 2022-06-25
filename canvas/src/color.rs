@@ -394,6 +394,13 @@ impl Color {
         whitepoint: Whitepoint::D65,
     };
 
+    pub const BT709_RGB: Color = Color::Rgb {
+        luminance: Luminance::Sdr,
+        primary: Primaries::Bt709,
+        transfer: Transfer::Bt709,
+        whitepoint: Whitepoint::D65,
+    };
+
     #[allow(deprecated)]
     pub const BT709: Color = Color::Yuv {
         luminance: Luminance::Sdr,
@@ -758,7 +765,7 @@ impl Transfer {
 }
 
 impl Whitepoint {
-    pub(crate) fn to_xyz(self) -> [f32; 3] {
+    pub fn to_xyz(self) -> [f32; 3] {
         use Whitepoint::*;
         match self {
             A => [1.09850, 1.00000, 0.35585],
@@ -826,6 +833,14 @@ impl Primaries {
             s[0]*xyz_r[1], s[1]*xyz_g[1], s[2]*xyz_b[1],
             s[0]*xyz_r[2], s[1]*xyz_g[2], s[2]*xyz_b[2],
         ])
+    }
+
+    pub fn to_xyz_row_matrix(self, white: Whitepoint) -> [f32; 9] {
+        self.to_xyz(white).into_inner()
+    }
+
+    pub fn from_xyz_row_matrix(self, white: Whitepoint) -> [f32; 9] {
+        self.to_xyz(white).inv().into_inner()
     }
 }
 
