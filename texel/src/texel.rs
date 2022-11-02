@@ -49,36 +49,28 @@ pub trait AsTexel {
 
 macro_rules! def_max_align {
     (
+        $(#[$common_attr:meta])*
         $($($arch:literal),* = $num:literal),*
     ) => {
+        /// A byte-like-type that is aligned to the required max alignment.
+        ///
+        /// This type does not contain padding and implements `Pod`. Generally, the alignment and size
+        /// requirement is kept small to avoid overhead.
+        $(#[$common_attr])*
         $(
-            /// A byte-like-type that is aligned to the required max alignment.
-            ///
-            /// This type does not contain padding and implements `Pod`. Generally, the alignment and size
-            /// requirement is kept small to avoid overhead.
-            #[derive(Clone, Copy)]
-            #[cfg(
+            #[cfg_attr(
                 any($(target_arch = $arch),*),
+                repr(align($num))
             )]
-            #[repr(align($num))]
-            #[repr(C)]
-            pub struct MaxAligned(pub(crate) [u8; $num]);
+        )*
+        pub struct MaxAligned(pub(crate) [u8; MAX_ALIGN]);
 
+        $(
             #[cfg(
                 any($(target_arch = $arch),*),
             )]
             pub(crate) const MAX_ALIGN: usize = $num;
         )*
-
-
-        #[cfg(
-            not(any(
-                $(any($(target_arch = $arch),*)),*
-            )),
-        )]
-        #[repr(align(8))]
-        #[repr(C)]
-        pub struct MaxAligned(pub(crate) [u8; 8]);
 
         #[cfg(
             not(any(
@@ -90,6 +82,13 @@ macro_rules! def_max_align {
 }
 
 def_max_align! {
+    /// A byte-like-type that is aligned to the required max alignment.
+    ///
+    /// This type does not contain padding and implements `Pod`. Generally, the alignment and size
+    /// requirement is kept small to avoid overhead.
+    #[derive(Clone, Copy)]
+    #[repr(C)]
+
     "x86", "x86_64" = 32,
     "arm" = 16,
     "aarch64" = 16,
