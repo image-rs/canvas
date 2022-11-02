@@ -1,3 +1,9 @@
+## v0.3.1
+
+- Fix compilation on non-explicit targets, where the maximum alignment will
+  default to a standard of `8`. This affects the Tier 1 targets: `mips`,
+  `powerpc`, `s390x` and others.
+
 ## v0.3.0
 
 - UB: Fix `Texel::{try_to_slice_mut,cast_mut_bytes}` casting a non-mutable

@@ -314,7 +314,7 @@ impl<P> Texel<P> {
     ///
     /// # Safety
     ///
-    /// The type `P` must not:
+    /// The type `P` must __not__:
     /// * have any validity invariants, i.e. is mustn't contain any padding.
     /// * have any safety invariants. This implies it can be copied.
     /// * have an alignment larger than [`MaxAligned`].
@@ -325,6 +325,10 @@ impl<P> Texel<P> {
     /// accidentally leaking instances, and ensures that copies created from their byte
     /// representation—which is safe according to the other invairants— do not cause unexpected
     /// effects.
+    ///
+    /// Note that the alignment requirement with regards to `MaxAligned` is __architecture
+    /// dependent__ as the exact bound varies across the `target_arch` feature. Where possible, add
+    /// static assertions to each call site of this function.
     ///
     /// [`MaxAligned`]: struct.MaxAligned.html
     pub const unsafe fn new_unchecked() -> Self {
