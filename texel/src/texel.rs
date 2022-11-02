@@ -49,36 +49,28 @@ pub trait AsTexel {
 
 macro_rules! def_max_align {
     (
+        $(#[$common_attr:meta])*
         $($($arch:literal),* = $num:literal),*
     ) => {
+        /// A byte-like-type that is aligned to the required max alignment.
+        ///
+        /// This type does not contain padding and implements `Pod`. Generally, the alignment and size
+        /// requirement is kept small to avoid overhead.
+        $(#[$common_attr])*
         $(
-            /// A byte-like-type that is aligned to the required max alignment.
-            ///
-            /// This type does not contain padding and implements `Pod`. Generally, the alignment and size
-            /// requirement is kept small to avoid overhead.
-            #[derive(Clone, Copy)]
-            #[cfg(
+            #[cfg_attr(
                 any($(target_arch = $arch),*),
+                repr(align($num))
             )]
-            #[repr(align($num))]
-            #[repr(C)]
-            pub struct MaxAligned(pub(crate) [u8; $num]);
+        )*
+        pub struct MaxAligned(pub(crate) [u8; MAX_ALIGN]);
 
+        $(
             #[cfg(
                 any($(target_arch = $arch),*),
             )]
             pub(crate) const MAX_ALIGN: usize = $num;
         )*
-
-
-        #[cfg(
-            not(any(
-                $(any($(target_arch = $arch),*)),*
-            )),
-        )]
-        #[repr(align(8))]
-        #[repr(C)]
-        pub struct MaxAligned(pub(crate) [u8; 8]);
 
         #[cfg(
             not(any(
@@ -90,6 +82,13 @@ macro_rules! def_max_align {
 }
 
 def_max_align! {
+    /// A byte-like-type that is aligned to the required max alignment.
+    ///
+    /// This type does not contain padding and implements `Pod`. Generally, the alignment and size
+    /// requirement is kept small to avoid overhead.
+    #[derive(Clone, Copy)]
+    #[repr(C)]
+
     "x86", "x86_64" = 32,
     "arm" = 16,
     "aarch64" = 16,
@@ -315,7 +314,7 @@ impl<P> Texel<P> {
     ///
     /// # Safety
     ///
-    /// The type `P` must not:
+    /// The type `P` must __not__:
     /// * have any validity invariants, i.e. is mustn't contain any padding.
     /// * have any safety invariants. This implies it can be copied.
     /// * have an alignment larger than [`MaxAligned`].
@@ -326,6 +325,10 @@ impl<P> Texel<P> {
     /// accidentally leaking instances, and ensures that copies created from their byte
     /// representation—which is safe according to the other invairants— do not cause unexpected
     /// effects.
+    ///
+    /// Note that the alignment requirement with regards to `MaxAligned` is __architecture
+    /// dependent__ as the exact bound varies across the `target_arch` feature. Where possible, add
+    /// static assertions to each call site of this function.
     ///
     /// [`MaxAligned`]: struct.MaxAligned.html
     pub const unsafe fn new_unchecked() -> Self {
