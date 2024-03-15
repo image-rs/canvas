@@ -105,4 +105,5 @@ pub mod texels {
     pub use crate::texel::constants::*;
     pub use crate::texel::IsTransparentWrapper;
     pub use crate::texel::MaxAligned;
+    pub use crate::texel::MaxAtomic;
 }

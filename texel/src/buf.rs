@@ -6,7 +6,7 @@ use core::{borrow, cmp, mem, ops};
 use alloc::borrow::ToOwned;
 use alloc::vec::Vec;
 
-use crate::texel::{constants::MAX, MaxAligned, Texel, MAX_ALIGN};
+use crate::texel::{constants::MAX, AtomicPart, MaxAligned, MaxAtomic, Texel, MAX_ALIGN};
 
 /// Allocates and manages raw bytes.
 ///
@@ -36,6 +36,18 @@ pub(crate) struct Buffer {
 #[repr(transparent)]
 #[allow(non_camel_case_types)]
 pub(crate) struct buf([u8]);
+
+/// An aligned slice of atomic memory.
+///
+/// This is a wrapper around a byte slice that additionally requires the slice to be highly
+/// aligned. It's usually created by first allocating an owned `buf`, and sharing it.
+///
+/// Note: Contrary to `buf`, this type __can not__ be sliced at arbitrary locations.
+///
+/// See `pixel.rs` for the only constructors.
+#[repr(transparent)]
+#[allow(non_camel_case_types)]
+pub(crate) struct atomic_buf([AtomicPart]);
 
 /// A copy-on-grow version of a buffer.
 pub(crate) enum Cog<'buf> {

@@ -7,7 +7,7 @@ use core::cmp::{Eq, Ord, Ordering, PartialEq, PartialOrd};
 use core::marker::PhantomData;
 use core::{fmt, hash, mem, num, ptr, slice};
 
-use crate::buf::buf;
+use crate::buf::{atomic_buf, buf};
 
 /// Marker struct to denote a texel type.
 ///
@@ -49,8 +49,15 @@ pub trait AsTexel {
 
 macro_rules! def_max_align {
     (
+        match cfg(target) {
+            $($($arch:literal)|* => $num:literal),*,
+        }
+
         $(#[$common_attr:meta])*
-        $($($arch:literal),* = $num:literal),*
+        struct MaxAligned(..);
+
+        $(#[$atomic_attr:meta])*
+        struct MaxAtomic(..);
     ) => {
         /// A byte-like-type that is aligned to the required max alignment.
         ///
@@ -64,6 +71,47 @@ macro_rules! def_max_align {
             )]
         )*
         pub struct MaxAligned(pub(crate) [u8; MAX_ALIGN]);
+
+        #[cfg(all(
+            not(target_has_atomic = "8"),
+            not(target_has_atomic = "16"),
+            not(target_has_atomic = "32"),
+            not(target_has_atomic = "64"),
+        ))]
+        compile_error!("Synchronous buffer API requires one atomic unsigned type");
+
+        #[cfg(all(
+            target_has_atomic = "8",
+            not(target_has_atomic = "16"),
+            not(target_has_atomic = "32"),
+            not(target_has_atomic = "64"),
+        ))]
+        pub(crate) type AtomicPart = core::sync::atomic::AtomicU8;
+        #[cfg(all(
+            target_has_atomic = "16",
+            not(target_has_atomic = "32"),
+            not(target_has_atomic = "64"),
+        ))]
+        pub(crate) type AtomicPart = core::sync::atomic::AtomicU16;
+        #[cfg(all(
+            target_has_atomic = "32",
+            not(target_has_atomic = "64"),
+        ))]
+        pub(crate) type AtomicPart = core::sync::atomic::AtomicU32;
+        #[cfg(all(
+            target_has_atomic = "64",
+        ))]
+        pub(crate) type AtomicPart = core::sync::atomic::AtomicU64;
+
+        const ATOMIC_PARTS: usize = MAX_ALIGN / core::mem::size_of::<AtomicPart>();
+
+        $(
+            #[cfg_attr(
+                any($(target_arch = $arch),*),
+                repr(align($num))
+            )]
+        )*
+        pub struct MaxAtomic(pub(crate) [AtomicPart; ATOMIC_PARTS]);
 
         $(
             #[cfg(
@@ -82,17 +130,23 @@ macro_rules! def_max_align {
 }
 
 def_max_align! {
+    match cfg(target) {
+        "x86" | "x86_64" => 32,
+        "arm" => 16,
+        "aarch64" => 16,
+        "wasm32" => 16,
+    }
+
     /// A byte-like-type that is aligned to the required max alignment.
     ///
     /// This type does not contain padding and implements `Pod`. Generally, the alignment and size
     /// requirement is kept small to avoid overhead.
     #[derive(Clone, Copy)]
     #[repr(C)]
+    struct MaxAligned(..);
 
-    "x86", "x86_64" = 32,
-    "arm" = 16,
-    "aarch64" = 16,
-    "wasm32" = 16
+    /// Atomic equivalence of [`MaxAligned`].
+    struct MaxAtomic(..);
 }
 
 unsafe impl bytemuck::Zeroable for MaxAligned {}
@@ -541,6 +595,53 @@ impl<P> Texel<P> {
         // * keeps the exact same size
         // * validity as bytes checked by Texel constructor
         unsafe { slice::from_raw_parts_mut(texel.as_mut_ptr() as *mut u8, mem::size_of_val(texel)) }
+    }
+}
+
+const _: () = {
+    const fn atomic_is_size_equivalent_of_aligned() {}
+    const fn atomic_is_align_equivalent_of_aligned() {}
+
+    [atomic_is_size_equivalent_of_aligned()]
+        [!(core::mem::size_of::<MaxAtomic>() == core::mem::size_of::<MaxAligned>()) as usize];
+
+    [atomic_is_align_equivalent_of_aligned()]
+        [!(core::mem::align_of::<MaxAtomic>() == core::mem::align_of::<MaxAligned>()) as usize];
+};
+
+impl MaxAtomic {
+    /// Create a vector of atomic zero-bytes.
+    pub const fn zero() -> Self {
+        const Z: AtomicPart = AtomicPart::new(0);
+        MaxAtomic([Z; ATOMIC_PARTS])
+    }
+
+    /// Create a vector from values initialized synchronously.
+    pub fn new(contents: MaxAligned) -> Self {
+        let mut result = Self::zero();
+        let from = bytemuck::bytes_of(&contents);
+        let from = from.chunks_exact(core::mem::size_of::<AtomicPart>());
+
+        for (part, src) in result.0.iter_mut().zip(from) {
+            let to = bytemuck::bytes_of_mut(AtomicPart::get_mut(part));
+            to.copy_from_slice(src);
+        }
+
+        result
+    }
+
+    /// Unwrap an owned value.
+    pub fn into_inner(mut self) -> MaxAligned {
+        let mut result = MaxAligned([0; MAX_ALIGN]);
+        let from = bytemuck::bytes_of_mut(&mut result);
+        let from = from.chunks_exact_mut(core::mem::size_of::<AtomicPart>());
+
+        for (part, to) in self.0.iter_mut().zip(from) {
+            let src = bytemuck::bytes_of(AtomicPart::get_mut(part));
+            to.copy_from_slice(src);
+        }
+
+        result
     }
 }
 
