@@ -1,12 +1,13 @@
 // Distributed under The MIT License (MIT)
 //
 // Copyright (c) 2019 The `image-rs` developers
-use core::{borrow, cmp, mem, ops};
+use core::{borrow, cell, cmp, mem, ops};
 
+use alloc::sync::Arc;
 use alloc::borrow::ToOwned;
 use alloc::vec::Vec;
 
-use crate::texel::{constants::MAX, AtomicPart, MaxAligned, MaxAtomic, Texel, MAX_ALIGN};
+use crate::texel::{constants::MAX, AtomicPart, MaxAligned, MaxAtomic, MaxCell, Texel, MAX_ALIGN};
 
 /// Allocates and manages raw bytes.
 ///
@@ -22,9 +23,47 @@ use crate::texel::{constants::MAX, AtomicPart, MaxAligned, MaxAtomic, Texel, MAX
 /// there are also no operations which explicitely uncouple length and capacity. All operations
 /// simply work on best effort of making some number of bytes available.
 #[derive(Clone, Default)]
-pub(crate) struct Buffer {
+pub struct Buffer {
     /// The backing memory.
     inner: Vec<MaxAligned>,
+}
+
+/// Allocates and manages atomically shared bytes.
+///
+/// Provides a utility to allocate a slice of bytes aligned to the maximally required alignment.
+/// Since the elements are much larger than single bytes the inner storage will **not** have exact
+/// sizes as one would be used from by using a `Vec` as an allocator. This is instead more close to
+/// a `RawVec` and most operations have the same drawback as `Vec::reserve_exact` in not actually
+/// being exact.
+///
+/// Since exact length and capacity semantics are hard to guarantee for most operations, no effort
+/// is made to uphold them. Instead. keeping track of the exact, wanted logical length of the
+/// requested byte slice is the obligation of the user *under all circumstances*. As a consequence,
+/// there are also no operations which explicitely uncouple length and capacity. All operations
+/// simply work on best effort of making some number of bytes available.
+#[derive(Clone)]
+pub(crate) struct AtomicBuffer {
+    /// The backing memory.
+    inner: Arc<atomic_buf>,
+}
+
+/// Allocates and manages unsynchronized shared bytes.
+///
+/// Provides a utility to allocate a slice of bytes aligned to the maximally required alignment.
+/// Since the elements are much larger than single bytes the inner storage will **not** have exact
+/// sizes as one would be used from by using a `Vec` as an allocator. This is instead more close to
+/// a `RawVec` and most operations have the same drawback as `Vec::reserve_exact` in not actually
+/// being exact.
+///
+/// Since exact length and capacity semantics are hard to guarantee for most operations, no effort
+/// is made to uphold them. Instead. keeping track of the exact, wanted logical length of the
+/// requested byte slice is the obligation of the user *under all circumstances*. As a consequence,
+/// there are also no operations which explicitely uncouple length and capacity. All operations
+/// simply work on best effort of making some number of bytes available.
+#[derive(Clone)]
+pub struct CellBuffer {
+    /// The backing memory.
+    inner: Arc<cell_buf>,
 }
 
 /// An aligned slice of memory.
@@ -35,7 +74,7 @@ pub(crate) struct Buffer {
 /// See `pixel.rs` for the only constructors.
 #[repr(transparent)]
 #[allow(non_camel_case_types)]
-pub(crate) struct buf([u8]);
+pub struct buf([u8]);
 
 /// An aligned slice of atomic memory.
 ///
@@ -47,7 +86,20 @@ pub(crate) struct buf([u8]);
 /// See `pixel.rs` for the only constructors.
 #[repr(transparent)]
 #[allow(non_camel_case_types)]
+// FIXME: in contrast to other types, this can not be slice at arbitrary byte ends since we must
+// still utilize potentially full atomic instructions for the underlying interaction? At least we
+// do not know.. Have to figure this out.
 pub(crate) struct atomic_buf([AtomicPart]);
+
+/// An aligned slice of shared-access memory.
+///
+/// This is a wrapper around a cell of a byte slice that additionally requires the slice to be
+/// highly aligned.
+///
+/// See `pixel.rs` for the only constructors.
+#[repr(transparent)]
+#[allow(non_camel_case_types)]
+pub struct cell_buf(cell::Cell<[u8]>);
 
 /// A copy-on-grow version of a buffer.
 pub(crate) enum Cog<'buf> {
@@ -148,7 +200,7 @@ impl buf {
     where
         T: AsRef<[MaxAligned]> + ?Sized,
     {
-        let bytes = MAX.cast_bytes(data.as_ref());
+        let bytes = MAX.to_bytes(data.as_ref());
         Self::from_bytes(bytes).unwrap()
     }
 
@@ -159,7 +211,7 @@ impl buf {
     where
         T: AsMut<[MaxAligned]> + ?Sized,
     {
-        let bytes = MAX.cast_mut_bytes(data.as_mut());
+        let bytes = MAX.to_mut_bytes(data.as_mut());
         Self::from_bytes_mut(bytes).unwrap()
     }
 
@@ -496,6 +548,22 @@ impl ops::Deref for Buffer {
 impl ops::DerefMut for Buffer {
     fn deref_mut(&mut self) -> &mut buf {
         self.as_buf_mut()
+    }
+}
+
+impl ops::Deref for AtomicBuffer {
+    type Target = atomic_buf;
+
+    fn deref(&self) -> &atomic_buf {
+        self.inner.as_ref()
+    }
+}
+
+impl ops::Deref for CellBuffer {
+    type Target = cell_buf;
+
+    fn deref(&self) -> &cell_buf {
+        self.inner.as_ref()
     }
 }
 

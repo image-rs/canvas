@@ -3,11 +3,12 @@
 // Copyright (c) 2019, 2020 The `image-rs` developers
 #![allow(unsafe_code)]
 
+use core::cell::Cell;
 use core::cmp::{Eq, Ord, Ordering, PartialEq, PartialOrd};
 use core::marker::PhantomData;
 use core::{fmt, hash, mem, num, ptr, slice};
 
-use crate::buf::{atomic_buf, buf};
+use crate::buf::{buf, cell_buf};
 
 /// Marker struct to denote a texel type.
 ///
@@ -58,6 +59,9 @@ macro_rules! def_max_align {
 
         $(#[$atomic_attr:meta])*
         struct MaxAtomic(..);
+
+        $(#[$cell_attr:meta])*
+        struct MaxCell(..);
     ) => {
         /// A byte-like-type that is aligned to the required max alignment.
         ///
@@ -114,6 +118,14 @@ macro_rules! def_max_align {
         pub struct MaxAtomic(pub(crate) [AtomicPart; ATOMIC_PARTS]);
 
         $(
+            #[cfg_attr(
+                any($(target_arch = $arch),*),
+                repr(align($num))
+            )]
+        )*
+        pub struct MaxCell(pub(crate) Cell<[u8; MAX_ALIGN]>);
+
+        $(
             #[cfg(
                 any($(target_arch = $arch),*),
             )]
@@ -147,6 +159,9 @@ def_max_align! {
 
     /// Atomic equivalence of [`MaxAligned`].
     struct MaxAtomic(..);
+
+    /// A cell of a byte array equivalent to [`MaxAligned`].
+    struct MaxCell(..);
 }
 
 unsafe impl bytemuck::Zeroable for MaxAligned {}
@@ -363,6 +378,19 @@ impl buf {
     }
 }
 
+impl cell_buf {
+    pub const ALIGNMENT: usize = MAX_ALIGN;
+
+    pub fn from_bytes(bytes: &[Cell<u8>]) -> Option<&Self> {
+        if bytes.as_ptr() as usize % Self::ALIGNMENT == 0 {
+            // Safety: these types are binary compatible
+            Some(unsafe { &*(bytes as *const [_] as *const Cell<[u8]> as *const cell_buf) })
+        } else {
+            None
+        }
+    }
+}
+
 impl<P> Texel<P> {
     /// Create a witness certifying `P` as a texel without checks.
     ///
@@ -486,6 +514,12 @@ impl<P> Texel<P> {
         unsafe { ptr::read(val) }
     }
 
+    pub fn copy_cell(self, val: &Cell<P>) -> P {
+        // SAFETY: by the constructor, this inner type can be copied byte-by-byte. And `Cell` is a
+        // transparent wrapper so it can be read byte-by-byte as well.
+        unsafe { ptr::read(val) }.into_inner()
+    }
+
     /// Reinterpret a slice of aligned bytes as a slice of the texel.
     ///
     /// Note that the size (in bytes) of the slice will be shortened if the size of `P` is not a
@@ -536,15 +570,56 @@ impl<P> Texel<P> {
     /// Reinterpret a slice of texel as memory.
     ///
     /// Note that you can convert a reference to a single value by [`core::slice::from_ref`].
+    pub fn try_to_cell<'buf>(self, bytes: &'buf [Cell<u8>]) -> Option<&'buf Cell<[P]>> {
+        // Safety:
+        // - The `pod`-ness certified by `self` ensures the cast of the contents of the memory is
+        //   valid. All representations are a valid P and conversely and P is valid as bytes. Since
+        //   Cell is a transparent wrapper the types are compatible.
+        // - We uphold the share invariants of `Cell`, which are trivial (less than those required
+        //   and provided by a shared reference).
+        if bytes.as_ptr() as usize % mem::align_of::<P>() == 0 {
+            let len = bytes.len() / mem::size_of::<P>();
+            let ptr = ptr::slice_from_raw_parts(bytes.as_ptr() as *const P, len);
+            Some(unsafe { &*(ptr as *const Cell<[P]>) })
+        } else {
+            None
+        }
+    }
+
+    /// Reinterpret a slice of texel as memory.
+    ///
+    /// Note that you can convert a reference to a single value by [`core::slice::from_ref`].
     pub fn to_bytes<'buf>(self, texel: &'buf [P]) -> &'buf [u8] {
-        self.cast_bytes(texel)
+        // Safety:
+        // * lifetime is not changed
+        // * keeps the exact same size
+        // * validity for byte reading checked by Texel constructor
+        unsafe { slice::from_raw_parts(texel.as_ptr() as *const u8, mem::size_of_val(texel)) }
     }
 
     /// Reinterpret a mutable slice of texel as memory.
     ///
     /// Note that you can convert a reference to a single value by [`core::slice::from_mut`].
     pub fn to_mut_bytes<'buf>(self, texel: &'buf mut [P]) -> &'buf mut [u8] {
-        self.cast_mut_bytes(texel)
+        // Safety:
+        // * lifetime is not changed
+        // * keeps the exact same size
+        // * validity as bytes checked by Texel constructor
+        unsafe { slice::from_raw_parts_mut(texel.as_mut_ptr() as *mut u8, mem::size_of_val(texel)) }
+    }
+
+    /// Reinterpret a slice of texel as memory.
+    ///
+    /// Note that you can convert a reference to a single value by [`core::slice::from_ref`].
+    pub fn cell_bytes<'buf>(self, texel: &'buf [Cell<P>]) -> &'buf Cell<[u8]> {
+        let ptr: *const [u8] =
+            { ptr::slice_from_raw_parts(texel.as_ptr() as *const u8, mem::size_of_val(texel)) };
+
+        // Safety:
+        // * lifetime is not changed
+        // * kept the exact same size
+        // * validity for byte representations both ways checked by Texel constructor
+        unsafe { &*(ptr as *const Cell<[u8]>) }
     }
 
     pub(crate) fn cast_buf<'buf>(self, buffer: &'buf buf) -> &'buf [P] {
@@ -579,22 +654,6 @@ impl<P> Texel<P> {
                 buffer.len() / self.size_nz().get(),
             )
         }
-    }
-
-    pub(crate) fn cast_bytes<'buf>(self, texel: &'buf [P]) -> &'buf [u8] {
-        // Safety:
-        // * lifetime is not changed
-        // * keeps the exact same size
-        // * validity for byte reading checked by Texel constructor
-        unsafe { slice::from_raw_parts(texel.as_ptr() as *const u8, mem::size_of_val(texel)) }
-    }
-
-    pub(crate) fn cast_mut_bytes<'buf>(self, texel: &'buf mut [P]) -> &'buf mut [u8] {
-        // Safety:
-        // * lifetime is not changed
-        // * keeps the exact same size
-        // * validity as bytes checked by Texel constructor
-        unsafe { slice::from_raw_parts_mut(texel.as_mut_ptr() as *mut u8, mem::size_of_val(texel)) }
     }
 }
 

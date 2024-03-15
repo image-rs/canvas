@@ -114,7 +114,7 @@ impl<P> TexelBuffer<P> {
     ///
     /// This function will panic if the allocation fails.
     pub fn with_elements_for_texel(texel: Texel<P>, elements: &[P]) -> Self {
-        let src = texel.cast_bytes(elements);
+        let src = texel.to_bytes(elements);
         let mut buffer = TexelBuffer::from_buffer(Buffer::from(src), texel);
         // Will be treated as empty, so adjust to be filled up to count.
         buffer.length = src.len();
