@@ -247,10 +247,12 @@ impl<P> TexelBuffer<P> {
         self.length = exact_size;
     }
 
+    /// View the valid portion of the buffer as a slice of the texel type.
     pub fn as_slice(&self) -> &[P] {
         self.buf().as_texels(self.texel)
     }
 
+    /// View the valid portion of the buffer as a mutable slice of the texel type.
     pub fn as_mut_slice(&mut self) -> &mut [P] {
         let texel = self.texel;
         self.buf_mut().as_mut_texels(texel)
@@ -266,10 +268,12 @@ impl<P> TexelBuffer<P> {
         self.inner.capacity() / self.texel.size_nz().get()
     }
 
+    /// View the raw bytes representing the buffer, in the native memory layout.
     pub fn as_bytes(&self) -> &[u8] {
         self.buf().as_bytes()
     }
 
+    /// View the mutable raw bytes representing the buffer, in the native memory layout.
     pub fn as_bytes_mut(&mut self) -> &mut [u8] {
         self.buf_mut().as_bytes_mut()
     }

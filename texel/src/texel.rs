@@ -115,6 +115,7 @@ macro_rules! def_max_align {
                 repr(align($num))
             )]
         )*
+        $(#[$atomic_attr])*
         pub struct MaxAtomic(pub(crate) [AtomicPart; ATOMIC_PARTS]);
 
         $(
@@ -123,6 +124,7 @@ macro_rules! def_max_align {
                 repr(align($num))
             )]
         )*
+        $(#[$cell_attr])*
         pub struct MaxCell(pub(crate) Cell<[u8; MAX_ALIGN]>);
 
         $(
@@ -701,6 +703,33 @@ impl MaxAtomic {
         }
 
         result
+    }
+}
+
+impl MaxCell {
+    /// Create a vector of atomic zero-bytes.
+    pub const fn zero() -> Self {
+        MaxCell(Cell::new([0; MAX_ALIGN]))
+    }
+
+    /// Create a vector from values initialized synchronously.
+    pub fn new(contents: MaxAligned) -> Self {
+        MaxCell(Cell::new(contents.0))
+    }
+
+    /// Overwrite the contents with new information from another cell.
+    pub fn set(&self, newval: &Self) {
+        self.0.set(newval.0.get())
+    }
+
+    /// Read the current contents from this cell into an owned value.
+    pub fn get(&self) -> MaxAligned {
+        MaxAligned(self.0.get())
+    }
+
+    /// Unwrap an owned value.
+    pub fn into_inner(self) -> MaxAligned {
+        MaxAligned(self.0.into_inner())
     }
 }
 
