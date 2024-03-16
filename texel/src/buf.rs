@@ -498,6 +498,18 @@ impl From<&'_ [u8]> for Buffer {
     }
 }
 
+impl From<&'_ [u8]> for AtomicBuffer {
+    fn from(_: &'_ [u8]) -> Self {
+        todo!()
+    }
+}
+
+impl From<&'_ [u8]> for CellBuffer {
+    fn from(_: &'_ [u8]) -> Self {
+        todo!()
+    }
+}
+
 impl From<&'_ buf> for Buffer {
     fn from(content: &'_ buf) -> Self {
         content.to_owned()
@@ -648,6 +660,70 @@ impl ops::Index<ops::RangeTo<usize>> for buf {
 impl ops::IndexMut<ops::RangeTo<usize>> for buf {
     fn index_mut(&mut self, idx: ops::RangeTo<usize>) -> &mut buf {
         self.truncate_mut(idx.end)
+    }
+}
+
+#[allow(dead_code)]
+impl atomic_buf {
+    /// Overwrite bytes within the vector with new data.
+    fn copy_within(&self, _from: core::ops::Range<usize>, _to: usize) {
+        todo!()
+    }
+
+    /// Overwrite the whole vector with new data.
+    fn copy_from(
+        &self,
+        _from: core::ops::Range<usize>,
+        _source: &[MaxAtomic],
+        _to: usize,
+    ) {
+        todo!()
+    }
+}
+
+impl cell_buf {
+    /// Wraps an aligned buffer into `buf`.
+    ///
+    /// This method will never panic, as the alignment of the data is guaranteed.
+    pub fn new<T>(_data: &T) -> &Self
+    where
+        T: AsRef<[MaxCell]> + ?Sized,
+    {
+        // We can't use `bytemuck` here.
+        todo!()
+    }
+
+    pub fn truncate(&self, at: usize) -> &Self {
+        // We promise this does not panic since the buffer is in fact aligned.
+        Self::from_bytes(&self.0.as_slice_of_cells()[..at]).unwrap()
+    }
+
+    pub fn split_at(&self, at: usize) -> (&Self, &Self) {
+        assert!(at % MAX_ALIGN == 0);
+        let (a, b) = self.0.as_slice_of_cells().split_at(at);
+        let a = Self::from_bytes(a).expect("was previously aligned");
+        let b = Self::from_bytes(b).expect("asserted to be aligned");
+        (a, b)
+    }
+
+    /// Reinterpret the buffer for the specific texel type.
+    ///
+    /// The alignment of `P` is already checked to be smaller than `MAX_ALIGN` through the
+    /// constructor of `Texel`. The slice will have the maximum length possible but may leave
+    /// unused bytes in the end.
+    pub fn as_texels<P>(&self, _pixel: Texel<P>) -> &cell::Cell<[P]> {
+        todo!()
+    }
+
+    pub fn map_within<P, Q>(
+        &mut self,
+        _src: impl ops::RangeBounds<usize>,
+        _dest: usize,
+        _f: impl Fn(P) -> Q,
+        _p: Texel<P>,
+        _q: Texel<Q>,
+    ) {
+        todo!()
     }
 }
 
