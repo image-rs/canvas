@@ -44,7 +44,7 @@ pub struct Buffer {
 #[derive(Clone)]
 pub(crate) struct AtomicBuffer {
     /// The backing memory.
-    inner: Arc<atomic_buf>,
+    inner: Arc<[MaxAtomic]>,
 }
 
 /// Allocates and manages unsynchronized shared bytes.
@@ -62,8 +62,8 @@ pub(crate) struct AtomicBuffer {
 /// simply work on best effort of making some number of bytes available.
 #[derive(Clone)]
 pub struct CellBuffer {
-    /// The backing memory.
-    inner: Arc<cell_buf>,
+    /// The backing memory, aligned by allocating it with the proper type.
+    inner: Arc<[MaxCell]>,
 }
 
 /// An aligned slice of memory.
@@ -76,19 +76,15 @@ pub struct CellBuffer {
 #[allow(non_camel_case_types)]
 pub struct buf([u8]);
 
-/// An aligned slice of atomic memory.
+/// In contrast to other types, this can not be slice at arbitrary byte ends since we must
+/// still utilize potentially full atomic instructions for the underlying interaction! Until we get
+/// custom metadata, we have our own 'reference type' here. This makes interfaces slightly less
+/// convenient but it is internal to the library anyways.
 ///
-/// This is a wrapper around a byte slice that additionally requires the slice to be highly
-/// aligned. It's usually created by first allocating an owned `buf`, and sharing it.
-///
-/// Note: Contrary to `buf`, this type __can not__ be sliced at arbitrary locations.
-///
-/// See `pixel.rs` for the only constructors.
+/// Note: Contrary to `buf`, this type __can not__ be sliced at arbitrary locations. Use the
+/// conversion to `atomic_ref` for this.
 #[repr(transparent)]
 #[allow(non_camel_case_types)]
-// FIXME: in contrast to other types, this can not be slice at arbitrary byte ends since we must
-// still utilize potentially full atomic instructions for the underlying interaction? At least we
-// do not know.. Have to figure this out.
 pub(crate) struct atomic_buf([AtomicPart]);
 
 /// An aligned slice of shared-access memory.
@@ -101,9 +97,28 @@ pub(crate) struct atomic_buf([AtomicPart]);
 #[allow(non_camel_case_types)]
 pub struct cell_buf(cell::Cell<[u8]>);
 
+/// A logical reference to a byte slice from some atomic memory.
+///
+/// This is a wrapper around a slice of the underlying atomics. From this buffer, in contrast to
+/// the shared and the unsynchronized slices, you can _not_ retrieve slices to typed memory.
+///
+/// See `pixel.rs` for the only constructors.
+#[derive(Clone, Copy)]
+pub(crate) struct AtomicRef<'lt> {
+    buf: &'lt atomic_buf,
+    /// The first byte referred to by this slice.
+    ///
+    /// Not using `core::ops::Range` since we want to be Copy!
+    start: usize,
+    /// The past-the-end byte referred to by this slice.
+    end: usize,
+}
+
 /// A copy-on-grow version of a buffer.
 pub(crate) enum Cog<'buf> {
     Owned(Buffer),
+    // May be used later..
+    #[allow(dead_code)]
     Borrowed(&'buf mut buf),
 }
 
@@ -567,7 +582,7 @@ impl ops::Deref for AtomicBuffer {
     type Target = atomic_buf;
 
     fn deref(&self) -> &atomic_buf {
-        self.inner.as_ref()
+        atomic_buf::from_slice(&self.inner)
     }
 }
 
@@ -575,7 +590,7 @@ impl ops::Deref for CellBuffer {
     type Target = cell_buf;
 
     fn deref(&self) -> &cell_buf {
-        self.inner.as_ref()
+        cell_buf::from_slice(&self.inner)
     }
 }
 
@@ -664,7 +679,7 @@ impl ops::IndexMut<ops::RangeTo<usize>> for buf {
 }
 
 #[allow(dead_code)]
-impl atomic_buf {
+impl AtomicRef<'_> {
     /// Overwrite bytes within the vector with new data.
     fn copy_within(&self, _from: core::ops::Range<usize>, _to: usize) {
         todo!()
@@ -724,6 +739,18 @@ impl cell_buf {
         _q: Texel<Q>,
     ) {
         todo!()
+    }
+}
+
+impl<'lt> From<&'lt atomic_buf> for AtomicRef<'lt> {
+    fn from(value: &'lt atomic_buf) -> AtomicRef<'lt> {
+        let end = core::mem::size_of_val(value);
+
+        AtomicRef {
+            buf: value,
+            start: 0,
+            end,
+        }
     }
 }
 

@@ -8,7 +8,8 @@ use core::cmp::{Eq, Ord, Ordering, PartialEq, PartialOrd};
 use core::marker::PhantomData;
 use core::{fmt, hash, mem, num, ptr, slice};
 
-use crate::buf::{buf, cell_buf};
+use alloc::sync::Arc;
+use crate::buf::{buf, atomic_buf, cell_buf};
 
 /// Marker struct to denote a texel type.
 ///
@@ -76,6 +77,26 @@ macro_rules! def_max_align {
         )*
         pub struct MaxAligned(pub(crate) [u8; MAX_ALIGN]);
 
+        /* Note: We need to be really careful to avoid peril for several reasons.
+         *
+         * Firstly, the Rust atomic model forbids us from doing unsynchronized access (stores _or_
+         * loads) with differing sizes to the same memory location. For now, and for the
+         * foreseeable future. Since we do not synchronize the access to the buffer, we must use
+         * the same size everywhere.
+         *
+         * Secondly, using any type other than `AtomicU8` for these makes it hard for us to slice
+         * the buffer at arbitrary points. For true references we might work around this by custom
+         * metadata, yet this is not stable. Hence, we _must_ use a non-reference type wrapper for
+         * the kind of access we need. Or rather, the initial buffer allocation can deref into a
+         * reference to a slice of atomics but to slice it we must use our own type. And all
+         * operations are implemented to work on full units of this atomic type.
+         *
+         * At least for relaxed operations, the larger unit is somewhat equivalent. It's certainly
+         * at bit of a balance. Larger units might be more costly from destructive interference
+         * between different accesses, but small units are costly due to added instructions.
+         *
+         * View the selection below as a 'best-effort' really.
+         **/
         #[cfg(all(
             not(target_has_atomic = "8"),
             not(target_has_atomic = "16"),
@@ -160,6 +181,8 @@ def_max_align! {
     struct MaxAligned(..);
 
     /// Atomic equivalence of [`MaxAligned`].
+    ///
+    /// This contains some instance of [`core::sync::atomic::AtomicU8`].
     struct MaxAtomic(..);
 
     /// A cell of a byte array equivalent to [`MaxAligned`].
@@ -380,12 +403,53 @@ impl buf {
     }
 }
 
+impl atomic_buf {
+    pub const ALIGNMENT: usize = MAX_ALIGN;
+
+    pub fn from_slice(values: &[MaxAtomic]) -> &Self {
+        debug_assert_eq!(values.as_ptr() as usize % Self::ALIGNMENT, 0);
+        let ptr = values.as_ptr() as *const AtomicPart;
+        let count = values.len() * ATOMIC_PARTS;
+        // Safety: these types are binary compatible, they wrap atomics of the same size,  and
+        // starting at the same address, with a pointer of the same provenance which will be valid
+        // for the whole lifetime.
+        //
+        // This case relaxes the alignment requirements from `MaxAtomic` to that of the underlying
+        // atomic, which allows us to go beyond the public interface.
+        //
+        // The new size covered by the slice is the same as the input slice, since there are
+        // `ATOMIC_PARTS` units within each `MaxAtomic`. The memory invariants of the new type are
+        // the same as the old type, which is that we access only with atomics instructions of the
+        // size of the `AtomicPart` type.
+        let atomics = core::ptr::slice_from_raw_parts::<AtomicPart>(ptr, count);
+        // Safety: `atomic_buf` has the same layout as a `[MaxAtomic]` and wraps it transparently.
+        unsafe { &*(atomics as *const Self) }
+    }
+}
+
 impl cell_buf {
     pub const ALIGNMENT: usize = MAX_ALIGN;
 
+    pub fn from_slice(values: &[MaxCell]) -> &Self {
+        debug_assert_eq!(values.as_ptr() as usize % Self::ALIGNMENT, 0);
+        let ptr = values.as_ptr() as *const Cell<u8>;
+        let count = core::mem::size_of_val(values);
+        // Safety: constructs a pointer to a slice validly covering exactly the values in the
+        // input. The byte length is determined by `size_of_val` and starting at the same address,
+        // with a pointer of the same provenance which will be valid for the whole lifetime. The
+        // memory invariants of the new type are the same as the old type, which is that we access
+        // only with atomics instructions of the size of the `AtomicPart` type.
+        let memory = core::ptr::slice_from_raw_parts::<Cell<u8>>(ptr, count);
+        // Safety: these types are binary compatible, they wrap memory of the same size.
+        // This case relaxes the alignment requirements from `MaxAtomic` to that of the underlying
+        // atomic, which allows us to go beyond the public interface.
+        unsafe { &*(memory as *const Self) }
+    }
+
     pub fn from_bytes(bytes: &[Cell<u8>]) -> Option<&Self> {
         if bytes.as_ptr() as usize % Self::ALIGNMENT == 0 {
-            // Safety: these types are binary compatible
+            // Safety: these types are binary compatible. The metadata is also the same, as both
+            // types encapsulate a slice of `u8`-sized types.
             Some(unsafe { &*(bytes as *const [_] as *const Cell<[u8]> as *const cell_buf) })
         } else {
             None
