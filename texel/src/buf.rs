@@ -3,8 +3,8 @@
 // Copyright (c) 2019 The `image-rs` developers
 use core::{borrow, cell, cmp, mem, ops};
 
-use alloc::sync::Arc;
 use alloc::borrow::ToOwned;
+use alloc::sync::Arc;
 use alloc::vec::Vec;
 
 use crate::texel::{constants::MAX, AtomicPart, MaxAligned, MaxAtomic, MaxCell, Texel, MAX_ALIGN};
@@ -42,7 +42,7 @@ pub struct Buffer {
 /// there are also no operations which explicitely uncouple length and capacity. All operations
 /// simply work on best effort of making some number of bytes available.
 #[derive(Clone)]
-pub(crate) struct AtomicBuffer {
+pub struct AtomicBuffer {
     /// The backing memory.
     inner: Arc<[MaxAtomic]>,
 }
@@ -76,16 +76,20 @@ pub struct CellBuffer {
 #[allow(non_camel_case_types)]
 pub struct buf([u8]);
 
+/// An aligned slice of atomic memory.
+///
 /// In contrast to other types, this can not be slice at arbitrary byte ends since we must
 /// still utilize potentially full atomic instructions for the underlying interaction! Until we get
-/// custom metadata, we have our own 'reference type' here. This makes interfaces slightly less
+/// custom metadata, we have our own 'reference type' here.
+///
+/// This type is relatively useless in the public interface, this makes interfaces slightly less
 /// convenient but it is internal to the library anyways.
 ///
 /// Note: Contrary to `buf`, this type __can not__ be sliced at arbitrary locations. Use the
 /// conversion to `atomic_ref` for this.
 #[repr(transparent)]
 #[allow(non_camel_case_types)]
-pub(crate) struct atomic_buf([AtomicPart]);
+pub struct atomic_buf([AtomicPart]);
 
 /// An aligned slice of shared-access memory.
 ///
@@ -176,6 +180,18 @@ impl Buffer {
 
         // We allocated enough chunks for at least the length. This can never overflow.
         length / CHUNK_SIZE + usize::from(length % CHUNK_SIZE != 0)
+    }
+}
+
+impl CellBuffer {
+    pub fn capacity(&self) -> usize {
+        core::mem::size_of_val(&*self.inner)
+    }
+}
+
+impl AtomicBuffer {
+    pub fn capacity(&self) -> usize {
+        core::mem::size_of_val(&*self.inner)
     }
 }
 
@@ -514,14 +530,54 @@ impl From<&'_ [u8]> for Buffer {
 }
 
 impl From<&'_ [u8]> for AtomicBuffer {
-    fn from(_: &'_ [u8]) -> Self {
-        todo!()
+    fn from(values: &'_ [u8]) -> Self {
+        let chunks = values.chunks_exact(MAX_ALIGN);
+        let remainder = chunks.remainder();
+
+        let capacity = Buffer::alloc_len(values.len());
+        let mut buffer = Vec::with_capacity(capacity);
+
+        buffer.extend(chunks.map(|arr| {
+            let mut data = MaxAligned([0; MAX_ALIGN]);
+            data.0.copy_from_slice(arr);
+            MaxAtomic::new(data)
+        }));
+
+        if !remainder.is_empty() {
+            let mut data = MaxAligned([0; MAX_ALIGN]);
+            data.0[..remainder.len()].copy_from_slice(remainder);
+            buffer.push(MaxAtomic::new(data));
+        }
+
+        AtomicBuffer {
+            inner: buffer.into(),
+        }
     }
 }
 
 impl From<&'_ [u8]> for CellBuffer {
-    fn from(_: &'_ [u8]) -> Self {
-        todo!()
+    fn from(values: &'_ [u8]) -> Self {
+        let chunks = values.chunks_exact(MAX_ALIGN);
+        let remainder = chunks.remainder();
+
+        let capacity = Buffer::alloc_len(values.len());
+        let mut buffer = Vec::with_capacity(capacity);
+
+        buffer.extend(chunks.map(|arr| {
+            let mut data = [0; MAX_ALIGN];
+            data.copy_from_slice(arr);
+            MaxCell(cell::Cell::new(data))
+        }));
+
+        if !remainder.is_empty() {
+            let mut data = [0; MAX_ALIGN];
+            data[..remainder.len()].copy_from_slice(remainder);
+            buffer.push(MaxCell(cell::Cell::new(data)));
+        }
+
+        CellBuffer {
+            inner: buffer.into(),
+        }
     }
 }
 
@@ -686,12 +742,7 @@ impl AtomicRef<'_> {
     }
 
     /// Overwrite the whole vector with new data.
-    fn copy_from(
-        &self,
-        _from: core::ops::Range<usize>,
-        _source: &[MaxAtomic],
-        _to: usize,
-    ) {
+    fn copy_from(&self, _from: core::ops::Range<usize>, _source: &[MaxAtomic], _to: usize) {
         todo!()
     }
 }
@@ -834,5 +885,21 @@ mod tests {
             buffer.as_texels(U32)[..LEN].to_vec(),
             (0..LEN as u32).collect::<Vec<_>>()
         );
+    }
+
+    #[test]
+    fn cell_buffer() {
+        let data = [0, 0, 255, 0, 255, 0, 255, 0, 0];
+        let buffer = CellBuffer::from(&data[..]);
+        // Gets rounded up to the next alignment.
+        assert_eq!(buffer.capacity(), Buffer::alloc_len(data.len()) * MAX_ALIGN);
+    }
+
+    #[test]
+    fn atomic_buffer() {
+        let data = [0, 0, 255, 0, 255, 0, 255, 0, 0];
+        let buffer = AtomicBuffer::from(&data[..]);
+        // Gets rounded up to the next alignment.
+        assert_eq!(buffer.capacity(), Buffer::alloc_len(data.len()) * MAX_ALIGN);
     }
 }

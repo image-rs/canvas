@@ -8,7 +8,6 @@ use core::cmp::{Eq, Ord, Ordering, PartialEq, PartialOrd};
 use core::marker::PhantomData;
 use core::{fmt, hash, mem, num, ptr, slice};
 
-use alloc::sync::Arc;
 use crate::buf::{buf, atomic_buf, cell_buf};
 
 /// Marker struct to denote a texel type.
