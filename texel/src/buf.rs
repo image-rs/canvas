@@ -89,7 +89,7 @@ pub struct buf([u8]);
 /// conversion to `atomic_ref` for this.
 #[repr(transparent)]
 #[allow(non_camel_case_types)]
-pub struct atomic_buf([AtomicPart]);
+pub struct atomic_buf(pub(crate) [AtomicPart]);
 
 /// An aligned slice of shared-access memory.
 ///
@@ -103,19 +103,24 @@ pub struct cell_buf(cell::Cell<[u8]>);
 
 /// A logical reference to a byte slice from some atomic memory.
 ///
-/// This is a wrapper around a slice of the underlying atomics. From this buffer, in contrast to
-/// the shared and the unsynchronized slices, you can _not_ retrieve slices to typed memory.
+/// The analogue of this is `&[P]` or `&[Cell<P>]` respectively. This is a wrapper around a slice
+/// of the underlying atomics. However, note we promise soundness but _not_ absence of tears in the
+/// logical data type if the data straddles different underlying atomic representation types. We
+/// simply can not promise this. Of course, an external synchronization might be used enforce this
+/// additional guarantee.
 ///
-/// See `pixel.rs` for the only constructors.
+/// For consistency with slices, casting of this type is done via an instance of [`Texel`].
 #[derive(Clone, Copy)]
-pub(crate) struct AtomicRef<'lt> {
-    buf: &'lt atomic_buf,
+pub struct AtomicRef<'lt, P = u8> {
+    pub(crate) buf: &'lt atomic_buf,
+    /// The underlying logical texel type this is bound to.
+    pub(crate) texel: Texel<P>,
     /// The first byte referred to by this slice.
     ///
     /// Not using `core::ops::Range` since we want to be Copy!
-    start: usize,
+    pub(crate) start: usize,
     /// The past-the-end byte referred to by this slice.
-    end: usize,
+    pub(crate) end: usize,
 }
 
 /// A copy-on-grow version of a buffer.
@@ -857,8 +862,11 @@ impl cell_buf {
     /// The alignment of `P` is already checked to be smaller than `MAX_ALIGN` through the
     /// constructor of `Texel`. The slice will have the maximum length possible but may leave
     /// unused bytes in the end.
-    pub fn as_texels<P>(&self, _pixel: Texel<P>) -> &cell::Cell<[P]> {
-        todo!()
+    pub fn as_texels<P>(&self, texel: Texel<P>) -> &cell::Cell<[P]> {
+        let slice = self.0.as_slice_of_cells();
+        texel
+            .try_to_cell(slice)
+            .expect("A cell_buf is always aligned")
     }
 
     pub fn map_within<P, Q>(
@@ -873,15 +881,25 @@ impl cell_buf {
     }
 }
 
-impl<'lt> From<&'lt atomic_buf> for AtomicRef<'lt> {
-    fn from(value: &'lt atomic_buf) -> AtomicRef<'lt> {
-        let end = core::mem::size_of_val(value);
+impl atomic_buf {
+    /// Reinterpret the buffer for the specific texel type.
+    ///
+    /// The alignment of `P` is already checked to be smaller than `MAX_ALIGN` through the
+    /// constructor of `Texel`. The slice will have the maximum length possible but may leave
+    /// unused bytes in the end.
+    pub fn as_texels<P>(&self, texel: Texel<P>) -> AtomicRef<P> {
+        use crate::texels::U8;
 
-        AtomicRef {
-            buf: value,
+        let buffer = AtomicRef {
+            buf: self,
             start: 0,
-            end,
-        }
+            end: core::mem::size_of_val(self),
+            texel: U8,
+        };
+
+        texel
+            .try_to_atomic(buffer)
+            .expect("An atomic_buf is always aligned")
     }
 }
 
@@ -976,6 +994,10 @@ mod tests {
 
         let alternative = CellBuffer::with_buffer(buffer.to_owned());
         assert_eq!(buffer.capacity(), alternative.capacity());
+
+        let contents: &cell_buf = &*buffer;
+        let slice: &[cell::Cell<u8>] = contents.as_texels(U8).as_slice_of_cells();
+        assert!(cell_buf::from_bytes(slice).is_some());
     }
 
     #[test]
@@ -987,5 +1009,9 @@ mod tests {
 
         let alternative = CellBuffer::with_buffer(buffer.to_owned());
         assert_eq!(buffer.capacity(), alternative.capacity());
+
+        let contents: &atomic_buf = &*buffer;
+        let slice: AtomicRef<u8> = contents.as_texels(U8);
+        assert!(atomic_buf::from_bytes(slice).is_some());
     }
 }

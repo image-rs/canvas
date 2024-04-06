@@ -8,7 +8,7 @@ use core::cmp::{Eq, Ord, Ordering, PartialEq, PartialOrd};
 use core::marker::PhantomData;
 use core::{fmt, hash, mem, num, ptr, slice, sync::atomic};
 
-use crate::buf::{buf, atomic_buf, cell_buf};
+use crate::buf::{atomic_buf, buf, cell_buf, AtomicRef};
 
 /// Marker struct to denote a texel type.
 ///
@@ -424,6 +424,21 @@ impl atomic_buf {
         // Safety: `atomic_buf` has the same layout as a `[MaxAtomic]` and wraps it transparently.
         unsafe { &*(atomics as *const Self) }
     }
+
+    /// Wrap a sub-slice of bytes from an atomic buffer into a new `atomic_buf`.
+    ///
+    /// The bytes need to be aligned to `ALIGNMENT`.
+    pub fn from_bytes(bytes: AtomicRef<u8>) -> Option<&Self> {
+        if bytes.start & Self::ALIGNMENT == 0 {
+            let offset = bytes.start / core::mem::size_of::<AtomicPart>();
+            let buffer = &bytes.buf.0[offset..];
+            // Safety: these types are binary compatible. The metadata is also the same, as both
+            // types encapsulate a slice of `AtomicPart`-sized types.
+            Some(unsafe { &*(buffer as *const _ as *const Self) })
+        } else {
+            None
+        }
+    }
 }
 
 impl cell_buf {
@@ -651,6 +666,21 @@ impl<P> Texel<P> {
         }
     }
 
+    /// Reinterpret a slice of atomically access memory with a type annotation.
+    pub fn try_to_atomic<'buf>(self, bytes: AtomicRef<'buf, u8>) -> Option<AtomicRef<'buf, P>> {
+        if bytes.start % mem::align_of::<P>() == 0 {
+            let end = bytes.end - bytes.end % mem::align_of::<P>();
+            Some(AtomicRef {
+                buf: bytes.buf,
+                start: bytes.start,
+                end,
+                texel: self,
+            })
+        } else {
+            None
+        }
+    }
+
     /// Reinterpret a slice of texel as memory.
     ///
     /// Note that you can convert a reference to a single value by [`core::slice::from_ref`].
@@ -685,6 +715,16 @@ impl<P> Texel<P> {
         // * kept the exact same size
         // * validity for byte representations both ways checked by Texel constructor
         unsafe { &*(ptr as *const Cell<[u8]>) }
+    }
+
+    /// Reinterpret a slice of atomically modified texels as atomic bytes.
+    pub fn atomic_bytes<'buf>(self, texel: AtomicRef<'buf, P>) -> AtomicRef<'buf, u8> {
+        AtomicRef {
+            buf: texel.buf,
+            start: texel.start,
+            end: texel.end,
+            texel: constants::U8,
+        }
     }
 
     pub(crate) fn cast_buf<'buf>(self, buffer: &'buf buf) -> &'buf [P] {
