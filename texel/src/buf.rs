@@ -210,6 +210,11 @@ impl CellBuffer {
         }
     }
 
+    /// Query if two buffers share the same memory region.
+    pub fn ptr_eq(&self, other: &Self) -> bool {
+        Rc::ptr_eq(&self.inner, &other.inner)
+    }
+
     /// Retrieve the byte capacity of the allocated storage.
     pub fn capacity(&self) -> usize {
         core::mem::size_of_val(&*self.inner)
@@ -220,6 +225,16 @@ impl CellBuffer {
         let inner = self.inner.iter().map(|cell| cell.get()).collect();
 
         Buffer { inner }
+    }
+
+    /// Create an independent copy of the buffer, with a new length.
+    ///
+    /// The prefix contents of the new buffer will be the same as the current buffer. The new
+    /// buffer will _never_ share memory with the current buffer.
+    pub fn to_resized(&self, bytes: usize) -> Self {
+        let mut working_copy = self.to_owned();
+        working_copy.resize_to(bytes);
+        Self::with_buffer(working_copy)
     }
 }
 
@@ -271,6 +286,16 @@ impl AtomicBuffer {
 
         Buffer { inner }
     }
+
+    /// Create an independent copy of the buffer, with a new length.
+    ///
+    /// The prefix contents of the new buffer will be the same as the current buffer. The new
+    /// buffer will _never_ share memory with the current buffer.
+    pub fn to_resized(&self, bytes: usize) -> Self {
+        let mut working_copy = self.to_owned();
+        working_copy.resize_to(bytes);
+        Self::with_buffer(working_copy)
+    }
 }
 
 impl buf {
@@ -297,12 +322,10 @@ impl buf {
     }
 
     pub fn truncate(&self, at: usize) -> &Self {
-        // TODO: worth it to use unsafe for avoiding unwrap checks?
         Self::from_bytes(&self.as_bytes()[..at]).unwrap()
     }
 
     pub fn truncate_mut(&mut self, at: usize) -> &mut Self {
-        // TODO: worth it to use unsafe for avoiding unwrap checks?
         Self::from_bytes_mut(&mut self.as_bytes_mut()[..at]).unwrap()
     }
 
@@ -363,6 +386,86 @@ impl buf {
     ///
     /// This function panics if `src` or the implied range of `dest` are out of bounds.
     pub fn map_within<P, Q>(
+        &mut self,
+        src: impl ops::RangeBounds<usize>,
+        dest: usize,
+        f: impl Fn(P) -> Q,
+        p: Texel<P>,
+        q: Texel<Q>,
+    ) {
+        TexelMappingBuffer::map_within(self, src, dest, f, p, q)
+    }
+}
+
+impl TexelMappingBuffer for buf {
+    /// Internally mapping function when the mapping can be done forwards.
+    fn map_forward<P, Q>(
+        &mut self,
+        src: usize,
+        dest: usize,
+        len: usize,
+        f: impl Fn(P) -> Q,
+        p: Texel<P>,
+        q: Texel<Q>,
+    ) {
+        for idx in 0..len {
+            let source_idx = idx + src;
+            let target_idx = idx + dest;
+            let source = p.copy_val(&self.as_texels(p)[source_idx]);
+            let target = f(source);
+            self.as_mut_texels(q)[target_idx] = target;
+        }
+    }
+
+    /// Internally mapping function when the mapping can be done backwards.
+    fn map_backward<P, Q>(
+        &mut self,
+        src: usize,
+        dest: usize,
+        len: usize,
+        f: impl Fn(P) -> Q,
+        p: Texel<P>,
+        q: Texel<Q>,
+    ) {
+        for idx in (0..len).rev() {
+            let source_idx = idx + src;
+            let target_idx = idx + dest;
+            let source = p.copy_val(&self.as_texels(p)[source_idx]);
+            let target = f(source);
+            self.as_mut_texels(q)[target_idx] = target;
+        }
+    }
+
+    fn texel_len<P>(&self, texel: Texel<P>) -> usize {
+        self.as_texels(texel).len()
+    }
+}
+
+/// A buffer in which we can copy, apply a transform, and write back.
+trait TexelMappingBuffer {
+    fn map_forward<P, Q>(
+        &mut self,
+        src: usize,
+        dest: usize,
+        len: usize,
+        f: impl Fn(P) -> Q,
+        p: Texel<P>,
+        q: Texel<Q>,
+    );
+
+    fn map_backward<P, Q>(
+        &mut self,
+        src: usize,
+        dest: usize,
+        len: usize,
+        f: impl Fn(P) -> Q,
+        p: Texel<P>,
+        q: Texel<Q>,
+    );
+
+    fn texel_len<P>(&self, texel: Texel<P>) -> usize;
+
+    fn map_within<P, Q>(
         &mut self,
         src: impl ops::RangeBounds<usize>,
         dest: usize,
@@ -446,7 +549,7 @@ impl buf {
             ops::Bound::Included(&bound) => bound
                 .checked_add(1)
                 .expect("Range does not specify a valid bound end"),
-            ops::Bound::Unbounded => self.as_texels(p).len(),
+            ops::Bound::Unbounded => self.texel_len(p),
         };
 
         let len = p_end.checked_sub(p_start).expect("Bound violates order");
@@ -454,15 +557,15 @@ impl buf {
         let q_start = dest;
 
         let _ = self
-            .as_texels(p)
-            .get(p_start..)
-            .and_then(|slice| slice.get(..len))
+            .texel_len(p)
+            .checked_sub(p_start)
+            .and_then(|slice| slice.checked_sub(len))
             .expect("Source out of bounds");
 
         let _ = self
-            .as_texels(q)
-            .get(q_start..)
-            .and_then(|slice| slice.get(..len))
+            .texel_len(q)
+            .checked_sub(q_start)
+            .and_then(|slice| slice.checked_sub(len))
             .expect("Destination out of bounds");
 
         // Due to both being Texels.
@@ -503,44 +606,6 @@ impl buf {
                 q,
             );
             self.map_forward(p_start, q_start, backwards_end, &f, p, q);
-        }
-    }
-
-    /// Internally mapping function when the mapping can be done forwards.
-    fn map_forward<P, Q>(
-        &mut self,
-        src: usize,
-        dest: usize,
-        len: usize,
-        f: impl Fn(P) -> Q,
-        p: Texel<P>,
-        q: Texel<Q>,
-    ) {
-        for idx in 0..len {
-            let source_idx = idx + src;
-            let target_idx = idx + dest;
-            let source = p.copy_val(&self.as_texels(p)[source_idx]);
-            let target = f(source);
-            self.as_mut_texels(q)[target_idx] = target;
-        }
-    }
-
-    /// Internally mapping function when the mapping can be done backwards.
-    fn map_backward<P, Q>(
-        &mut self,
-        src: usize,
-        dest: usize,
-        len: usize,
-        f: impl Fn(P) -> Q,
-        p: Texel<P>,
-        q: Texel<Q>,
-    ) {
-        for idx in (0..len).rev() {
-            let source_idx = idx + src;
-            let target_idx = idx + dest;
-            let source = p.copy_val(&self.as_texels(p)[source_idx]);
-            let target = f(source);
-            self.as_mut_texels(q)[target_idx] = target;
         }
     }
 }
@@ -744,19 +809,6 @@ impl ops::IndexMut<ops::RangeTo<usize>> for buf {
     }
 }
 
-#[allow(dead_code)]
-impl AtomicRef<'_> {
-    /// Overwrite bytes within the vector with new data.
-    fn copy_within(&self, _from: core::ops::Range<usize>, _to: usize) {
-        todo!()
-    }
-
-    /// Overwrite the whole vector with new data.
-    fn copy_from(&self, _from: core::ops::Range<usize>, _source: &[MaxAtomic], _to: usize) {
-        todo!()
-    }
-}
-
 impl cell_buf {
     /// Wraps an aligned buffer into `buf`.
     ///
@@ -795,14 +847,65 @@ impl cell_buf {
     }
 
     pub fn map_within<P, Q>(
-        &mut self,
-        _src: impl ops::RangeBounds<usize>,
-        _dest: usize,
-        _f: impl Fn(P) -> Q,
-        _p: Texel<P>,
-        _q: Texel<Q>,
+        &self,
+        src: impl ops::RangeBounds<usize>,
+        dest: usize,
+        f: impl Fn(P) -> Q,
+        p: Texel<P>,
+        q: Texel<Q>,
     ) {
-        todo!()
+        let mut that = self;
+        TexelMappingBuffer::map_within(&mut that, src, dest, f, p, q)
+    }
+}
+
+impl TexelMappingBuffer for &'_ cell_buf {
+    /// Internally mapping function when the mapping can be done forwards.
+    fn map_forward<P, Q>(
+        &mut self,
+        src: usize,
+        dest: usize,
+        len: usize,
+        f: impl Fn(P) -> Q,
+        p: Texel<P>,
+        q: Texel<Q>,
+    ) {
+        let src_buffer = self.as_texels(p).as_slice_of_cells();
+        let target_buffer = self.as_texels(q).as_slice_of_cells();
+
+        for idx in 0..len {
+            let source_idx = idx + src;
+            let target_idx = idx + dest;
+            let source = p.copy_cell(&src_buffer[source_idx]);
+            let target = f(source);
+            target_buffer[target_idx].set(target);
+        }
+    }
+
+    /// Internally mapping function when the mapping can be done backwards.
+    fn map_backward<P, Q>(
+        &mut self,
+        src: usize,
+        dest: usize,
+        len: usize,
+        f: impl Fn(P) -> Q,
+        p: Texel<P>,
+        q: Texel<Q>,
+    ) {
+        let src_buffer = self.as_texels(p).as_slice_of_cells();
+        let target_buffer = self.as_texels(q).as_slice_of_cells();
+
+        for idx in (0..len).rev() {
+            let source_idx = idx + src;
+            let target_idx = idx + dest;
+            let source = p.copy_cell(&src_buffer[source_idx]);
+            let target = f(source);
+            target_buffer[target_idx].set(target);
+        }
+    }
+
+    fn texel_len<P>(&self, texel: Texel<P>) -> usize {
+        self.as_texels(texel).as_slice_of_cells().len()
     }
 }
 
@@ -825,6 +928,27 @@ impl atomic_buf {
         texel
             .try_to_atomic(buffer)
             .expect("An atomic_buf is always aligned")
+    }
+
+    pub fn map_within<P, Q>(
+        &mut self,
+        _src: impl ops::RangeBounds<usize>,
+        _dest: usize,
+        _f: impl Fn(P) -> Q,
+        _p: Texel<P>,
+        _q: Texel<Q>,
+    ) {
+        todo!()
+    }
+
+    /// Overwrite bytes within the vector with new data.
+    fn _copy_within(&self, _from: core::ops::Range<usize>, _to: usize) {
+        todo!()
+    }
+
+    /// Overwrite the whole vector with new data.
+    fn _copy_from(&self, _from: core::ops::Range<usize>, _source: &[MaxAtomic], _to: usize) {
+        todo!()
     }
 }
 
@@ -938,5 +1062,47 @@ mod tests {
         let contents: &atomic_buf = &*buffer;
         let slice: AtomicRef<u8> = contents.as_texels(U8);
         assert!(atomic_buf::from_bytes(slice).is_some());
+    }
+
+    #[test]
+    fn mapping_cells() {
+        const LEN: usize = 10;
+        // Look, we can actually map over this buffer while it is *not* mutable.
+        let buffer = CellBuffer::new(LEN * mem::size_of::<u32>());
+        // And receive all the results in this shared copy of our buffer.
+        let output_tap = buffer.clone();
+        assert!(buffer.ptr_eq(&output_tap));
+
+        buffer
+            .as_texels(U32)
+            .as_slice_of_cells()
+            .iter()
+            .enumerate()
+            .for_each(|(idx, p)| p.set(idx as u32));
+
+        // Map those numbers in-place.
+        buffer.map_within(..LEN, 0, |n: u32| n as u8, U32, U8);
+        buffer.map_within(..LEN, 0, |n: u8| n as u32, U8, U32);
+
+        // Back to where we started.
+        assert_eq!(
+            output_tap.as_texels(U32).as_slice_of_cells()[..LEN]
+                .iter()
+                .map(cell::Cell::get)
+                .collect::<Vec<_>>(),
+            (0..LEN as u32).collect::<Vec<_>>()
+        );
+
+        // This should work even if we don't map to index 0.
+        buffer.map_within(0..LEN, 3 * LEN, |n: u32| n as u8, U32, U8);
+        buffer.map_within(3 * LEN..4 * LEN, 0, |n: u8| n as u32, U8, U32);
+
+        assert_eq!(
+            output_tap.as_texels(U32).as_slice_of_cells()[..LEN]
+                .iter()
+                .map(cell::Cell::get)
+                .collect::<Vec<_>>(),
+            (0..LEN as u32).collect::<Vec<_>>()
+        );
     }
 }
