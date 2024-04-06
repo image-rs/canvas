@@ -653,20 +653,18 @@ impl<P> Texel<P> {
         let mut buffer = val.buf.0[offset..].iter();
 
         loop {
-            let mut value = 0;
-            let mut mask = !0;
+            let into = buffer.next().unwrap();
+            let original = into.load(atomic::Ordering::Relaxed);
+            let mut value = original;
 
             let target = &mut bytemuck::bytes_of_mut(&mut value)[initial_skip..];
             let copy_len = source.len().min(source.len());
             target[..copy_len].copy_from_slice(&source[..copy_len]);
-            for b in &mut bytemuck::bytes_of_mut(&mut mask)[initial_skip..][..copy_len] {
-                *b = 0;
-            }
             source = &source[copy_len..];
 
-            let into = buffer.next().unwrap();
-            into.fetch_and(mask, atomic::Ordering::Relaxed);
-            into.fetch_or(value, atomic::Ordering::Relaxed);
+            // Any bits we did not modify, including those outside our own range, will not get
+            // modified by this instruction. This provides the basic conflict guarantee.
+            into.fetch_xor(original ^ value, atomic::Ordering::Relaxed);
 
             if source.is_empty() {
                 break;
