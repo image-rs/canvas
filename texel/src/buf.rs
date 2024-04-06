@@ -111,8 +111,7 @@ pub struct cell_buf(cell::Cell<[u8]>);
 /// additional guarantee.
 ///
 /// For consistency with slices, casting of this type is done via an instance of [`Texel`].
-#[derive(Clone, Copy)]
-pub struct AtomicRef<'lt, P = u8> {
+pub struct AtomicSliceRef<'lt, P = u8> {
     pub(crate) buf: &'lt atomic_buf,
     /// The underlying logical texel type this is bound to.
     pub(crate) texel: Texel<P>,
@@ -122,6 +121,20 @@ pub struct AtomicRef<'lt, P = u8> {
     pub(crate) start: usize,
     /// The past-the-end byte referred to by this slice.
     pub(crate) end: usize,
+}
+
+/// A logical reference to a typed element from some atomic memory.
+///
+/// The analogue of this is `&P` or `&Cell<P>` respectively. Note we promise soundness but _not_
+/// absence of tears in the logical data type if the data straddles different underlying atomic
+/// representation types. We simply can not promise this. Of course, an external synchronization
+/// might be used enforce this additional guarantee.
+pub struct AtomicRef<'lt, P = u8> {
+    pub(crate) buf: &'lt atomic_buf,
+    /// The underlying logical texel type this is bound to.
+    pub(crate) texel: Texel<P>,
+    /// The first byte referred to by this slice.
+    pub(crate) start: usize,
 }
 
 impl Buffer {
@@ -846,6 +859,20 @@ impl cell_buf {
             .expect("A cell_buf is always aligned")
     }
 
+    /// Apply a mapping function to some elements.
+    ///
+    /// The indices `src` and `dest` are indices as if the slice were interpreted as `[P]` or `[Q]`
+    /// respectively.
+    ///
+    /// The types may differ which allows the use of this function to prepare a reinterpretation
+    /// cast of a typed buffer. This function chooses the order of function applications such that
+    /// values are not overwritten before they are used, i.e. the function arguments are exactly
+    /// the previously visible values. This is even less trivial than for copy if the parameter
+    /// types differ in size.
+    ///
+    /// # Panics
+    ///
+    /// This function panics if `src` or the implied range of `dest` are out of bounds.
     pub fn map_within<P, Q>(
         &self,
         src: impl ops::RangeBounds<usize>,
@@ -915,10 +942,10 @@ impl atomic_buf {
     /// The alignment of `P` is already checked to be smaller than `MAX_ALIGN` through the
     /// constructor of `Texel`. The slice will have the maximum length possible but may leave
     /// unused bytes in the end.
-    pub fn as_texels<P>(&self, texel: Texel<P>) -> AtomicRef<P> {
+    pub fn as_texels<P>(&self, texel: Texel<P>) -> AtomicSliceRef<P> {
         use crate::texels::U8;
 
-        let buffer = AtomicRef {
+        let buffer = AtomicSliceRef {
             buf: self,
             start: 0,
             end: core::mem::size_of_val(self),
@@ -930,15 +957,30 @@ impl atomic_buf {
             .expect("An atomic_buf is always aligned")
     }
 
+    /// Apply a mapping function to some elements.
+    ///
+    /// The indices `src` and `dest` are indices as if the slice were interpreted as `[P]` or `[Q]`
+    /// respectively.
+    ///
+    /// The types may differ which allows the use of this function to prepare a reinterpretation
+    /// cast of a typed buffer. This function chooses the order of function applications such that
+    /// values are not overwritten before they are used, i.e. the function arguments are exactly
+    /// the previously visible values. This is even less trivial than for copy if the parameter
+    /// types differ in size.
+    ///
+    /// # Panics
+    ///
+    /// This function panics if `src` or the implied range of `dest` are out of bounds.
     pub fn map_within<P, Q>(
-        &mut self,
-        _src: impl ops::RangeBounds<usize>,
-        _dest: usize,
-        _f: impl Fn(P) -> Q,
-        _p: Texel<P>,
-        _q: Texel<Q>,
+        &self,
+        src: impl ops::RangeBounds<usize>,
+        dest: usize,
+        f: impl Fn(P) -> Q,
+        p: Texel<P>,
+        q: Texel<Q>,
     ) {
-        todo!()
+        let mut that = self;
+        TexelMappingBuffer::map_within(&mut that, src, dest, f, p, q)
     }
 
     /// Overwrite bytes within the vector with new data.
@@ -951,6 +993,97 @@ impl atomic_buf {
         todo!()
     }
 }
+
+impl TexelMappingBuffer for &'_ atomic_buf {
+    /// Internally mapping function when the mapping can be done forwards.
+    fn map_forward<P, Q>(
+        &mut self,
+        src: usize,
+        dest: usize,
+        len: usize,
+        f: impl Fn(P) -> Q,
+        p: Texel<P>,
+        q: Texel<Q>,
+    ) {
+        let src_buffer = self.as_texels(p);
+        let target_buffer = self.as_texels(q);
+
+        // FIXME: isn't it particularly inefficient to load values one-by-one? But we offer that
+        // primitive. A stack buffer for a statically sized burst of values would be better though.
+
+        for idx in 0..len {
+            let source_idx = idx + src;
+            let target_idx = idx + dest;
+            let source = p.load_atomic(src_buffer.idx(source_idx));
+            let target = f(source);
+            q.store_atomic(target_buffer.idx(target_idx), target);
+        }
+    }
+
+    /// Internally mapping function when the mapping can be done backwards.
+    fn map_backward<P, Q>(
+        &mut self,
+        src: usize,
+        dest: usize,
+        len: usize,
+        f: impl Fn(P) -> Q,
+        p: Texel<P>,
+        q: Texel<Q>,
+    ) {
+        let src_buffer = self.as_texels(p);
+        let target_buffer = self.as_texels(q);
+
+        for idx in (0..len).rev() {
+            let source_idx = idx + src;
+            let target_idx = idx + dest;
+            let source = p.load_atomic(src_buffer.idx(source_idx));
+            let target = f(source);
+            q.store_atomic(target_buffer.idx(target_idx), target);
+        }
+    }
+
+    fn texel_len<P>(&self, texel: Texel<P>) -> usize {
+        self.as_texels(texel).len()
+    }
+}
+
+impl<'lt, P> AtomicSliceRef<'lt, P> {
+    /// Grab a single element.
+    ///
+    /// Not `get` since it does not return a reference, and we can not use the standard SliceIndex
+    /// trait anyways. Also we do not implement the assertion outside of debug for now, it is also
+    /// not used for unsafe code.
+    pub(crate) fn idx(self, idx: usize) -> AtomicRef<'lt, P> {
+        assert!(idx < self.len());
+
+        AtomicRef {
+            buf: self.buf,
+            start: self.start + idx * self.texel.size(),
+            texel: self.texel,
+        }
+    }
+
+    /// Get the number of elements referenced by this slice.
+    pub fn len(&self) -> usize {
+        self.end.saturating_sub(self.start) / self.texel.size()
+    }
+}
+
+impl<P> Clone for AtomicSliceRef<'_, P> {
+    fn clone(&self) -> Self {
+        AtomicSliceRef { ..*self }
+    }
+}
+
+impl<P> Copy for AtomicSliceRef<'_, P> {}
+
+impl<P> Clone for AtomicRef<'_, P> {
+    fn clone(&self) -> Self {
+        AtomicRef { ..*self }
+    }
+}
+
+impl<P> Copy for AtomicRef<'_, P> {}
 
 #[cfg(test)]
 mod tests {
@@ -1060,7 +1193,7 @@ mod tests {
         assert_eq!(buffer.capacity(), alternative.capacity());
 
         let contents: &atomic_buf = &*buffer;
-        let slice: AtomicRef<u8> = contents.as_texels(U8);
+        let slice: AtomicSliceRef<u8> = contents.as_texels(U8);
         assert!(atomic_buf::from_bytes(slice).is_some());
     }
 
@@ -1102,6 +1235,43 @@ mod tests {
                 .iter()
                 .map(cell::Cell::get)
                 .collect::<Vec<_>>(),
+            (0..LEN as u32).collect::<Vec<_>>()
+        );
+    }
+
+    #[test]
+    fn mapping_atomics() {
+        const LEN: usize = 10;
+        let mut initial_state = Buffer::new(LEN * mem::size_of::<u32>());
+
+        initial_state
+            .as_mut_texels(U32)
+            .iter_mut()
+            .enumerate()
+            .for_each(|(idx, p)| *p = idx as u32);
+
+        // Look, we can actually map over this buffer while it is *not* mutable.
+        let buffer = AtomicBuffer::with_buffer(initial_state);
+        // And receive all the results in this shared copy of our buffer.
+        let output_tap = buffer.clone();
+        // assert!(buffer.ptr_eq(&output_tap));
+
+        // Map those numbers in-place.
+        buffer.map_within(..LEN, 0, |n: u32| n as u8, U32, U8);
+        buffer.map_within(..LEN, 0, |n: u8| n as u32, U8, U32);
+
+        // Back to where we started.
+        assert_eq!(
+            output_tap.to_owned().as_texels(U32)[..LEN].to_vec(),
+            (0..LEN as u32).collect::<Vec<_>>()
+        );
+
+        // This should work even if we don't map to index 0.
+        buffer.map_within(0..LEN, 3 * LEN, |n: u32| n as u8, U32, U8);
+        buffer.map_within(3 * LEN..4 * LEN, 0, |n: u8| n as u32, U8, U32);
+
+        assert_eq!(
+            output_tap.to_owned().as_texels(U32)[..LEN].to_vec(),
             (0..LEN as u32).collect::<Vec<_>>()
         );
     }

@@ -8,7 +8,7 @@ use core::cmp::{Eq, Ord, Ordering, PartialEq, PartialOrd};
 use core::marker::PhantomData;
 use core::{fmt, hash, mem, num, ptr, slice, sync::atomic};
 
-use crate::buf::{atomic_buf, buf, cell_buf, AtomicRef};
+use crate::buf::{atomic_buf, buf, cell_buf, AtomicRef, AtomicSliceRef};
 
 /// Marker struct to denote a texel type.
 ///
@@ -428,7 +428,7 @@ impl atomic_buf {
     /// Wrap a sub-slice of bytes from an atomic buffer into a new `atomic_buf`.
     ///
     /// The bytes need to be aligned to `ALIGNMENT`.
-    pub fn from_bytes(bytes: AtomicRef<u8>) -> Option<&Self> {
+    pub fn from_bytes(bytes: AtomicSliceRef<u8>) -> Option<&Self> {
         if bytes.start & Self::ALIGNMENT == 0 {
             let offset = bytes.start / core::mem::size_of::<AtomicPart>();
             let buffer = &bytes.buf.0[offset..];
@@ -600,6 +600,82 @@ impl<P> Texel<P> {
         unsafe { ptr::read(val) }.into_inner()
     }
 
+    /// Load a value from an atomic slice.
+    ///
+    /// The results is only correct if no concurrent modification occurs. The library promises
+    /// *basic soundness* but no particular defined behaviour under parallel modifications to the
+    /// memory bytes which describe the value to be loaded.
+    ///
+    /// Each atomic unit is touched at most once.
+    pub fn load_atomic(self, val: AtomicRef<P>) -> P {
+        // SAFETY: by `Texel` being a POD this is a valid representation.
+        let mut value = unsafe { core::mem::zeroed::<P>() };
+
+        let offset = val.start / core::mem::size_of::<AtomicPart>();
+        let mut initial_skip = val.start % core::mem::size_of::<AtomicPart>();
+        let mut target = self.to_mut_bytes(core::slice::from_mut(&mut value));
+
+        let mut buffer = val.buf.0[offset..].iter();
+        // By the invariants of `AtomicRef`, that number of bytes is in-bounds.
+        let mut load = buffer.next().unwrap().load(atomic::Ordering::Relaxed);
+
+        loop {
+            let input = &bytemuck::bytes_of(&load)[initial_skip..];
+            let copy_len = input.len().min(target.len());
+            target[..copy_len].copy_from_slice(&input[..copy_len]);
+            target = &mut target[copy_len..];
+
+            if target.is_empty() {
+                break;
+            }
+
+            load = buffer.next().unwrap().load(atomic::Ordering::Relaxed);
+            initial_skip = 0;
+        }
+
+        value
+    }
+
+    /// Store a value to an atomic slice.
+    ///
+    /// The results is only correct if no concurrent modification occurs. The library promises
+    /// *basic soundness* but no particular defined behaviour under parallel modifications to the
+    /// memory bytes which describe the value to be store.
+    ///
+    /// Provides the same wait-freeness as the underlying platform for `fetch_*` instructions, that
+    /// is this does not use `compare_exchange_weak`. This implies that concurrent modifications to
+    /// bytes *not* covered by this particular representation will not inherently block progress.
+    pub fn store_atomic(self, val: AtomicRef<P>, value: P) {
+        let offset = val.start / core::mem::size_of::<AtomicPart>();
+        let mut initial_skip = val.start % core::mem::size_of::<AtomicPart>();
+
+        let mut source = self.to_bytes(core::slice::from_ref(&value));
+        let mut buffer = val.buf.0[offset..].iter();
+
+        loop {
+            let mut value = 0;
+            let mut mask = !0;
+
+            let target = &mut bytemuck::bytes_of_mut(&mut value)[initial_skip..];
+            let copy_len = source.len().min(source.len());
+            target[..copy_len].copy_from_slice(&source[..copy_len]);
+            for b in &mut bytemuck::bytes_of_mut(&mut mask)[initial_skip..][..copy_len] {
+                *b = 0;
+            }
+            source = &source[copy_len..];
+
+            let into = buffer.next().unwrap();
+            into.fetch_and(mask, atomic::Ordering::Relaxed);
+            into.fetch_or(value, atomic::Ordering::Relaxed);
+
+            if source.is_empty() {
+                break;
+            }
+
+            initial_skip = 0;
+        }
+    }
+
     /// Reinterpret a slice of aligned bytes as a slice of the texel.
     ///
     /// Note that the size (in bytes) of the slice will be shortened if the size of `P` is not a
@@ -667,10 +743,13 @@ impl<P> Texel<P> {
     }
 
     /// Reinterpret a slice of atomically access memory with a type annotation.
-    pub fn try_to_atomic<'buf>(self, bytes: AtomicRef<'buf, u8>) -> Option<AtomicRef<'buf, P>> {
+    pub fn try_to_atomic<'buf>(
+        self,
+        bytes: AtomicSliceRef<'buf, u8>,
+    ) -> Option<AtomicSliceRef<'buf, P>> {
         if bytes.start % mem::align_of::<P>() == 0 {
             let end = bytes.end - bytes.end % mem::align_of::<P>();
-            Some(AtomicRef {
+            Some(AtomicSliceRef {
                 buf: bytes.buf,
                 start: bytes.start,
                 end,
@@ -718,8 +797,8 @@ impl<P> Texel<P> {
     }
 
     /// Reinterpret a slice of atomically modified texels as atomic bytes.
-    pub fn atomic_bytes<'buf>(self, texel: AtomicRef<'buf, P>) -> AtomicRef<'buf, u8> {
-        AtomicRef {
+    pub fn atomic_bytes<'buf>(self, texel: AtomicSliceRef<'buf, P>) -> AtomicSliceRef<'buf, u8> {
+        AtomicSliceRef {
             buf: texel.buf,
             start: texel.start,
             end: texel.end,
