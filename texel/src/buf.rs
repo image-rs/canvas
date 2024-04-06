@@ -4,6 +4,7 @@
 use core::{borrow, cell, cmp, mem, ops, sync::atomic};
 
 use alloc::borrow::ToOwned;
+use alloc::rc::Rc;
 use alloc::sync::Arc;
 use alloc::vec::Vec;
 
@@ -63,7 +64,7 @@ pub struct AtomicBuffer {
 #[derive(Clone)]
 pub struct CellBuffer {
     /// The backing memory, aligned by allocating it with the proper type.
-    inner: Arc<[MaxCell]>,
+    inner: Rc<[MaxCell]>,
 }
 
 /// An aligned slice of memory.
