@@ -1,7 +1,7 @@
 // Distributed under The MIT License (MIT)
 //
 // Copyright (c) 2019 The `image-rs` developers
-use core::{borrow, cell, cmp, mem, ops};
+use core::{borrow, cell, cmp, mem, ops, sync::atomic};
 
 use alloc::borrow::ToOwned;
 use alloc::sync::Arc;
@@ -184,14 +184,94 @@ impl Buffer {
 }
 
 impl CellBuffer {
+    const ELEMENT: MaxCell = MaxCell::zero();
+
+    /// Allocate a new [`CellBuffer`] with a number of bytes.
+    ///
+    /// Panics if the length is too long to find a properly aligned subregion.
+    pub fn new(length: usize) -> Self {
+        let alloc_len = Buffer::alloc_len(length);
+        let inner: Vec<_> = (0..alloc_len).map(|_| Self::ELEMENT).collect();
+
+        CellBuffer {
+            inner: inner.into(),
+        }
+    }
+
+    /// Share an existing buffer.
+    ///
+    /// The library will try, to an extent, to avoid an allocation here. However, it can only do so
+    /// if the capacity of the underlying buffer is the same as the logical length of the shared
+    /// buffer. Ultimately we rely on the standard libraries guarantees for constructing a
+    /// reference counted allocation from an owned vector.
+    pub fn with_buffer(buffer: Buffer) -> Self {
+        let inner: Vec<_> = buffer.inner.into_iter().map(MaxCell::new).collect();
+
+        CellBuffer {
+            inner: inner.into(),
+        }
+    }
+
+    /// Retrieve the byte capacity of the allocated storage.
     pub fn capacity(&self) -> usize {
         core::mem::size_of_val(&*self.inner)
+    }
+
+    /// Copy the data into an owned buffer.
+    pub fn to_owned(&self) -> Buffer {
+        let inner = self.inner.iter().map(|cell| cell.get()).collect();
+
+        Buffer { inner }
     }
 }
 
 impl AtomicBuffer {
+    const ELEMENT: MaxAtomic = MaxAtomic::zero();
+
+    /// Allocate a new [`AtomicBuffer`] with a number of bytes.
+    ///
+    /// Panics if the length is too long to find a properly aligned subregion.
+    pub fn new(length: usize) -> Self {
+        let alloc_len = Buffer::alloc_len(length);
+        let inner: Vec<_> = (0..alloc_len).map(|_| Self::ELEMENT).collect();
+
+        AtomicBuffer {
+            inner: inner.into(),
+        }
+    }
+
+    /// Share an existing buffer.
+    ///
+    /// The library will try, to an extent, to avoid an allocation here. However, it can only do so
+    /// if the capacity of the underlying buffer is the same as the logical length of the shared
+    /// buffer. Ultimately we rely on the standard libraries guarantees for constructing a
+    /// reference counted allocation from an owned vector.
+    pub fn with_buffer(buffer: Buffer) -> Self {
+        let inner: Vec<_> = buffer.inner.into_iter().map(MaxAtomic::new).collect();
+
+        AtomicBuffer {
+            inner: inner.into(),
+        }
+    }
+
+    /// Retrieve the byte capacity of the allocated storage.
     pub fn capacity(&self) -> usize {
         core::mem::size_of_val(&*self.inner)
+    }
+
+    /// Copy the data into an owned buffer.
+    ///
+    /// The load will always be relaxed. If more guarantees are required, insert your owned memory
+    /// barrier instructions before or after the access or otherwise synchronize the call to this
+    /// function.
+    pub fn to_owned(&self) -> Buffer {
+        let inner = self
+            .inner
+            .iter()
+            .map(|cell| cell.load(atomic::Ordering::Relaxed))
+            .collect();
+
+        Buffer { inner }
     }
 }
 
@@ -893,6 +973,9 @@ mod tests {
         let buffer = CellBuffer::from(&data[..]);
         // Gets rounded up to the next alignment.
         assert_eq!(buffer.capacity(), Buffer::alloc_len(data.len()) * MAX_ALIGN);
+
+        let alternative = CellBuffer::with_buffer(buffer.to_owned());
+        assert_eq!(buffer.capacity(), alternative.capacity());
     }
 
     #[test]
@@ -901,5 +984,8 @@ mod tests {
         let buffer = AtomicBuffer::from(&data[..]);
         // Gets rounded up to the next alignment.
         assert_eq!(buffer.capacity(), Buffer::alloc_len(data.len()) * MAX_ALIGN);
+
+        let alternative = CellBuffer::with_buffer(buffer.to_owned());
+        assert_eq!(buffer.capacity(), alternative.capacity());
     }
 }

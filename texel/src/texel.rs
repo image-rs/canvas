@@ -6,7 +6,7 @@
 use core::cell::Cell;
 use core::cmp::{Eq, Ord, Ordering, PartialEq, PartialOrd};
 use core::marker::PhantomData;
-use core::{fmt, hash, mem, num, ptr, slice};
+use core::{fmt, hash, mem, num, ptr, slice, sync::atomic};
 
 use crate::buf::{buf, atomic_buf, cell_buf};
 
@@ -762,6 +762,21 @@ impl MaxAtomic {
 
         for (part, to) in self.0.iter_mut().zip(from) {
             let src = bytemuck::bytes_of(AtomicPart::get_mut(part));
+            to.copy_from_slice(src);
+        }
+
+        result
+    }
+
+    /// Load the data into an owned value.
+    pub fn load(&self, ordering: atomic::Ordering) -> MaxAligned {
+        let mut result = MaxAligned([0; MAX_ALIGN]);
+        let from = bytemuck::bytes_of_mut(&mut result);
+        let from = from.chunks_exact_mut(core::mem::size_of::<AtomicPart>());
+
+        for (part, to) in self.0.iter().zip(from) {
+            let data = part.load(ordering);
+            let src = bytemuck::bytes_of(&data);
             to.copy_from_slice(src);
         }
 
