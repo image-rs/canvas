@@ -123,14 +123,6 @@ pub struct AtomicRef<'lt, P = u8> {
     pub(crate) end: usize,
 }
 
-/// A copy-on-grow version of a buffer.
-pub(crate) enum Cog<'buf> {
-    Owned(Buffer),
-    // May be used later..
-    #[allow(dead_code)]
-    Borrowed(&'buf mut buf),
-}
-
 impl Buffer {
     const ELEMENT: MaxAligned = MaxAligned([0; MAX_ALIGN]);
 
@@ -277,34 +269,6 @@ impl AtomicBuffer {
             .collect();
 
         Buffer { inner }
-    }
-}
-
-impl Cog<'_> {
-    pub(crate) fn to_owned(this: &mut Self) -> &'_ mut Buffer {
-        match this {
-            Cog::Owned(buffer) => buffer,
-            Cog::Borrowed(buffer) => {
-                let buffer = buffer.to_owned();
-                *this = Cog::Owned(buffer);
-                Cog::to_owned(this)
-            }
-        }
-    }
-
-    pub(crate) fn into_owned(this: Self) -> Buffer {
-        match this {
-            Cog::Owned(buffer) => buffer,
-            Cog::Borrowed(buffer) => buffer.to_owned(),
-        }
-    }
-
-    pub(crate) fn grow_to(this: &mut Self, bytes: usize) -> &mut buf {
-        if this.len() < bytes {
-            Cog::to_owned(this).grow_to(bytes);
-        }
-
-        &mut **this
     }
 }
 
@@ -748,46 +712,6 @@ impl ops::DerefMut for buf {
         self.as_bytes_mut()
     }
 }
-
-impl ops::Deref for Cog<'_> {
-    type Target = buf;
-
-    fn deref(&self) -> &buf {
-        match self {
-            Cog::Owned(buffer) => buffer,
-            Cog::Borrowed(buffer) => buffer,
-        }
-    }
-}
-
-impl ops::DerefMut for Cog<'_> {
-    fn deref_mut(&mut self) -> &mut buf {
-        match self {
-            Cog::Owned(buffer) => buffer,
-            Cog::Borrowed(buffer) => buffer,
-        }
-    }
-}
-
-impl borrow::Borrow<buf> for Cog<'_> {
-    fn borrow(&self) -> &buf {
-        &**self
-    }
-}
-
-impl borrow::BorrowMut<buf> for Cog<'_> {
-    fn borrow_mut(&mut self) -> &mut buf {
-        &mut **self
-    }
-}
-
-impl cmp::PartialEq<Cog<'_>> for Cog<'_> {
-    fn eq(&self, other: &Cog<'_>) -> bool {
-        **self == **other
-    }
-}
-
-impl cmp::Eq for Cog<'_> {}
 
 impl cmp::PartialEq for buf {
     fn eq(&self, other: &buf) -> bool {

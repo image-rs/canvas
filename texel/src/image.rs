@@ -13,7 +13,7 @@
 // Copyright (c) 2019, 2020 The `image-rs` developers
 use core::{fmt, ops};
 
-use crate::buf::{buf, Buffer, Cog};
+use crate::buf::{buf, Buffer};
 use crate::layout::{
     Bytes, Decay, DynLayout, Layout, Mend, Raster, RasterMut, SliceLayout, Take, TryMend,
 };
@@ -80,19 +80,6 @@ pub use crate::stride::{StridedBufferMut, StridedBufferRef};
 #[derive(Clone, PartialEq, Eq)]
 pub struct Image<Layout = Bytes> {
     inner: RawImage<Buffer, Layout>,
-}
-
-/// An owned or borrowed image, parameterized over the layout.
-///
-/// The buffer is either owned or _mutably_ borrowed from another `Image`. Some allocating methods
-/// may lead to an implicit change from a borrowed to an owned buffer. These methods are documented
-/// as performing a fallible allocation. Other method calls on the previously borrowing image will
-/// afterwards no longer change the bytes of the image it was borrowed from.
-///
-/// FIXME: figure out if this is 'right' to expose in this crate.
-#[derive(Clone, PartialEq, Eq)]
-pub(crate) struct CopyOnGrow<'buf, Layout = Bytes> {
-    inner: RawImage<Cog<'buf>, Layout>,
 }
 
 /// A read-only view of an image.
@@ -1323,16 +1310,6 @@ impl<'lt, L> From<RawImage<&'lt mut buf, L>> for ImageMut<'lt, L> {
     }
 }
 
-impl BufferLike for Cog<'_> {
-    fn into_owned(self) -> Buffer {
-        Cog::into_owned(self)
-    }
-
-    fn take(&mut self) -> Self {
-        core::mem::replace(self, Cog::Owned(Default::default()))
-    }
-}
-
 impl BufferLike for Buffer {
     fn into_owned(self) -> Self {
         self
@@ -1353,50 +1330,21 @@ impl BufferLike for &'_ mut buf {
     }
 }
 
-impl Growable for Cog<'_> {
-    fn grow_to(&mut self, bytes: usize) {
-        Cog::grow_to(self, bytes);
-    }
-}
-
 impl Growable for Buffer {
     fn grow_to(&mut self, bytes: usize) {
         Buffer::grow_to(self, bytes);
     }
 }
 
-impl BufferMut for Cog<'_> {}
-
 impl BufferMut for Buffer {}
 
 impl BufferMut for &'_ mut buf {}
-
-impl<Layout: Clone> Clone for RawImage<Cog<'_>, Layout> {
-    fn clone(&self) -> Self {
-        use alloc::borrow::ToOwned;
-        RawImage {
-            buffer: Cog::Owned(self.buffer.to_owned()),
-            layout: self.layout.clone(),
-        }
-    }
-}
 
 impl<Layout: Default> Default for Image<Layout> {
     fn default() -> Self {
         Image {
             inner: RawImage {
                 buffer: Buffer::default(),
-                layout: Layout::default(),
-            },
-        }
-    }
-}
-
-impl<Layout: Default> Default for CopyOnGrow<'_, Layout> {
-    fn default() -> Self {
-        CopyOnGrow {
-            inner: RawImage {
-                buffer: Cog::Owned(Buffer::default()),
                 layout: Layout::default(),
             },
         }
