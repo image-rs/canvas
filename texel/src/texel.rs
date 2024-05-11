@@ -3,11 +3,12 @@
 // Copyright (c) 2019, 2020 The `image-rs` developers
 #![allow(unsafe_code)]
 
+use core::cell::Cell;
 use core::cmp::{Eq, Ord, Ordering, PartialEq, PartialOrd};
 use core::marker::PhantomData;
-use core::{fmt, hash, mem, num, ptr, slice};
+use core::{fmt, hash, mem, num, ptr, slice, sync::atomic};
 
-use crate::buf::buf;
+use crate::buf::{atomic_buf, buf, cell_buf, AtomicRef, AtomicSliceRef};
 
 /// Marker struct to denote a texel type.
 ///
@@ -49,8 +50,18 @@ pub trait AsTexel {
 
 macro_rules! def_max_align {
     (
+        match cfg(target) {
+            $($($arch:literal)|* => $num:literal),*,
+        }
+
         $(#[$common_attr:meta])*
-        $($($arch:literal),* = $num:literal),*
+        struct MaxAligned(..);
+
+        $(#[$atomic_attr:meta])*
+        struct MaxAtomic(..);
+
+        $(#[$cell_attr:meta])*
+        struct MaxCell(..);
     ) => {
         /// A byte-like-type that is aligned to the required max alignment.
         ///
@@ -64,6 +75,77 @@ macro_rules! def_max_align {
             )]
         )*
         pub struct MaxAligned(pub(crate) [u8; MAX_ALIGN]);
+
+        /* Note: We need to be really careful to avoid peril for several reasons.
+         *
+         * Firstly, the Rust atomic model forbids us from doing unsynchronized access (stores _or_
+         * loads) with differing sizes to the same memory location. For now, and for the
+         * foreseeable future. Since we do not synchronize the access to the buffer, we must use
+         * the same size everywhere.
+         *
+         * Secondly, using any type other than `AtomicU8` for these makes it hard for us to slice
+         * the buffer at arbitrary points. For true references we might work around this by custom
+         * metadata, yet this is not stable. Hence, we _must_ use a non-reference type wrapper for
+         * the kind of access we need. Or rather, the initial buffer allocation can deref into a
+         * reference to a slice of atomics but to slice it we must use our own type. And all
+         * operations are implemented to work on full units of this atomic type.
+         *
+         * At least for relaxed operations, the larger unit is somewhat equivalent. It's certainly
+         * at bit of a balance. Larger units might be more costly from destructive interference
+         * between different accesses, but small units are costly due to added instructions.
+         *
+         * View the selection below as a 'best-effort' really.
+         **/
+        #[cfg(all(
+            not(target_has_atomic = "8"),
+            not(target_has_atomic = "16"),
+            not(target_has_atomic = "32"),
+            not(target_has_atomic = "64"),
+        ))]
+        compile_error!("Synchronous buffer API requires one atomic unsigned type");
+
+        #[cfg(all(
+            target_has_atomic = "8",
+            not(target_has_atomic = "16"),
+            not(target_has_atomic = "32"),
+            not(target_has_atomic = "64"),
+        ))]
+        pub(crate) type AtomicPart = core::sync::atomic::AtomicU8;
+        #[cfg(all(
+            target_has_atomic = "16",
+            not(target_has_atomic = "32"),
+            not(target_has_atomic = "64"),
+        ))]
+        pub(crate) type AtomicPart = core::sync::atomic::AtomicU16;
+        #[cfg(all(
+            target_has_atomic = "32",
+            not(target_has_atomic = "64"),
+        ))]
+        pub(crate) type AtomicPart = core::sync::atomic::AtomicU32;
+        #[cfg(all(
+            target_has_atomic = "64",
+        ))]
+        pub(crate) type AtomicPart = core::sync::atomic::AtomicU64;
+
+        const ATOMIC_PARTS: usize = MAX_ALIGN / core::mem::size_of::<AtomicPart>();
+
+        $(
+            #[cfg_attr(
+                any($(target_arch = $arch),*),
+                repr(align($num))
+            )]
+        )*
+        $(#[$atomic_attr])*
+        pub struct MaxAtomic(pub(crate) [AtomicPart; ATOMIC_PARTS]);
+
+        $(
+            #[cfg_attr(
+                any($(target_arch = $arch),*),
+                repr(align($num))
+            )]
+        )*
+        $(#[$cell_attr])*
+        pub struct MaxCell(pub(crate) Cell<[u8; MAX_ALIGN]>);
 
         $(
             #[cfg(
@@ -82,17 +164,28 @@ macro_rules! def_max_align {
 }
 
 def_max_align! {
+    match cfg(target) {
+        "x86" | "x86_64" => 32,
+        "arm" => 16,
+        "aarch64" => 16,
+        "wasm32" => 16,
+    }
+
     /// A byte-like-type that is aligned to the required max alignment.
     ///
     /// This type does not contain padding and implements `Pod`. Generally, the alignment and size
     /// requirement is kept small to avoid overhead.
     #[derive(Clone, Copy)]
     #[repr(C)]
+    struct MaxAligned(..);
 
-    "x86", "x86_64" = 32,
-    "arm" = 16,
-    "aarch64" = 16,
-    "wasm32" = 16
+    /// Atomic equivalence of [`MaxAligned`].
+    ///
+    /// This contains some instance of [`core::sync::atomic::AtomicU8`].
+    struct MaxAtomic(..);
+
+    /// A cell of a byte array equivalent to [`MaxAligned`].
+    struct MaxCell(..);
 }
 
 unsafe impl bytemuck::Zeroable for MaxAligned {}
@@ -309,6 +402,75 @@ impl buf {
     }
 }
 
+impl atomic_buf {
+    pub const ALIGNMENT: usize = MAX_ALIGN;
+
+    pub fn from_slice(values: &[MaxAtomic]) -> &Self {
+        debug_assert_eq!(values.as_ptr() as usize % Self::ALIGNMENT, 0);
+        let ptr = values.as_ptr() as *const AtomicPart;
+        let count = values.len() * ATOMIC_PARTS;
+        // Safety: these types are binary compatible, they wrap atomics of the same size,  and
+        // starting at the same address, with a pointer of the same provenance which will be valid
+        // for the whole lifetime.
+        //
+        // This case relaxes the alignment requirements from `MaxAtomic` to that of the underlying
+        // atomic, which allows us to go beyond the public interface.
+        //
+        // The new size covered by the slice is the same as the input slice, since there are
+        // `ATOMIC_PARTS` units within each `MaxAtomic`. The memory invariants of the new type are
+        // the same as the old type, which is that we access only with atomics instructions of the
+        // size of the `AtomicPart` type.
+        let atomics = core::ptr::slice_from_raw_parts::<AtomicPart>(ptr, count);
+        // Safety: `atomic_buf` has the same layout as a `[MaxAtomic]` and wraps it transparently.
+        unsafe { &*(atomics as *const Self) }
+    }
+
+    /// Wrap a sub-slice of bytes from an atomic buffer into a new `atomic_buf`.
+    ///
+    /// The bytes need to be aligned to `ALIGNMENT`.
+    pub fn from_bytes(bytes: AtomicSliceRef<u8>) -> Option<&Self> {
+        if bytes.start & Self::ALIGNMENT == 0 {
+            let offset = bytes.start / core::mem::size_of::<AtomicPart>();
+            let buffer = &bytes.buf.0[offset..];
+            // Safety: these types are binary compatible. The metadata is also the same, as both
+            // types encapsulate a slice of `AtomicPart`-sized types.
+            Some(unsafe { &*(buffer as *const _ as *const Self) })
+        } else {
+            None
+        }
+    }
+}
+
+impl cell_buf {
+    pub const ALIGNMENT: usize = MAX_ALIGN;
+
+    pub fn from_slice(values: &[MaxCell]) -> &Self {
+        debug_assert_eq!(values.as_ptr() as usize % Self::ALIGNMENT, 0);
+        let ptr = values.as_ptr() as *const Cell<u8>;
+        let count = core::mem::size_of_val(values);
+        // Safety: constructs a pointer to a slice validly covering exactly the values in the
+        // input. The byte length is determined by `size_of_val` and starting at the same address,
+        // with a pointer of the same provenance which will be valid for the whole lifetime. The
+        // memory invariants of the new type are the same as the old type, which is that we access
+        // only with atomics instructions of the size of the `AtomicPart` type.
+        let memory = core::ptr::slice_from_raw_parts::<Cell<u8>>(ptr, count);
+        // Safety: these types are binary compatible, they wrap memory of the same size.
+        // This case relaxes the alignment requirements from `MaxAtomic` to that of the underlying
+        // atomic, which allows us to go beyond the public interface.
+        unsafe { &*(memory as *const Self) }
+    }
+
+    pub fn from_bytes(bytes: &[Cell<u8>]) -> Option<&Self> {
+        if bytes.as_ptr() as usize % Self::ALIGNMENT == 0 {
+            // Safety: these types are binary compatible. The metadata is also the same, as both
+            // types encapsulate a slice of `u8`-sized types.
+            Some(unsafe { &*(bytes as *const [_] as *const Cell<[u8]> as *const cell_buf) })
+        } else {
+            None
+        }
+    }
+}
+
 impl<P> Texel<P> {
     /// Create a witness certifying `P` as a texel without checks.
     ///
@@ -432,6 +594,86 @@ impl<P> Texel<P> {
         unsafe { ptr::read(val) }
     }
 
+    pub fn copy_cell(self, val: &Cell<P>) -> P {
+        // SAFETY: by the constructor, this inner type can be copied byte-by-byte. And `Cell` is a
+        // transparent wrapper so it can be read byte-by-byte as well.
+        unsafe { ptr::read(val) }.into_inner()
+    }
+
+    /// Load a value from an atomic slice.
+    ///
+    /// The results is only correct if no concurrent modification occurs. The library promises
+    /// *basic soundness* but no particular defined behaviour under parallel modifications to the
+    /// memory bytes which describe the value to be loaded.
+    ///
+    /// Each atomic unit is touched at most once.
+    pub fn load_atomic(self, val: AtomicRef<P>) -> P {
+        // SAFETY: by `Texel` being a POD this is a valid representation.
+        let mut value = unsafe { core::mem::zeroed::<P>() };
+
+        let offset = val.start / core::mem::size_of::<AtomicPart>();
+        let mut initial_skip = val.start % core::mem::size_of::<AtomicPart>();
+        let mut target = self.to_mut_bytes(core::slice::from_mut(&mut value));
+
+        let mut buffer = val.buf.0[offset..].iter();
+        // By the invariants of `AtomicRef`, that number of bytes is in-bounds.
+        let mut load = buffer.next().unwrap().load(atomic::Ordering::Relaxed);
+
+        loop {
+            let input = &bytemuck::bytes_of(&load)[initial_skip..];
+            let copy_len = input.len().min(target.len());
+            target[..copy_len].copy_from_slice(&input[..copy_len]);
+            target = &mut target[copy_len..];
+
+            if target.is_empty() {
+                break;
+            }
+
+            load = buffer.next().unwrap().load(atomic::Ordering::Relaxed);
+            initial_skip = 0;
+        }
+
+        value
+    }
+
+    /// Store a value to an atomic slice.
+    ///
+    /// The results is only correct if no concurrent modification occurs. The library promises
+    /// *basic soundness* but no particular defined behaviour under parallel modifications to the
+    /// memory bytes which describe the value to be store.
+    ///
+    /// Provides the same wait-freeness as the underlying platform for `fetch_*` instructions, that
+    /// is this does not use `compare_exchange_weak`. This implies that concurrent modifications to
+    /// bytes *not* covered by this particular representation will not inherently block progress.
+    pub fn store_atomic(self, val: AtomicRef<P>, value: P) {
+        let offset = val.start / core::mem::size_of::<AtomicPart>();
+        let mut initial_skip = val.start % core::mem::size_of::<AtomicPart>();
+
+        let mut source = self.to_bytes(core::slice::from_ref(&value));
+        let mut buffer = val.buf.0[offset..].iter();
+
+        loop {
+            let into = buffer.next().unwrap();
+            let original = into.load(atomic::Ordering::Relaxed);
+            let mut value = original;
+
+            let target = &mut bytemuck::bytes_of_mut(&mut value)[initial_skip..];
+            let copy_len = source.len().min(source.len());
+            target[..copy_len].copy_from_slice(&source[..copy_len]);
+            source = &source[copy_len..];
+
+            // Any bits we did not modify, including those outside our own range, will not get
+            // modified by this instruction. This provides the basic conflict guarantee.
+            into.fetch_xor(original ^ value, atomic::Ordering::Relaxed);
+
+            if source.is_empty() {
+                break;
+            }
+
+            initial_skip = 0;
+        }
+    }
+
     /// Reinterpret a slice of aligned bytes as a slice of the texel.
     ///
     /// Note that the size (in bytes) of the slice will be shortened if the size of `P` is not a
@@ -482,15 +724,84 @@ impl<P> Texel<P> {
     /// Reinterpret a slice of texel as memory.
     ///
     /// Note that you can convert a reference to a single value by [`core::slice::from_ref`].
+    pub fn try_to_cell<'buf>(self, bytes: &'buf [Cell<u8>]) -> Option<&'buf Cell<[P]>> {
+        // Safety:
+        // - The `pod`-ness certified by `self` ensures the cast of the contents of the memory is
+        //   valid. All representations are a valid P and conversely and P is valid as bytes. Since
+        //   Cell is a transparent wrapper the types are compatible.
+        // - We uphold the share invariants of `Cell`, which are trivial (less than those required
+        //   and provided by a shared reference).
+        if bytes.as_ptr() as usize % mem::align_of::<P>() == 0 {
+            let len = bytes.len() / mem::size_of::<P>();
+            let ptr = ptr::slice_from_raw_parts(bytes.as_ptr() as *const P, len);
+            Some(unsafe { &*(ptr as *const Cell<[P]>) })
+        } else {
+            None
+        }
+    }
+
+    /// Reinterpret a slice of atomically access memory with a type annotation.
+    pub fn try_to_atomic<'buf>(
+        self,
+        bytes: AtomicSliceRef<'buf, u8>,
+    ) -> Option<AtomicSliceRef<'buf, P>> {
+        if bytes.start % mem::align_of::<P>() == 0 {
+            let end = bytes.end - bytes.end % mem::align_of::<P>();
+            Some(AtomicSliceRef {
+                buf: bytes.buf,
+                start: bytes.start,
+                end,
+                texel: self,
+            })
+        } else {
+            None
+        }
+    }
+
+    /// Reinterpret a slice of texel as memory.
+    ///
+    /// Note that you can convert a reference to a single value by [`core::slice::from_ref`].
     pub fn to_bytes<'buf>(self, texel: &'buf [P]) -> &'buf [u8] {
-        self.cast_bytes(texel)
+        // Safety:
+        // * lifetime is not changed
+        // * keeps the exact same size
+        // * validity for byte reading checked by Texel constructor
+        unsafe { slice::from_raw_parts(texel.as_ptr() as *const u8, mem::size_of_val(texel)) }
     }
 
     /// Reinterpret a mutable slice of texel as memory.
     ///
     /// Note that you can convert a reference to a single value by [`core::slice::from_mut`].
     pub fn to_mut_bytes<'buf>(self, texel: &'buf mut [P]) -> &'buf mut [u8] {
-        self.cast_mut_bytes(texel)
+        // Safety:
+        // * lifetime is not changed
+        // * keeps the exact same size
+        // * validity as bytes checked by Texel constructor
+        unsafe { slice::from_raw_parts_mut(texel.as_mut_ptr() as *mut u8, mem::size_of_val(texel)) }
+    }
+
+    /// Reinterpret a slice of texel as memory.
+    ///
+    /// Note that you can convert a reference to a single value by [`core::slice::from_ref`].
+    pub fn cell_bytes<'buf>(self, texel: &'buf [Cell<P>]) -> &'buf Cell<[u8]> {
+        let ptr: *const [u8] =
+            { ptr::slice_from_raw_parts(texel.as_ptr() as *const u8, mem::size_of_val(texel)) };
+
+        // Safety:
+        // * lifetime is not changed
+        // * kept the exact same size
+        // * validity for byte representations both ways checked by Texel constructor
+        unsafe { &*(ptr as *const Cell<[u8]>) }
+    }
+
+    /// Reinterpret a slice of atomically modified texels as atomic bytes.
+    pub fn atomic_bytes<'buf>(self, texel: AtomicSliceRef<'buf, P>) -> AtomicSliceRef<'buf, u8> {
+        AtomicSliceRef {
+            buf: texel.buf,
+            start: texel.start,
+            end: texel.end,
+            texel: constants::U8,
+        }
     }
 
     pub(crate) fn cast_buf<'buf>(self, buffer: &'buf buf) -> &'buf [P] {
@@ -526,21 +837,94 @@ impl<P> Texel<P> {
             )
         }
     }
+}
 
-    pub(crate) fn cast_bytes<'buf>(self, texel: &'buf [P]) -> &'buf [u8] {
-        // Safety:
-        // * lifetime is not changed
-        // * keeps the exact same size
-        // * validity for byte reading checked by Texel constructor
-        unsafe { slice::from_raw_parts(texel.as_ptr() as *const u8, mem::size_of_val(texel)) }
+const _: () = {
+    const fn atomic_is_size_equivalent_of_aligned() {}
+    const fn atomic_is_align_equivalent_of_aligned() {}
+
+    [atomic_is_size_equivalent_of_aligned()]
+        [!(core::mem::size_of::<MaxAtomic>() == core::mem::size_of::<MaxAligned>()) as usize];
+
+    [atomic_is_align_equivalent_of_aligned()]
+        [!(core::mem::align_of::<MaxAtomic>() == core::mem::align_of::<MaxAligned>()) as usize];
+};
+
+impl MaxAtomic {
+    /// Create a vector of atomic zero-bytes.
+    pub const fn zero() -> Self {
+        const Z: AtomicPart = AtomicPart::new(0);
+        MaxAtomic([Z; ATOMIC_PARTS])
     }
 
-    pub(crate) fn cast_mut_bytes<'buf>(self, texel: &'buf mut [P]) -> &'buf mut [u8] {
-        // Safety:
-        // * lifetime is not changed
-        // * keeps the exact same size
-        // * validity as bytes checked by Texel constructor
-        unsafe { slice::from_raw_parts_mut(texel.as_mut_ptr() as *mut u8, mem::size_of_val(texel)) }
+    /// Create a vector from values initialized synchronously.
+    pub fn new(contents: MaxAligned) -> Self {
+        let mut result = Self::zero();
+        let from = bytemuck::bytes_of(&contents);
+        let from = from.chunks_exact(core::mem::size_of::<AtomicPart>());
+
+        for (part, src) in result.0.iter_mut().zip(from) {
+            let to = bytemuck::bytes_of_mut(AtomicPart::get_mut(part));
+            to.copy_from_slice(src);
+        }
+
+        result
+    }
+
+    /// Unwrap an owned value.
+    pub fn into_inner(mut self) -> MaxAligned {
+        let mut result = MaxAligned([0; MAX_ALIGN]);
+        let from = bytemuck::bytes_of_mut(&mut result);
+        let from = from.chunks_exact_mut(core::mem::size_of::<AtomicPart>());
+
+        for (part, to) in self.0.iter_mut().zip(from) {
+            let src = bytemuck::bytes_of(AtomicPart::get_mut(part));
+            to.copy_from_slice(src);
+        }
+
+        result
+    }
+
+    /// Load the data into an owned value.
+    pub fn load(&self, ordering: atomic::Ordering) -> MaxAligned {
+        let mut result = MaxAligned([0; MAX_ALIGN]);
+        let from = bytemuck::bytes_of_mut(&mut result);
+        let from = from.chunks_exact_mut(core::mem::size_of::<AtomicPart>());
+
+        for (part, to) in self.0.iter().zip(from) {
+            let data = part.load(ordering);
+            let src = bytemuck::bytes_of(&data);
+            to.copy_from_slice(src);
+        }
+
+        result
+    }
+}
+
+impl MaxCell {
+    /// Create a vector of atomic zero-bytes.
+    pub const fn zero() -> Self {
+        MaxCell(Cell::new([0; MAX_ALIGN]))
+    }
+
+    /// Create a vector from values initialized synchronously.
+    pub fn new(contents: MaxAligned) -> Self {
+        MaxCell(Cell::new(contents.0))
+    }
+
+    /// Overwrite the contents with new information from another cell.
+    pub fn set(&self, newval: &Self) {
+        self.0.set(newval.0.get())
+    }
+
+    /// Read the current contents from this cell into an owned value.
+    pub fn get(&self) -> MaxAligned {
+        MaxAligned(self.0.get())
+    }
+
+    /// Unwrap an owned value.
+    pub fn into_inner(self) -> MaxAligned {
+        MaxAligned(self.0.into_inner())
     }
 }
 

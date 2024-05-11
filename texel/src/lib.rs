@@ -105,4 +105,8 @@ pub mod texels {
     pub use crate::texel::constants::*;
     pub use crate::texel::IsTransparentWrapper;
     pub use crate::texel::MaxAligned;
+    pub use crate::texel::MaxAtomic;
+    pub use crate::texel::MaxCell;
+
+    pub use crate::buf::{atomic_buf, buf, cell_buf, AtomicBuffer, Buffer, CellBuffer};
 }
