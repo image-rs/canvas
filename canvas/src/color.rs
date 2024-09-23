@@ -19,7 +19,7 @@ use crate::color_matrix::{ColMatrix, RowMatrix};
 /// TODO: colors describe _paths_ to linear display, so we should somehow implement direction
 /// conversions such as "BT.2087 : Colour conversion from Recommendation ITU-R BT.709 to
 /// Recommendation ITU-R BT.2020" in a separate manner.
-#[derive(Clone, Debug, PartialEq, Eq)]
+#[derive(Clone, Debug, PartialEq, Eq, Hash)]
 #[non_exhaustive]
 pub enum Color {
     /// An rgb-ish, additive model based on the CIE 1931 XYZ observers.
@@ -94,7 +94,7 @@ pub enum Color {
 /// Each color model consists of a set of color channels, each of which may occur or be omitted in
 /// buffers using that model. Each model defines one canonical _channel order_. This is the order
 /// they appear in within 'shader units' when pixels are decoded from texels.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 #[non_exhaustive]
 pub enum ColorChannelModel {
     /// An additive model consisting of a redish, greenish, blueish channel.
@@ -169,7 +169,7 @@ pub enum ColorChannelModel {
 ///
 /// This can be thought of as an index into a vector of channels relating to a color. Combine with
 /// a concrete [`ColorChannelModel`] for the canonical index in a 4-sample color representation.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 #[non_exhaustive]
 pub enum ColorChannel {
     /// The weight of the red primary.
@@ -216,7 +216,7 @@ pub enum ColorChannel {
 /// inverse: An electro-optical transfer (EOTF) and opto-electronic transfer function (OETF) that
 /// describes how scene lighting is encoded as an electric signal. These are applied to each
 /// stimulus value.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 #[repr(u8)]
 #[non_exhaustive]
 pub enum Transfer {
@@ -257,7 +257,7 @@ pub enum Transfer {
 /// The reference brightness of the color specification.
 ///
 /// FIXME(color): scaling to reference luminance doesn't have an interface yet.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 #[non_exhaustive]
 pub enum Luminance {
     /// 100cd/m².
@@ -271,7 +271,7 @@ pub enum Luminance {
     DciP3,
 }
 /// The relative stimuli of the three corners of a triangular RGBish gamut.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 #[non_exhaustive]
 pub enum Primaries {
     /// The CIE XYZ 'primaries'.
@@ -300,7 +300,7 @@ pub enum Primaries {
 }
 
 /// The differencing scheme used in a Yuv construction.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 #[non_exhaustive]
 pub enum Differencing {
     /// Rec BT.470 M/PAL differencing scheme for E_U and E_V, the naming origin for 'YUV'.
@@ -370,7 +370,7 @@ pub enum DifferencingYiq {
 /// | F2         | 0.99186 | 1.00000 | 0.67393 |
 /// | F7         | 0.95041 | 1.00000 | 1.08747 |
 /// | F11        | 1.00962 | 1.00000 | 0.64350 |
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 #[non_exhaustive]
 pub enum Whitepoint {
     A,
@@ -848,5 +848,5 @@ impl Primaries {
 fn inverse() {
     const RGBA: [f32; 4] = [1.0, 1.0, 0.0, 1.0];
     let color = Color::SRGB;
-    let rgba = color.from_xyz_once(color.to_xyz_once(RGBA));
+    let _rgba = color.from_xyz_once(color.to_xyz_once(RGBA));
 }

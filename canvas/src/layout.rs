@@ -46,7 +46,7 @@ pub struct CanvasLayout {
 ///
 /// This isn't a full descriptor as width and height in numbers of texels can be derived from the
 /// underlying byte layout.
-#[derive(Clone, Debug, PartialEq)]
+#[derive(Clone, Debug, PartialEq, Hash)]
 pub(crate) struct Plane {
     pub(crate) bytes_per_row: u32,
     /// Representation of the partial texel of the full frame.
@@ -54,7 +54,7 @@ pub(crate) struct Plane {
 }
 
 /// The strides of uniformly spaced (color) channels.
-#[derive(Clone, Debug, PartialEq)]
+#[derive(Clone, Debug, PartialEq, Hash)]
 pub struct ChannelSpec {
     pub channels: u8,
     pub channel_stride: usize,
@@ -119,7 +119,7 @@ pub struct PlanarLayout<T> {
 ///
 /// For usage as an actual image buffer, to convert it to a `CanvasLayout` by calling
 /// [`CanvasLayout::with_row_layout`].
-#[derive(Clone, Debug, PartialEq)]
+#[derive(Clone, Debug, PartialEq, Hash)]
 pub struct RowLayoutDescription {
     pub width: u32,
     pub height: u32,
@@ -128,7 +128,7 @@ pub struct RowLayoutDescription {
 }
 
 /// One Unit of bytes in a texture.
-#[derive(Clone, Debug, PartialEq)]
+#[derive(Clone, Debug, PartialEq, Eq, Hash)]
 pub struct Texel {
     /// Which part of the image a single texel refers to.
     pub block: Block,
@@ -143,7 +143,7 @@ pub struct Texel {
 /// Also each pixel in a block to order of channels, i.e. provides the link between SampleParts and
 /// SampleBits. Note that some block layouts may have _less_ channel than the sample if channels
 /// are not encoded separately, for example block compressed layouts.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 #[non_exhaustive]
 #[repr(u8)]
 pub enum Block {
@@ -183,7 +183,7 @@ pub enum Block {
 ///
 /// FIXME(color): describe YUV, ASTC and BC block formats? Other? We surely can handle planar data
 /// properly?
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub struct SampleParts {
     pub(crate) parts: [Option<ColorChannel>; 4],
     /// The position of each channel as a 2-bit number.
@@ -291,7 +291,7 @@ mod sample_parts {
 /// for example, Int332 has the first sample in the three lowest bits of a u8 (byte-order
 /// independent) and a Int565 has its first channel in the first 5 low-order bits of a u16 little
 /// endian interpretation of the bytes.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 #[non_exhaustive]
 #[allow(non_camel_case_types)]
 #[repr(u8)]
@@ -374,7 +374,7 @@ pub enum SampleBits {
     Float32x6,
 }
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub(crate) enum BitEncoding {
     Opaque,
     UInt,
