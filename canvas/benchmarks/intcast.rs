@@ -101,13 +101,10 @@ fn main() {
         },
     ];
 
-    let mut benches = tests.map(|convert| {
-        Bench::new("framebuf::conversion::main", &convert.name())
-            .with(convert.prepare().expect("Failed to setup benchmark"))
-    });
-
-    // Technically, we're not meant to call this directly but this makes me sad.. Why are we forced
-    // to use a macro to setup such a simple data structure. Not like the macro makes it possible
-    // to define any more complicated thing than a linear list as well..
-    brunch::analyze(&mut benches[..])
+    let mut benches = brunch::Benches::default();
+    benches.extend(tests.map(|convert| {
+        Bench::new(format!("framebuf::conversion::main::{}", convert.name()))
+            .run(convert.prepare().expect("Failed to setup benchmark"))
+    }));
+    benches.finish();
 }
