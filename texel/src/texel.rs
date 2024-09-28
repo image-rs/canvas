@@ -606,14 +606,35 @@ impl<P> Texel<P> {
     /// *basic soundness* but no particular defined behaviour under parallel modifications to the
     /// memory bytes which describe the value to be loaded.
     ///
-    /// Each atomic unit is touched at most once.
+    /// Each atomic unit is read at most once.
     pub fn load_atomic(self, val: AtomicRef<P>) -> P {
         // SAFETY: by `Texel` being a POD this is a valid representation.
         let mut value = unsafe { core::mem::zeroed::<P>() };
+        let slice = AtomicSliceRef::from_ref(val);
+        self.load_atomic_slice_unchecked(slice, core::slice::from_mut(&mut value));
+        value
+    }
 
+    /// Load values from an atomic slice.
+    ///
+    /// The results is only correct if no concurrent modification occurs. The library promises
+    /// *basic soundness* but no particular defined behaviour under parallel modifications to the
+    /// memory bytes which describe the value to be loaded.
+    ///
+    /// Each atomic unit is read at most once.
+    ///
+    /// # Panics
+    ///
+    /// This method panics if the slice and the target buffer do not have the same logical length.
+    pub fn load_atomic_slice(self, val: AtomicSliceRef<P>, into: &mut [P]) {
+        assert_eq!(val.len(), into.len());
+        self.load_atomic_slice_unchecked(val, into);
+    }
+
+    fn load_atomic_slice_unchecked(self, val: AtomicSliceRef<P>, into: &mut [P]) {
         let offset = val.start / core::mem::size_of::<AtomicPart>();
         let mut initial_skip = val.start % core::mem::size_of::<AtomicPart>();
-        let mut target = self.to_mut_bytes(core::slice::from_mut(&mut value));
+        let mut target = self.to_mut_bytes(into);
 
         let mut buffer = val.buf.0[offset..].iter();
         // By the invariants of `AtomicRef`, that number of bytes is in-bounds.
@@ -632,8 +653,6 @@ impl<P> Texel<P> {
             load = buffer.next().unwrap().load(atomic::Ordering::Relaxed);
             initial_skip = 0;
         }
-
-        value
     }
 
     /// Store a value to an atomic slice.
@@ -646,10 +665,33 @@ impl<P> Texel<P> {
     /// is this does not use `compare_exchange_weak`. This implies that concurrent modifications to
     /// bytes *not* covered by this particular representation will not inherently block progress.
     pub fn store_atomic(self, val: AtomicRef<P>, value: P) {
+        let slice = AtomicSliceRef::from_ref(val);
+        self.store_atomic_slice_unchecked(slice, core::slice::from_ref(&value));
+    }
+
+    /// Store values to an atomic slice.
+    ///
+    /// The results is only correct if no concurrent modification occurs. The library promises
+    /// *basic soundness* but no particular defined behaviour under parallel modifications to the
+    /// memory bytes which describe the value to be store.
+    ///
+    /// Provides the same wait-freeness as the underlying platform for `fetch_*` instructions, that
+    /// is this does not use `compare_exchange_weak`. This implies that concurrent modifications to
+    /// bytes *not* covered by this particular representation will not inherently block progress.
+    ///
+    /// # Panics
+    ///
+    /// This method panics if the slice and the source buffer do not have the same logical length.
+    pub fn store_atomic_slice(self, val: AtomicSliceRef<P>, source: &[P]) {
+        assert_eq!(val.len(), source.len());
+        self.store_atomic_slice_unchecked(val, source);
+    }
+
+    fn store_atomic_slice_unchecked(self, val: AtomicSliceRef<P>, from: &[P]) {
         let offset = val.start / core::mem::size_of::<AtomicPart>();
         let mut initial_skip = val.start % core::mem::size_of::<AtomicPart>();
 
-        let mut source = self.to_bytes(core::slice::from_ref(&value));
+        let mut source = self.to_bytes(from);
         let mut buffer = val.buf.0[offset..].iter();
 
         loop {

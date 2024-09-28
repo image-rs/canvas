@@ -1074,6 +1074,47 @@ impl<'lt, P> AtomicSliceRef<'lt, P> {
         }
     }
 
+    /// Get a subslice with the specified tuple of bounds.
+    ///
+    /// Returns `None` if the bounds are out-of-range or if the bounds are otherwise invalid.
+    pub fn get_bounds(self, bounds: (ops::Bound<usize>, ops::Bound<usize>)) -> Option<Self> {
+        let (start, end) = bounds;
+        let len = self.len();
+
+        let start = match start {
+            ops::Bound::Included(start) => start,
+            ops::Bound::Excluded(start) => start.checked_add(1)?,
+            ops::Bound::Unbounded => 0,
+        };
+
+        let end = match end {
+            ops::Bound::Included(end) => end.checked_add(1)?,
+            ops::Bound::Excluded(end) => end,
+            ops::Bound::Unbounded => len,
+        };
+
+        if start > end || end > len {
+            None
+        } else {
+            Some(AtomicSliceRef {
+                buf: self.buf,
+                start: start * self.texel.size(),
+                end: end * self.texel.size(),
+                texel: self.texel,
+            })
+        }
+    }
+
+    /// Equivalent of [`core::slice::from_ref`] but we have no mutable analogue.
+    pub(crate) fn from_ref(value: AtomicRef<'lt, P>) -> Self {
+        AtomicSliceRef {
+            buf: value.buf,
+            start: value.start,
+            end: value.start + value.texel.size(),
+            texel: value.texel,
+        }
+    }
+
     /// Get the number of elements referenced by this slice.
     pub fn len(&self) -> usize {
         self.end.saturating_sub(self.start) / self.texel.size()
