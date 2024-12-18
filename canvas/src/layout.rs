@@ -848,6 +848,8 @@ impl CanvasLayout {
         iter: &[[u32; 2]],
         chunk: ChunkSpec,
     ) {
+        debug_assert_eq!(idx.len(), iter.len());
+
         if self.texel.bits.bytes() == 0 {
             unreachable!("No texel with zero bytes");
         }
@@ -873,6 +875,8 @@ impl CanvasLayout {
         pitch: u32,
         spec: ChunkSpec,
     ) {
+        debug_assert_eq!(iter.len(), idx.len());
+
         let pitch = u64::from(pitch);
         let mut index_chunks = idx.chunks_mut(spec.chunk_size);
         let mut iter = iter.chunks(spec.chunk_size);

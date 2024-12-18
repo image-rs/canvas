@@ -15,12 +15,22 @@ use crate::Canvas;
 
 /// A buffer for conversion.
 pub struct Converter {
-    /// How many texels to do at once.
+    /// How many super-blocks to do at once.
     ///
-    /// Each entry in `in_slices` and `out_slices` except for the last has the size of `chunk`.
+    /// A super-texel is a unit determined by the shader which encompasses a whole number of input
+    /// and output blocks, i.e. a common multiple of both pixel counts.
     chunk: usize,
     /// The number of chunks to do at once.
+    ///
+    /// Each chunk is one consecutive set of super-texels so discontinuities can occur from one
+    /// chunk to the next. That allows us to specialize the texel index and texel fetch code for
+    /// the most common texel index schemes that occur as a result.
     chunk_count: usize,
+
+    /// How many input texels are read in each super-block chunk.
+    chunk_per_fetch: usize,
+    /// How many out texels are written in each super-block chunk.
+    chunk_per_write: usize,
 
     super_blocks: TexelBuffer<[u32; 2]>,
     /// Buffer where we store input texels after reading them.
@@ -185,9 +195,9 @@ struct IntShuffleOps {
 struct SuperTexel {
     blocks: Range<u32>,
     /// In blocks per super block.
-    in_super: u32,
+    in_per_super: u32,
     /// Out blocks per super block.
-    out_super: u32,
+    out_per_super: u32,
 }
 
 pub(crate) struct ChunkSpec<'ch> {
@@ -201,6 +211,8 @@ impl Converter {
         Converter {
             chunk: 1024,
             chunk_count: 1,
+            chunk_per_fetch: 0,
+            chunk_per_write: 0,
             super_blocks: TexelBuffer::default(),
             in_texels: TexelBuffer::default(),
             in_coords: TexelBuffer::default(),
@@ -327,9 +339,11 @@ impl Converter {
     }
 
     /// Special case on `convert_texelbuf_with_ops`, when both buffers:
-    /// * utilize an expasion-roundtrip-safe color/bit combination
+    ///
+    /// * utilize an expansion-roundtrip-safe color/bit combination
     /// * have the same bit depths on all channels
     /// * do not require any color conversion between them
+    /// * as a consequence of these, have a common pixel-to-texel ratio of 1-to-1
     ///
     /// This avoids expanding them into `pixel_in_buffer` where they'd be represented as `f32x4`
     /// and thus undergo an expensive `u8->f32->u8` cast chain.
@@ -390,6 +404,16 @@ impl Converter {
         ) where
             T: AsTexel,
         {
+            debug_assert_eq!(
+                that.chunk, that.chunk_per_fetch,
+                "Inconsistent usage of channel shuffle, only applicable to matching texels"
+            );
+
+            debug_assert_eq!(
+                that.chunk, that.chunk_per_write,
+                "Inconsistent usage of channel shuffle, only applicable to matching texels"
+            );
+
             let in_texel = T::texel().array::<N>();
             let out_texel = T::texel().array::<M>();
 
@@ -527,6 +551,10 @@ impl Converter {
         frame_in: &Canvas,
         frame_out: &mut Canvas,
     ) {
+        // We *must* make progress.
+        assert!(self.chunk > 0);
+        assert!(self.chunk_count > 0);
+
         use core::slice::from_mut;
         // We use a notion of 'supertexels', the common multiple of input and output texel blocks.
         // That is, if the input is a 2-by-2 pixel block and the output is single pixels then we
@@ -535,6 +563,17 @@ impl Converter {
         // Anyways, first we fill the coordinate buffers, then calculate the planar indices.
         let (sb_x, sb_y) = self.super_texel(info);
         let mut blocks = Self::blocks(sb_x.blocks.clone(), sb_y.blocks.clone());
+
+        assert!(sb_x.in_per_super > 0);
+        assert!(sb_x.in_per_super > 0);
+        assert!(sb_x.out_per_super > 0);
+        assert!(sb_y.out_per_super > 0);
+
+        self.chunk_per_fetch = self.chunk * (sb_x.in_per_super * sb_y.in_per_super) as usize;
+        self.chunk_per_write = self.chunk * (sb_x.out_per_super * sb_y.out_per_super) as usize;
+
+        assert!(self.chunk_per_fetch > 0);
+        assert!(self.chunk_per_write > 0);
 
         loop {
             let at_once = self.chunk * self.chunk_count;
@@ -566,6 +605,8 @@ impl Converter {
 
         let super_width = core::cmp::max(b0.width(), b1.width());
         let super_height = core::cmp::max(b0.height(), b1.height());
+
+        // All currently supported texels are a power-of-two.
         assert!(super_width % b0.width() == 0);
         assert!(super_width % b1.width() == 0);
         assert!(super_height % b0.height() == 0);
@@ -579,13 +620,13 @@ impl Converter {
         (
             SuperTexel {
                 blocks: 0..sb_height,
-                in_super: super_height / b0.height(),
-                out_super: super_height / b1.height(),
+                in_per_super: super_height / b0.height(),
+                out_per_super: super_height / b1.height(),
             },
             SuperTexel {
                 blocks: 0..sb_width,
-                in_super: super_width / b0.width(),
-                out_super: super_width / b1.width(),
+                in_per_super: super_width / b0.width(),
+                out_per_super: super_width / b1.width(),
             },
         )
     }
@@ -599,7 +640,7 @@ impl Converter {
         sb_y: &SuperTexel,
     ) {
         fn is_trivial_super(sup: &SuperTexel) -> bool {
-            sup.in_super == 1 && sup.out_super == 1
+            sup.in_per_super == 1 && sup.out_per_super == 1
         }
 
         self.in_coords.resize(0);
@@ -620,10 +661,10 @@ impl Converter {
                 .as_mut_slice()
                 .copy_from_slice(&self.super_blocks);
         } else {
-            let in_chunk_len = (sb_x.in_super * sb_y.in_super) as usize;
+            let in_chunk_len = (sb_x.in_per_super * sb_y.in_per_super) as usize;
             self.in_coords
                 .resize(self.super_blocks.len() * in_chunk_len);
-            let out_chunk_len = (sb_x.out_super * sb_y.out_super) as usize;
+            let out_chunk_len = (sb_x.out_per_super * sb_y.out_per_super) as usize;
             self.out_coords
                 .resize(self.super_blocks.len() * out_chunk_len);
 
@@ -637,18 +678,18 @@ impl Converter {
                 .chunks_exact_mut(out_chunk_len);
 
             for &[bx, by] in self.super_blocks.as_slice().iter() {
-                let (sx, sy) = (bx * sb_x.in_super, by * sb_y.in_super);
+                let (sx, sy) = (bx * sb_x.in_per_super, by * sb_y.in_per_super);
                 if let Some(chunk) = in_chunks.next() {
-                    Self::blocks(0..sb_x.in_super, 0..sb_y.in_super)(chunk);
+                    Self::blocks(0..sb_x.in_per_super, 0..sb_y.in_per_super)(chunk);
                     for p in chunk.iter_mut() {
                         let [ix, iy] = *p;
                         *p = [sx + ix, sy + iy];
                     }
                 }
 
-                let (sx, sy) = (bx * sb_x.out_super, by * sb_y.out_super);
+                let (sx, sy) = (bx * sb_x.out_per_super, by * sb_y.out_per_super);
                 if let Some(chunk) = out_chunks.next() {
-                    Self::blocks(0..sb_x.out_super, 0..sb_y.out_super)(chunk);
+                    Self::blocks(0..sb_x.out_per_super, 0..sb_y.out_per_super)(chunk);
                     for p in chunk.iter_mut() {
                         let [ox, oy] = *p;
                         *p = [sx + ox, sy + oy];
@@ -665,13 +706,13 @@ impl Converter {
 
         let in_chunk = ChunkSpec {
             chunks: self.in_slices.as_mut_slice(),
-            chunk_size: self.chunk,
+            chunk_size: self.chunk_per_fetch,
             should_defer_texel_ops: converter.should_defer_texel_read,
         };
 
         let out_chunk = ChunkSpec {
             chunks: self.out_slices.as_mut_slice(),
-            chunk_size: self.chunk,
+            chunk_size: self.chunk_per_write,
             should_defer_texel_ops: converter.should_defer_texel_write,
         };
 
@@ -681,6 +722,7 @@ impl Converter {
             &mut self.in_index_list,
             in_chunk,
         );
+
         (ops.fill_out_index)(
             &info,
             self.out_coords.as_slice(),
@@ -778,8 +820,8 @@ impl Converter {
              * `in_texels`.
              */
             let chunks = self.in_slices.as_mut_slice();
-            let indexes = self.in_index_list.chunks(self.chunk);
-            let range = (0..self.in_index_list.len()).step_by(self.chunk);
+            let indexes = self.in_index_list.chunks(self.chunk_per_fetch);
+            let range = (0..self.in_index_list.len()).step_by(self.chunk_per_fetch);
 
             for (chunk, (indexes, start)) in chunks.iter_mut().zip(indexes.zip(range)) {
                 let [_, available] = chunk;
@@ -805,7 +847,7 @@ impl Converter {
                 idx: &self.in_index_list,
                 into: &mut self.in_texels,
                 range: 0..self.in_index_list.len(),
-            })
+            });
         }
     }
 
@@ -830,6 +872,9 @@ impl Converter {
             let idx = idx[range.clone()].iter();
             let texels = &from.as_texels(texel)[range];
             let texel_slice = into.as_mut_texels(texel);
+
+            // The index structure and used texel type should match.
+            debug_assert_eq!(idx.len(), texels.len());
 
             for (&index, from) in idx.zip(texels) {
                 if let Some(into) = texel_slice.get_mut(index) {
@@ -859,8 +904,8 @@ impl Converter {
              * the `out_texels`.
              */
             let chunks = self.out_slices.as_slice();
-            let indexes = self.out_index_list.chunks(self.chunk);
-            let range = (0..self.out_index_list.len()).step_by(self.chunk);
+            let indexes = self.out_index_list.chunks(self.chunk_per_write);
+            let range = (0..self.out_index_list.len()).step_by(self.chunk_per_write);
 
             for (&chunk, (indexes, start)) in chunks.iter().zip(indexes.zip(range)) {
                 let [_, unwritten] = chunk;
@@ -1372,7 +1417,7 @@ impl CommonPixel {
     // target buffer by chunks if this is available.
     fn join_bits<const N: usize>(
         info: &Info,
-        ops: &ConvertOps,
+        _: &ConvertOps,
         bits: [[FromBits; 4]; N],
         pixel_buf: &TexelBuffer,
         out_texels: &mut TexelBuffer,
@@ -1412,6 +1457,8 @@ impl CommonPixel {
             fn run<T>(mut self, texel: Texel<T>) -> () {
                 let texel_slice = self.out_texels.as_mut_texels(texel);
                 let pixel_slice = self.pixel_buf.as_texels(self.join.array::<N>());
+
+                debug_assert_eq!(texel_slice.len(), pixel_slice.len());
 
                 for ch in [0u8, 1, 2, 3] {
                     for (texbits, pixels) in texel_slice.iter_mut().zip(pixel_slice) {
