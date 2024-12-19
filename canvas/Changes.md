@@ -1,3 +1,12 @@
+## 0.4.3
+
+Bug fixes:
+- Conversion between packed and unpacked texel layouts behaves correctly in
+  many cases for large images.
+
+New feature:
+- Derive `Hash`, `Eq` on many additional types in `color` and `layout`.
+
 ## 0.4.2
 
 Bug fixes:
