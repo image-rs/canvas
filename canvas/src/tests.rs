@@ -463,3 +463,100 @@ fn incorrect_strided() {
 
     assert!(layout.is_err());
 }
+
+/// Verify some bit packing code by manually constructed matching pairs, with partial texel blocks.
+#[test]
+fn a_bitpack_dilemma_wrapped() {
+    let from = Texel::new_u8(SampleParts::Luma);
+
+    let into = Texel {
+        block: Block::Pack1x8,
+        bits: SampleBits::UInt1x8,
+        parts: SampleParts::Luma,
+    };
+
+    let mut from = Canvas::new(CanvasLayout::with_texel(&from, 23, 4).unwrap());
+    let mut into = Canvas::new(CanvasLayout::with_texel(&into, 23, 4).unwrap());
+
+    #[rustfmt::skip]
+    const IMG_BW_LUMA: &[u8; 23 * 4] = &[
+        0, 0, 0, 0, 0, 0, 0, 0,  128, 128, 128, 128, 128, 128, 128, 128,  0, 0, 0, 0, 0, 0, 0,
+        0, 0, 0, 0, 0, 0, 0, 0,    8,   8,   8,   8,   8,   8,   8,   8,  0, 0, 0, 0, 0, 0, 0,
+        0, 0, 0, 0, 0, 0, 0, 128,  8,   8,   8,   8,   8,   8,   8,   8,  0, 0, 0, 0, 0, 0, 128,
+        0, 0, 0, 0, 0, 0, 0, 0,  128, 128, 128, 128, 128, 128, 128, 128,  0, 0, 0, 0, 0, 0, 0,
+    ];
+
+    #[rustfmt::skip]
+    const IMG_BW_PACKED: &[u8; 3 * 4] = &[
+        0x00, 0xff, 0x00,
+        0x00, 0x00, 0x00,
+        0x01, 0x00, 0x02,
+        0x00, 0xff, 0x00,
+    ];
+
+    from.as_bytes_mut().copy_from_slice(IMG_BW_LUMA);
+    from.convert(&mut into);
+
+    assert_eq!(into.as_bytes(), IMG_BW_PACKED);
+}
+
+/// Verify some bit packing code by manually constructed matching pairs, with full texel blocks.
+#[test]
+fn a_bitpack_dilemma_unwrapped() {
+    let texel_from = Texel::new_u8(SampleParts::Luma);
+
+    let texel_into = Texel {
+        block: Block::Pack1x8,
+        bits: SampleBits::UInt1x8,
+        parts: SampleParts::Luma,
+    };
+
+    let mut from = Canvas::new(CanvasLayout::with_texel(&texel_from, 24, 9).unwrap());
+    let mut into = Canvas::new(CanvasLayout::with_texel(&texel_into, 24, 9).unwrap());
+
+    #[rustfmt::skip]
+    const IMG_BW_LUMA: &[u8; 24 * 9] = &[
+        0, 0, 0, 0, 0, 0, 0, 0,    8,   8,   8,   8,   8,   8,   8,   8,  0, 0, 0, 0, 0, 0, 0, 128,
+        0, 0, 0, 0, 0, 0, 0, 0,  128, 128, 128, 128, 128, 128, 128, 128,  0, 0, 0, 0, 0, 0, 0, 128,
+        0, 0, 0, 0, 0, 0, 0, 128,  8,   8,   8,   8,   8,   8,   8,   8,  0, 0, 0, 0, 0, 0, 128, 128,
+        0, 0, 0, 0, 0, 0, 0, 0,  128, 128, 128, 128, 128, 128, 128, 128,  0, 0, 0, 0, 0, 0, 0, 128,
+
+        0, 0, 0, 0, 0, 0, 0, 0,    8,   8,   8,   8,   8,   8,   8,   8,  0, 0, 0, 0, 0, 0, 0, 128,
+        0, 0, 0, 0, 0, 0, 0, 0,    8,   8,   8,   8,   8,   8,   8,   8,  0, 0, 0, 0, 0, 0, 0, 128,
+        0, 0, 0, 0, 0, 0, 0, 0,    8,   8,   8,   8,   8,   8,   8,   8,  0, 0, 0, 0, 0, 0, 0, 128,
+        0, 0, 0, 0, 0, 0, 0, 0,    8,   8,   8,   8,   8,   8,   8,   8,  0, 0, 0, 0, 0, 0, 0, 128,
+
+        0, 0, 0, 0, 0, 0, 0, 0,  128, 128, 128, 128, 128, 128, 128, 128,  0, 0, 0, 0, 0, 0, 128, 128,
+    ];
+
+    #[rustfmt::skip]
+    const IMG_BW_PACKED: &[u8; 3 * 9] = &[
+        0x00, 0x00, 0x01,
+        0x00, 0xff, 0x01,
+        0x01, 0x00, 0x03,
+        0x00, 0xff, 0x01,
+
+        0x00, 0x00, 0x01,
+        0x00, 0x00, 0x01,
+        0x00, 0x00, 0x01,
+        0x00, 0x00, 0x01,
+
+        0x00, 0xff, 0x03,
+    ];
+
+    from.as_bytes_mut().copy_from_slice(IMG_BW_LUMA);
+    from.convert(&mut into);
+
+    assert_eq!(into.as_bytes(), IMG_BW_PACKED);
+
+    for i in (0..48).step_by(1) {
+        let mut from = Canvas::new(CanvasLayout::with_texel(&texel_from, 24, 9 + i).unwrap());
+        let mut into = Canvas::new(CanvasLayout::with_texel(&texel_into, 24, 9 + i).unwrap());
+        let i = i as usize;
+
+        from.as_bytes_mut()[24 * i..].copy_from_slice(IMG_BW_LUMA);
+        from.convert(&mut into);
+
+        assert_eq!(&into.as_bytes()[3 * i..], IMG_BW_PACKED, "{i}");
+    }
+}
