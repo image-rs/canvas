@@ -14,12 +14,20 @@ pub(crate) struct RawImage<Buf, Layout> {
     layout: Layout,
 }
 
-pub(crate) trait BufferLike: ops::Deref<Target = buf> {
+pub(crate) trait BufferLike {
+    /// Get the length of the buffer in bytes.
+    fn byte_len(&self) -> usize;
+    /// Convert the bytes into a normalized buffer allocation.
     fn into_owned(self) -> Buffer;
-    fn take(&mut self) -> Self;
+    /// Transfer all bytes to a new instance.
+    fn take(&mut self) -> Self
+    where
+        Self: Sized;
 }
 
-pub(crate) trait BufferMut: BufferLike + ops::DerefMut {}
+pub(crate) trait BufferRef: BufferLike + ops::Deref<Target = buf> {}
+
+pub(crate) trait BufferMut: BufferRef + ops::DerefMut {}
 
 pub(crate) trait Growable: BufferLike {
     fn grow_to(&mut self, _: usize);
@@ -54,20 +62,6 @@ impl<B: Growable, L> RawImage<B, L> {
             buffer: self.buffer,
             layout,
         }
-    }
-
-    /// Convert the inner layout to a dynamic one.
-    ///
-    /// This is mostly convenience. Also not that `DynLayout` is of course not _completely_ generic
-    /// but tries to emulate a large number of known layouts.
-    ///
-    /// # Panics
-    /// This method panics if the new layout requires more bytes and allocation fails.
-    pub(crate) fn into_dynamic(self) -> RawImage<B, DynLayout>
-    where
-        DynLayout: Decay<L>,
-    {
-        self.decay()
     }
 
     /// Change the layout, reusing and growing the buffer.
@@ -209,10 +203,10 @@ impl<B, L> RawImage<B, L> {
     /// Panics if the buffer does not have enough space for the layout.
     pub fn from_buffer(layout: L, buffer: B) -> Self
     where
-        B: ops::Deref<Target = buf>,
+        B: BufferLike,
         L: Layout,
     {
-        assert!(<dyn Layout>::fits_buf(&layout, &buffer));
+        assert!(<dyn Layout>::fits_buffer(&layout, &buffer));
         RawImage { buffer, layout }
     }
 
@@ -402,12 +396,12 @@ impl<B: BufferLike, L: Layout> RawImage<B, L> {
 
     /// Reuse the buffer for a new image layout of the same type.
     pub(crate) fn try_reuse(&mut self, layout: L) -> Result<(), BufferReuseError> {
-        if self.as_capacity_bytes().len() >= layout.byte_len() {
+        if self.buffer.byte_len() >= layout.byte_len() {
             self.layout = layout;
             Ok(())
         } else {
             Err(BufferReuseError {
-                capacity: self.as_capacity_bytes().len(),
+                capacity: self.buffer.byte_len(),
                 requested: Some(layout.byte_len()),
             })
         }
@@ -420,7 +414,7 @@ impl<B: BufferLike, L: Layout> RawImage<B, L> {
     {
         let t = f(&mut self.layout);
         assert!(
-            self.layout.byte_len() <= self.buffer.len(),
+            self.layout.byte_len() <= self.buffer.byte_len(),
             "Modification required buffer allocation, was not in-place"
         );
         t
@@ -471,7 +465,10 @@ impl<B: BufferLike, L: SliceLayout> RawImage<B, L> {
     }
 
     /// Convert back into an vector-like of sample types.
-    pub(crate) fn into_buffer(self) -> TexelBuffer<L::Sample> {
+    pub(crate) fn into_buffer(self) -> TexelBuffer<L::Sample>
+    where
+        B: BufferRef,
+    {
         let sample = self.layout.sample();
         // Avoid calling any method of `Layout` after this. Not relevant for safety but might be in
         // the future, if we want to avoid the extra check in `resize`.
@@ -485,6 +482,10 @@ impl<B: BufferLike, L: SliceLayout> RawImage<B, L> {
 }
 
 impl BufferLike for Buffer {
+    fn byte_len(&self) -> usize {
+        self.as_bytes().len()
+    }
+
     fn into_owned(self) -> Self {
         self
     }
@@ -495,6 +496,10 @@ impl BufferLike for Buffer {
 }
 
 impl BufferLike for &'_ mut buf {
+    fn byte_len(&self) -> usize {
+        self.as_bytes().len()
+    }
+
     fn into_owned(self) -> Buffer {
         Buffer::from(self.as_bytes())
     }
@@ -504,12 +509,34 @@ impl BufferLike for &'_ mut buf {
     }
 }
 
+impl BufferLike for &'_ buf {
+    fn byte_len(&self) -> usize {
+        self.as_bytes().len()
+    }
+
+    fn into_owned(self) -> Buffer {
+        Buffer::from(self.as_bytes())
+    }
+
+    fn take(&mut self) -> Self {
+        core::mem::take(self)
+    }
+}
+
+impl dyn Layout + '_ {
+    fn fits_buffer(&self, buffer: &dyn BufferLike) -> bool {
+        self.byte_len() <= buffer.byte_len()
+    }
+}
+
 impl Growable for Buffer {
     fn grow_to(&mut self, bytes: usize) {
         Buffer::grow_to(self, bytes);
     }
 }
 
+impl BufferRef for Buffer {}
 impl BufferMut for Buffer {}
 
+impl BufferRef for &'_ mut buf {}
 impl BufferMut for &'_ mut buf {}

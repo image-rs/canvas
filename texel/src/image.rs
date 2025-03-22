@@ -282,6 +282,22 @@ impl<L> Image<L> {
         self.inner.as_capacity_bytes_mut()
     }
 
+    /// Get a reference to the aligned unstructured bytes of the image.
+    ///
+    /// Note that this may return more bytes than required for the specific layout for various
+    /// reasons. See also [`Self::as_capacity_bytes`].
+    pub fn as_capacity_buf(&self) -> &buf {
+        self.inner.as_capacity_buf()
+    }
+
+    /// Get a mutable reference to the unstructured bytes of the image.
+    ///
+    /// Note that this may return more bytes than required for the specific layout for various
+    /// reasons. See also [`Self::as_capacity_bytes_mut`].
+    pub fn as_capacity_buf_mut(&mut self) -> &mut buf {
+        self.inner.as_capacity_buf_mut()
+    }
+
     /// View this buffer as a slice of pixels.
     ///
     /// This reinterprets the bytes of the buffer. It can be used to view the buffer as any kind of
