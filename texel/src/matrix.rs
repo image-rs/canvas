@@ -193,7 +193,7 @@ impl<P> Matrix<P> {
     fn new_raw(inner: TexelBuffer<P>, layout: Layout<P>) -> Self {
         assert_eq!(inner.len(), layout.len(), "Texel count agrees with buffer");
         Matrix {
-            inner: RawImage::from_buffer(inner, layout),
+            inner: RawImage::from_texel_buffer(inner, layout),
         }
     }
 
@@ -243,7 +243,7 @@ impl<P> Matrix<P> {
     /// all indices are valid in both directions.
     pub fn transmute_to<Q: AsTexel>(self, pixel: Texel<Q>) -> Matrix<Q> {
         let layout = self.layout().transmute_to(pixel);
-        let inner = self.inner.reinterpret_unguarded(|_| layout);
+        let inner = self.inner.mogrify_layout(|_| layout);
         Matrix { inner }
     }
 

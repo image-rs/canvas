@@ -54,6 +54,13 @@ pub trait Layout {
     fn byte_len(&self) -> usize;
 }
 
+impl dyn Layout + '_ {
+    #[inline]
+    pub fn fits_buf(&self, bytes: &crate::buf::buf) -> bool {
+        self.byte_len() <= bytes.as_bytes().len()
+    }
+}
+
 /// Convert one layout to a less strict one.
 ///
 /// In contrast to `From`/`Into` which is mostly assumed to model a lossless conversion the
