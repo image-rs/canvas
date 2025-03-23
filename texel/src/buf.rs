@@ -121,6 +121,10 @@ pub struct cell_buf(cell::Cell<[u8]>);
 /// use raw pointers so that the original provenance is retained. Also we must avoid offering
 /// methods that would refer to the `buf` attribute's memory outside that minimal region.
 pub struct AtomicSliceRef<'lt, P = u8> {
+    /// This must be aligned to `MAX_ALIGN`. We could relax it to `AtomicPart` but that would be
+    /// dependent on system configuration. Since this invisible state is nevertheless hugely
+    /// important for the region considered aliased, let's avoid exposing that varying behavior as
+    /// much as possible. Crate-internal operations may use the more granular unit internally.
     pub(crate) buf: &'lt atomic_buf,
     /// The underlying logical texel type this is bound to.
     pub(crate) texel: Texel<P>,
@@ -343,10 +347,16 @@ impl buf {
         Self::from_bytes_mut(bytes).unwrap()
     }
 
+    /// Reduce the number of bytes covered by this buffer slice.
+    #[must_use = "Does not mutate self"]
+    #[track_caller]
     pub fn truncate(&self, at: usize) -> &Self {
         Self::from_bytes(&self.as_bytes()[..at]).unwrap()
     }
 
+    /// Reduce the number of bytes covered by this mutable buffer slice.
+    #[must_use = "Does not mutate self"]
+    #[track_caller]
     pub fn truncate_mut(&mut self, at: usize) -> &mut Self {
         Self::from_bytes_mut(&mut self.as_bytes_mut()[..at]).unwrap()
     }
@@ -852,7 +862,14 @@ impl cell_buf {
         cell_buf::from_slice(data.as_ref())
     }
 
+    /// Get the length of available memory in bytes.
+    pub fn len(&self) -> usize {
+        self.0.as_slice_of_cells().len()
+    }
+
     /// Reduce the number of bytes covered by this slice.
+    #[must_use = "Does not mutate self"]
+    #[track_caller]
     pub fn truncate(&self, at: usize) -> &Self {
         // We promise this does not panic since the buffer is in fact aligned.
         Self::from_bytes(&self.0.as_slice_of_cells()[..at]).unwrap()
@@ -971,6 +988,11 @@ impl atomic_buf {
         T: AsRef<[MaxAtomic]> + ?Sized,
     {
         atomic_buf::from_slice(data.as_ref())
+    }
+
+    /// Get the length of available memory in bytes.
+    pub fn len(&self) -> usize {
+        core::mem::size_of_val(self)
     }
 
     /// Split into two aligned buffers.
@@ -1504,14 +1526,15 @@ mod tests {
         let another_first = cell_buf::new(&data[..1]);
 
         let data: Vec<_> = (0u8..).take(MAX_ALIGN).collect();
-        first
-            .as_texels(U8)
-            .as_slice_of_cells()
-            .iter()
-            .zip(&data)
-            .for_each(|(a, b)| {
-                a.set(*b);
-            });
+        U8.store_cell_slice(first.as_texels(U8), &data);
+        let mut alternative: Vec<_> = (1u8..).take(MAX_ALIGN).collect();
+        U8.load_cell_slice(another_first.as_texels(U8), &mut alternative);
+
+        // These two alias, so the read must have worked. Alternative must now be changed.
+        assert_eq!(data, alternative);
+
+        U8.load_cell_slice(tail.truncate(MAX_ALIGN).as_texels(U8), &mut alternative);
+        assert_ne!(data, alternative);
     }
 
     #[test]
@@ -1531,9 +1554,44 @@ mod tests {
     }
 
     #[test]
+    fn cell_empty() {
+        let empty = cell_buf::new(&[]);
+        assert_eq!(empty.len(), 0);
+    }
+
+    #[test]
+    fn cell_from_bytes() {
+        const SIZE: usize = 16;
+        struct LignMeUp<N>([MaxAligned; 0], N);
+
+        let data = [0u8; SIZE].map(cell::Cell::new);
+        let data: LignMeUp<[_; SIZE]> = LignMeUp([], data);
+
+        let empty = cell_buf::from_bytes(&data.1[..]).expect("this was properly aligned");
+        assert_eq!(empty.len(), SIZE);
+    }
+
+    #[test]
+    fn cell_from_mut_bytes() {
+        const SIZE: usize = 16;
+        struct LignMeUp<N>([MaxAligned; 0], N);
+
+        let data = [0u8; SIZE];
+        let mut data: LignMeUp<[_; SIZE]> = LignMeUp([], data);
+
+        let empty = cell_buf::from_bytes_mut(&mut data.1[..]).expect("this was properly aligned");
+        assert_eq!(empty.len(), SIZE);
+    }
+
+    #[test]
+    fn atomic_empty() {
+        let empty = atomic_buf::new(&[]);
+        assert_eq!(empty.len(), 0);
+    }
+
+    #[test]
     fn atomic_construction() {
         let data = [const { MaxAtomic::zero() }; 10];
-        let _empty = atomic_buf::new(&data[..0]);
         let cell = atomic_buf::new(&data);
 
         let (first, tail) = cell.split_at(MAX_ALIGN);
