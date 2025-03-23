@@ -429,14 +429,35 @@ impl atomic_buf {
     ///
     /// The bytes need to be aligned to `ALIGNMENT`.
     pub fn from_bytes(bytes: AtomicSliceRef<u8>) -> Option<&Self> {
-        if bytes.start & Self::ALIGNMENT == 0 {
+        if bytes.start % Self::ALIGNMENT == 0 {
             let offset = bytes.start / core::mem::size_of::<AtomicPart>();
-            let buffer = &bytes.buf.0[offset..];
+            let len = bytes.len().div_ceil(core::mem::size_of::<AtomicPart>());
+            let buffer = &bytes.buf.0[offset..][..len];
             // Safety: these types are binary compatible. The metadata is also the same, as both
             // types encapsulate a slice of `AtomicPart`-sized types.
             Some(unsafe { &*(buffer as *const _ as *const Self) })
         } else {
             None
+        }
+    }
+
+    /// Wrap bytes in an atomic `buf`.
+    ///
+    /// The bytes need to be aligned to `ALIGNMENT`. Additionally the length must be a multiple of
+    /// the `MaxAtomic` size's units.
+    pub fn from_bytes_mut(bytes: &mut [u8]) -> Option<&Self> {
+        if bytes.as_ptr() as usize % Self::ALIGNMENT != 0 {
+            None
+        } else if bytes.len() % core::mem::size_of::<MaxAtomic>() != 0 {
+            None
+        } else {
+            let len = bytes.len() / core::mem::size_of::<MaxAtomic>();
+            let ptr = bytes.as_ptr() as *mut u8 as *mut MaxAtomic;
+            // SAFETY: We fulfill the alignment and length requirements for this cast, i.e. there
+            // are enough bytes available in this slice. Additionally, we still guarantee that this
+            // is at least aligned to `MAX_ALIGN`.
+            let slice = unsafe { &*ptr::slice_from_raw_parts(ptr, len) };
+            Some(atomic_buf::from_slice(slice))
         }
     }
 }
@@ -460,6 +481,9 @@ impl cell_buf {
         unsafe { &*(memory as *const Self) }
     }
 
+    /// Interpret a slice of bytes in an unsynchronized shared `cell_buf`.
+    ///
+    /// The bytes need to be aligned to `ALIGNMENT`.
     pub fn from_bytes(bytes: &[Cell<u8>]) -> Option<&Self> {
         if bytes.as_ptr() as usize % Self::ALIGNMENT == 0 {
             // Safety: these types are binary compatible. The metadata is also the same, as both
@@ -468,6 +492,14 @@ impl cell_buf {
         } else {
             None
         }
+    }
+
+    /// Wrap bytes in an unsynchronized shared `cell_buf`.
+    ///
+    /// The bytes need to be aligned to `ALIGNMENT`.
+    pub fn from_bytes_mut(bytes: &mut [u8]) -> Option<&Self> {
+        let slice = Cell::from_mut(bytes).as_slice_of_cells();
+        Self::from_bytes(slice)
     }
 }
 
@@ -543,7 +575,7 @@ impl<P> Texel<P> {
 
     /// Construct a texel by wrapping into a transparent wrapper.
     ///
-    /// TODO: a constructor for Texel<O> based on proof of transmutation from &mut P to &mut O,
+    /// TODO: a constructor for `Texel<O>` based on proof of transmutation from &mut P to &mut O,
     /// based on the standard transmutation RFC. This is more flexible than bytemuck's
     /// TransparentWrapper trait.
     pub const fn transparent_wrap<O>(self, _: IsTransparentWrapper<P, O>) -> Texel<O> {
@@ -600,6 +632,28 @@ impl<P> Texel<P> {
         unsafe { ptr::read(val) }.into_inner()
     }
 
+    /// Efficiently store a slice of shared read values to cells.
+    #[track_caller]
+    pub fn store_cell_slice(self, val: &Cell<[P]>, from: &[P]) {
+        assert_eq!(from.len(), val.as_slice_of_cells().len());
+        // SAFETY: by the constructor, this inner type can be copied byte-by-byte. And `Cell` is a
+        // transparent wrapper. By our assertion the slices are of the same length. Note we do not
+        // assert these slices to be non-overlapping! We could have `P = Cell<X>` and then it's
+        // unclear if Rust allows these to overlap or not. I guess we currently have that `Cell<X>`
+        // is never `Copy` so we couldn't have such a `Texel` but alas that negative impl is not
+        // guaranteed by any logic I came across.
+        unsafe { ptr::copy(from.as_ptr(), Cell::as_ptr(val).cast(), from.len()) }
+    }
+
+    /// Efficiently copy a slice of values from cells to an owned buffer.
+    #[track_caller]
+    pub fn load_cell_slice(self, val: &Cell<[P]>, into: &mut [P]) {
+        assert_eq!(into.len(), val.as_slice_of_cells().len());
+        // SAFETY: see `store_cell_slice` but since we have a mutable reference to the target we
+        // can assume it does not overlap.
+        unsafe { ptr::copy_nonoverlapping(Cell::as_ptr(val).cast(), into.as_mut_ptr(), into.len()) }
+    }
+
     /// Load a value from an atomic slice.
     ///
     /// The results is only correct if no concurrent modification occurs. The library promises
@@ -626,6 +680,7 @@ impl<P> Texel<P> {
     /// # Panics
     ///
     /// This method panics if the slice and the target buffer do not have the same logical length.
+    #[track_caller]
     pub fn load_atomic_slice(self, val: AtomicSliceRef<P>, into: &mut [P]) {
         assert_eq!(val.len(), into.len());
         self.load_atomic_slice_unchecked(val, into);
@@ -682,6 +737,7 @@ impl<P> Texel<P> {
     /// # Panics
     ///
     /// This method panics if the slice and the source buffer do not have the same logical length.
+    #[track_caller]
     pub fn store_atomic_slice(self, val: AtomicSliceRef<P>, source: &[P]) {
         assert_eq!(val.len(), source.len());
         self.store_atomic_slice_unchecked(val, source);
@@ -700,7 +756,7 @@ impl<P> Texel<P> {
             let mut value = original;
 
             let target = &mut bytemuck::bytes_of_mut(&mut value)[initial_skip..];
-            let copy_len = source.len().min(source.len());
+            let copy_len = target.len().min(source.len());
             target[..copy_len].copy_from_slice(&source[..copy_len]);
             source = &source[copy_len..];
 
@@ -761,6 +817,14 @@ impl<P> Texel<P> {
         } else {
             None
         }
+    }
+
+    /// Reinterpret a shared slice as a some particular type.
+    ///
+    /// Note that the size (in bytes) of the slice will be shortened if the size of `P` is not a
+    /// divisor of the input slice's size.
+    pub fn to_cell<'buf>(self, buffer: &'buf [MaxCell]) -> &'buf Cell<[P]> {
+        cell_buf::from_slice(buffer).as_texels(self)
     }
 
     /// Reinterpret a slice of texel as memory.
@@ -965,6 +1029,13 @@ impl MaxAtomic {
 }
 
 impl MaxCell {
+    /// Cast between the wrapper and its internal representation.
+    pub(crate) fn as_raw_cells(this: &[MaxCell]) -> &[Cell<[u8; MAX_ALIGN]>] {
+        // Safety: repr(transparent) and this is its inner representation. The cell of u8s is
+        // always aligned properly for the reference.
+        unsafe { &*(this as *const _ as *const _) }
+    }
+
     /// Create a vector of atomic zero-bytes.
     pub const fn zero() -> Self {
         MaxCell(Cell::new([0; MAX_ALIGN]))

@@ -1,6 +1,6 @@
 use core::ops;
 
-use crate::buf::{buf, Buffer};
+use crate::buf::{atomic_buf, buf, cell_buf, AtomicBuffer, Buffer, CellBuffer};
 use crate::layout::{Decay, DynLayout, Layout, SliceLayout, Take};
 use crate::{BufferReuseError, TexelBuffer};
 
@@ -495,13 +495,27 @@ impl BufferLike for Buffer {
     }
 }
 
-impl BufferLike for &'_ mut buf {
+impl BufferLike for CellBuffer {
     fn byte_len(&self) -> usize {
-        self.as_bytes().len()
+        core::mem::size_of_val(&**self)
     }
 
     fn into_owned(self) -> Buffer {
-        Buffer::from(self.as_bytes())
+        self.to_owned()
+    }
+
+    fn take(&mut self) -> Self {
+        core::mem::take(self)
+    }
+}
+
+impl BufferLike for AtomicBuffer {
+    fn byte_len(&self) -> usize {
+        core::mem::size_of_val(&**self)
+    }
+
+    fn into_owned(self) -> Buffer {
+        self.to_owned()
     }
 
     fn take(&mut self) -> Self {
@@ -516,6 +530,53 @@ impl BufferLike for &'_ buf {
 
     fn into_owned(self) -> Buffer {
         Buffer::from(self.as_bytes())
+    }
+
+    fn take(&mut self) -> Self {
+        core::mem::take(self)
+    }
+}
+
+impl BufferLike for &'_ mut buf {
+    fn byte_len(&self) -> usize {
+        self.as_bytes().len()
+    }
+
+    fn into_owned(self) -> Buffer {
+        Buffer::from(self.as_bytes())
+    }
+
+    fn take(&mut self) -> Self {
+        core::mem::take(self)
+    }
+}
+
+impl BufferLike for &'_ cell_buf {
+    fn byte_len(&self) -> usize {
+        self.as_texels(crate::texels::U8).as_slice_of_cells().len()
+    }
+
+    fn into_owned(self) -> Buffer {
+        let mut target = Buffer::new(self.byte_len());
+        crate::texels::U8.load_cell_slice(self.as_texels(crate::texels::U8), target.as_bytes_mut());
+        target
+    }
+
+    fn take(&mut self) -> Self {
+        core::mem::take(self)
+    }
+}
+
+impl BufferLike for &'_ atomic_buf {
+    fn byte_len(&self) -> usize {
+        self.as_texels(crate::texels::U8).len()
+    }
+
+    fn into_owned(self) -> Buffer {
+        let source = self.as_texels(crate::texels::U8);
+        let mut target = Buffer::new(source.len());
+        source.write_to_slice(target.as_bytes_mut());
+        target
     }
 
     fn take(&mut self) -> Self {

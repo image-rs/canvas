@@ -138,7 +138,7 @@ impl<T: Layout> Decay<T> for Bytes {
 /// the receiver then this would restrict third-parties from using it to its full potential. In
 /// particular, since `Mend` is a foreign trait the coherence rules make it impossible to specify:
 ///
-/// TODO Terminology: https://rust-lang.github.io/rfcs/2451-re-rebalancing-coherence.html
+/// TODO Terminology: <https://rust-lang.github.io/rfcs/2451-re-rebalancing-coherence.html>
 ///
 /// ```ignore
 /// impl<T> Mend<LocalType> for T {}

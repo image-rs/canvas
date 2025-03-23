@@ -42,7 +42,7 @@ pub struct Buffer {
 /// requested byte slice is the obligation of the user *under all circumstances*. As a consequence,
 /// there are also no operations which explicitely uncouple length and capacity. All operations
 /// simply work on best effort of making some number of bytes available.
-#[derive(Clone)]
+#[derive(Clone, Default)]
 pub struct AtomicBuffer {
     /// The backing memory.
     inner: Arc<[MaxAtomic]>,
@@ -61,7 +61,7 @@ pub struct AtomicBuffer {
 /// requested byte slice is the obligation of the user *under all circumstances*. As a consequence,
 /// there are also no operations which explicitely uncouple length and capacity. All operations
 /// simply work on best effort of making some number of bytes available.
-#[derive(Clone)]
+#[derive(Clone, Default)]
 pub struct CellBuffer {
     /// The backing memory, aligned by allocating it with the proper type.
     inner: Rc<[MaxCell]>,
@@ -81,7 +81,9 @@ pub struct buf([u8]);
 ///
 /// In contrast to other types, this can not be slice at arbitrary byte ends since we must
 /// still utilize potentially full atomic instructions for the underlying interaction! Until we get
-/// custom metadata, we have our own 'reference type' here.
+/// custom metadata, we have our own 'reference type' here with [`AtomicSliceRef`]. The slice
+/// reference always extends over a slice of the underlying [`MaxAtomic`] type and only stores
+/// offsets into this.
 ///
 /// This type is relatively useless in the public interface, this makes interfaces slightly less
 /// convenient but it is internal to the library anyways.
@@ -111,6 +113,13 @@ pub struct cell_buf(cell::Cell<[u8]>);
 /// additional guarantee.
 ///
 /// For consistency with slices, casting of this type is done via an instance of [`Texel`].
+///
+/// TODO: We could probably make this type smaller. We store the underlying aligned buffer region
+/// but that memory extent can be recreated from an *unaligned* pointer and a length to our actual
+/// data. (Due to alignment and size of [`MaxAligned`] being the same, just downwards align the
+/// pointer for the base and extend to the next alignment boundary upwards). This requires us to
+/// use raw pointers so that the original provenance is retained. Also we must avoid offering
+/// methods that would refer to the `buf` attribute's memory outside that minimal region.
 pub struct AtomicSliceRef<'lt, P = u8> {
     pub(crate) buf: &'lt atomic_buf,
     /// The underlying logical texel type this is bound to.
@@ -836,19 +845,25 @@ impl cell_buf {
     /// Wraps an aligned buffer into `buf`.
     ///
     /// This method will never panic, as the alignment of the data is guaranteed.
-    pub fn new<T>(_data: &T) -> &Self
+    pub fn new<T>(data: &T) -> &Self
     where
         T: AsRef<[MaxCell]> + ?Sized,
     {
-        // We can't use `bytemuck` here.
-        todo!()
+        cell_buf::from_slice(data.as_ref())
     }
 
+    /// Reduce the number of bytes covered by this slice.
     pub fn truncate(&self, at: usize) -> &Self {
         // We promise this does not panic since the buffer is in fact aligned.
         Self::from_bytes(&self.0.as_slice_of_cells()[..at]).unwrap()
     }
 
+    /// Split into two aligned buffers.
+    ///
+    /// # Panics
+    ///
+    /// This panics if the byte offset given by `at` is not aligned according to max alignment or
+    /// if the index is out-of-bounds.
     #[track_caller]
     pub fn split_at(&self, at: usize) -> (&Self, &Self) {
         assert!(at % MAX_ALIGN == 0);
@@ -948,6 +963,35 @@ impl TexelMappingBuffer for &'_ cell_buf {
 }
 
 impl atomic_buf {
+    /// Wraps an aligned buffer into `buf`.
+    ///
+    /// This method will never panic, as the alignment of the data is guaranteed.
+    pub fn new<T>(data: &T) -> &Self
+    where
+        T: AsRef<[MaxAtomic]> + ?Sized,
+    {
+        atomic_buf::from_slice(data.as_ref())
+    }
+
+    /// Split into two aligned buffers.
+    ///
+    /// # Panics
+    ///
+    /// This panics if the byte offset given by `at` is not aligned according to max alignment or
+    /// if the index is out-of-bounds.
+    #[track_caller]
+    pub fn split_at(&self, at: usize) -> (&Self, &Self) {
+        use crate::texels::U8;
+
+        assert!(at % MAX_ALIGN == 0);
+        let slice = self.as_texels(U8);
+        let (a, b) = slice.split_at(at);
+        let left = atomic_buf::from_bytes(a).expect("was previously aligned");
+        let right = atomic_buf::from_bytes(b).expect("was previously aligned");
+
+        (left, right)
+    }
+
     /// Reinterpret the buffer for the specific texel type.
     ///
     /// The alignment of `P` is already checked to be smaller than `MAX_ALIGN` through the
@@ -993,16 +1037,6 @@ impl atomic_buf {
         let mut that = self;
         TexelMappingBuffer::map_within(&mut that, src, dest, f, p, q)
     }
-
-    /// Overwrite bytes within the vector with new data.
-    fn _copy_within(&self, _from: core::ops::Range<usize>, _to: usize) {
-        todo!()
-    }
-
-    /// Overwrite the whole vector with new data.
-    fn _copy_from(&self, _from: core::ops::Range<usize>, _source: &[MaxAtomic], _to: usize) {
-        todo!()
-    }
 }
 
 impl TexelMappingBuffer for &'_ atomic_buf {
@@ -1025,9 +1059,9 @@ impl TexelMappingBuffer for &'_ atomic_buf {
         for idx in 0..len {
             let source_idx = idx + src;
             let target_idx = idx + dest;
-            let source = p.load_atomic(src_buffer.idx(source_idx));
+            let source = p.load_atomic(src_buffer.index_one(source_idx));
             let target = f(source);
-            q.store_atomic(target_buffer.idx(target_idx), target);
+            q.store_atomic(target_buffer.index_one(target_idx), target);
         }
     }
 
@@ -1047,9 +1081,9 @@ impl TexelMappingBuffer for &'_ atomic_buf {
         for idx in (0..len).rev() {
             let source_idx = idx + src;
             let target_idx = idx + dest;
-            let source = p.load_atomic(src_buffer.idx(source_idx));
+            let source = p.load_atomic(src_buffer.index_one(source_idx));
             let target = f(source);
-            q.store_atomic(target_buffer.idx(target_idx), target);
+            q.store_atomic(target_buffer.index_one(target_idx), target);
         }
     }
 
@@ -1064,7 +1098,8 @@ impl<'lt, P> AtomicSliceRef<'lt, P> {
     /// Not `get` since it does not return a reference, and we can not use the standard SliceIndex
     /// trait anyways. Also we do not implement the assertion outside of debug for now, it is also
     /// not used for unsafe code.
-    pub(crate) fn idx(self, idx: usize) -> AtomicRef<'lt, P> {
+    #[track_caller]
+    pub(crate) fn index_one(self, idx: usize) -> AtomicRef<'lt, P> {
         assert!(idx < self.len());
 
         AtomicRef {
@@ -1103,6 +1138,48 @@ impl<'lt, P> AtomicSliceRef<'lt, P> {
                 texel: self.texel,
             })
         }
+    }
+
+    /// See [`Self::get_bounds`] but generic over the bound type.
+    pub fn get(self, bounds: impl core::ops::RangeBounds<usize>) -> Option<Self> {
+        let start = bounds.start_bound().cloned();
+        let end = bounds.end_bound().cloned();
+        self.get_bounds((start, end))
+    }
+
+    /// See [`Self::get_bounds`] and panics appropriately.
+    #[track_caller]
+    pub fn index(self, bounds: impl core::ops::RangeBounds<usize>) -> Self {
+        #[cold]
+        fn panic_on_bounds() -> ! {
+            panic!("Bounds are out of range");
+        }
+
+        match self.get(bounds) {
+            Some(some) => some,
+            None => panic_on_bounds(),
+        }
+    }
+
+    /// Fill this slice with data from a shared read buffer.
+    #[track_caller]
+    pub fn read_from_slice(&self, data: &[P]) {
+        self.texel.store_atomic_slice(*self, data);
+    }
+
+    /// Read from this slice with data from a shared read buffer.
+    ///
+    /// Note that this reads every single unit as if relaxed.
+    #[track_caller]
+    pub fn write_to_slice(&self, data: &mut [P]) {
+        self.texel.load_atomic_slice(*self, data);
+    }
+
+    #[track_caller]
+    pub fn split_at(self, at: usize) -> (Self, Self) {
+        let left = self.index(..at);
+        let right = self.index(at..);
+        (left, right)
     }
 
     /// Equivalent of [`core::slice::from_ref`] but we have no mutable analogue.
@@ -1211,6 +1288,18 @@ impl<T> core::ops::IndexMut<TexelRange<T>> for buf {
         let slice = index.texel.try_to_slice_mut(bytes);
         // We just multiplied the indices by the alignment..
         slice.expect("byte indices validly aligned")
+    }
+}
+
+impl Default for &'_ cell_buf {
+    fn default() -> Self {
+        cell_buf::new(&mut [])
+    }
+}
+
+impl Default for &'_ atomic_buf {
+    fn default() -> Self {
+        atomic_buf::new(&mut [])
     }
 }
 
@@ -1403,5 +1492,67 @@ mod tests {
             output_tap.to_owned().as_texels(U32)[..LEN].to_vec(),
             (0..LEN as u32).collect::<Vec<_>>()
         );
+    }
+
+    #[test]
+    fn cell_construction() {
+        let data = [const { MaxCell::zero() }; 10];
+        let _empty = cell_buf::new(&data[..0]);
+        let cell = cell_buf::new(&data);
+
+        let (first, tail) = cell.split_at(MAX_ALIGN);
+        let another_first = cell_buf::new(&data[..1]);
+
+        let data: Vec<_> = (0u8..).take(MAX_ALIGN).collect();
+        first
+            .as_texels(U8)
+            .as_slice_of_cells()
+            .iter()
+            .zip(&data)
+            .for_each(|(a, b)| {
+                a.set(*b);
+            });
+    }
+
+    #[test]
+    #[should_panic]
+    fn cell_unaligned_split() {
+        let data = [const { MaxCell::zero() }; 10];
+        // 1 is not an aligned index.
+        cell_buf::new(&data).split_at(1);
+    }
+
+    #[test]
+    #[should_panic]
+    fn cell_oob_split() {
+        let data = [const { MaxCell::zero() }; 1];
+        // this is out of bounds.
+        cell_buf::new(&data).split_at(MAX_ALIGN + 1);
+    }
+
+    #[test]
+    fn atomic_construction() {
+        let data = [const { MaxAtomic::zero() }; 10];
+        let _empty = atomic_buf::new(&data[..0]);
+        let cell = atomic_buf::new(&data);
+
+        let (first, tail) = cell.split_at(MAX_ALIGN);
+        let another_first = atomic_buf::new(&data[..1]);
+        assert_eq!(another_first.as_texels(U8).len(), MAX_ALIGN);
+        assert_eq!(first.as_texels(U8).len(), MAX_ALIGN);
+
+        let data: Vec<_> = (0u8..).take(MAX_ALIGN).collect();
+        first.as_texels(U8).read_from_slice(&data);
+        let mut alternative: Vec<_> = (1u8..).take(MAX_ALIGN).collect();
+        another_first.as_texels(U8).write_to_slice(&mut alternative);
+
+        // These two alias, so the read must have worked. Alternative must now be changed.
+        assert_eq!(data, alternative);
+
+        // And the tail does not alias, so we reset alternative back to zero.
+        tail.as_texels(U8)
+            .index(..MAX_ALIGN)
+            .write_to_slice(&mut alternative);
+        assert_ne!(data, alternative);
     }
 }
