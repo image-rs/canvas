@@ -652,31 +652,6 @@ trait TexelMappingBuffer {
     }
 }
 
-trait ByteSlice: Sized {
-    fn len(&self) -> usize;
-    fn split_at(self, at: usize) -> (Self, Self);
-}
-
-impl<'a> ByteSlice for &'a [u8] {
-    fn len(&self) -> usize {
-        (**self).len()
-    }
-
-    fn split_at(self, at: usize) -> (Self, Self) {
-        self.split_at(at)
-    }
-}
-
-impl<'a> ByteSlice for &'a mut [u8] {
-    fn len(&self) -> usize {
-        (**self).len()
-    }
-
-    fn split_at(self, at: usize) -> (Self, Self) {
-        self.split_at_mut(at)
-    }
-}
-
 impl From<&'_ [u8]> for Buffer {
     fn from(content: &'_ [u8]) -> Self {
         // TODO: can this be optimized to avoid initialization before copy?
@@ -1330,6 +1305,9 @@ mod tests {
     use super::*;
     use crate::texels::{MAX, U16, U32, U8};
 
+    // When it's all over.
+    struct AlignMeUp<N>([MaxAligned; 0], N);
+
     #[test]
     fn single_max_element() {
         let mut buffer = Buffer::new(mem::size_of::<MaxAligned>());
@@ -1562,25 +1540,38 @@ mod tests {
     #[test]
     fn cell_from_bytes() {
         const SIZE: usize = 16;
-        struct LignMeUp<N>([MaxAligned; 0], N);
 
         let data = [0u8; SIZE].map(cell::Cell::new);
-        let data: LignMeUp<[_; SIZE]> = LignMeUp([], data);
+        let data: AlignMeUp<[_; SIZE]> = AlignMeUp([], data);
 
         let empty = cell_buf::from_bytes(&data.1[..]).expect("this was properly aligned");
         assert_eq!(empty.len(), SIZE);
     }
 
     #[test]
+    fn cell_unaligned_from_bytes() {
+        let data = [const { MaxCell::zero() }; 1];
+        let unaligned = &cell_buf::new(&data).as_texels(U8).as_slice_of_cells()[1..];
+        assert!(cell_buf::from_bytes(unaligned).is_none());
+    }
+
+    #[test]
     fn cell_from_mut_bytes() {
         const SIZE: usize = 16;
-        struct LignMeUp<N>([MaxAligned; 0], N);
-
-        let data = [0u8; SIZE];
-        let mut data: LignMeUp<[_; SIZE]> = LignMeUp([], data);
+        let mut data: AlignMeUp<[_; SIZE]> = AlignMeUp([], [0u8; SIZE]);
 
         let empty = cell_buf::from_bytes_mut(&mut data.1[..]).expect("this was properly aligned");
         assert_eq!(empty.len(), SIZE);
+    }
+
+    #[test]
+    fn cell_unaligned_from_mut_bytes() {
+        const SIZE: usize = 16;
+        let mut data: AlignMeUp<[_; SIZE]> = AlignMeUp([], [0; SIZE]);
+
+        let unaligned = &mut data.1[1..];
+        // Should fail since we must not be able to construct a buffer from unaligned bytes.
+        assert!(cell_buf::from_bytes_mut(unaligned).is_none());
     }
 
     #[test]
@@ -1612,5 +1603,60 @@ mod tests {
             .index(..MAX_ALIGN)
             .write_to_slice(&mut alternative);
         assert_ne!(data, alternative);
+
+        let another_first = atomic_buf::from_bytes(first.as_texels(U8))
+            .expect("the whole buffer is always aligned");
+        another_first.as_texels(U8).write_to_slice(&mut alternative);
+        assert_eq!(data, alternative);
+    }
+
+    #[test]
+    fn atomic_from_bytes() {
+        let data = [const { MaxAtomic::zero() }; 1];
+        let cell = atomic_buf::new(&data);
+
+        // Best way to get a buffer is to get it from an existing one..
+        let data = cell.as_texels(U8);
+        let new_buf = atomic_buf::from_bytes(data).expect("this was properly aligned");
+        assert_eq!(new_buf.len(), MAX_ALIGN);
+    }
+
+    #[test]
+    fn atomic_unaligned_from_bytes() {
+        let data = [const { MaxAtomic::zero() }; 1];
+        let cell = atomic_buf::new(&data);
+
+        let unaligned = cell.as_texels(U8).index(1..);
+        assert!(atomic_buf::from_bytes(unaligned).is_none());
+    }
+
+    #[test]
+    fn atomic_from_mut_bytes() {
+        const SIZE: usize = MAX_ALIGN * 2;
+        let mut data: AlignMeUp<[_; SIZE]> = AlignMeUp([], [0u8; SIZE]);
+
+        let empty = atomic_buf::from_bytes_mut(&mut data.1[..]).expect("this was properly aligned");
+        assert_eq!(empty.len(), SIZE);
+    }
+
+    #[test]
+    fn atomic_too_small_from_mut_bytes() {
+        const SIZE: usize = MAX_ALIGN / 2;
+        let mut data: AlignMeUp<[_; SIZE]> = AlignMeUp([], [0; SIZE]);
+
+        let unaligned = &mut data.1[1..];
+        // Should fail since we must not be able to construct a buffer out of smaller units to
+        // avoid differing type behavior.
+        assert!(atomic_buf::from_bytes_mut(unaligned).is_none());
+    }
+
+    #[test]
+    fn atomic_unaligned_from_mut_bytes() {
+        const SIZE: usize = 16;
+        let mut data: AlignMeUp<[_; SIZE]> = AlignMeUp([], [0; SIZE]);
+
+        let unaligned = &mut data.1[1..];
+        // Should fail since we must not be able to construct a buffer from unaligned bytes.
+        assert!(atomic_buf::from_bytes_mut(unaligned).is_none());
     }
 }

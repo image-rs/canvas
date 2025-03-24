@@ -427,7 +427,8 @@ impl atomic_buf {
 
     /// Wrap a sub-slice of bytes from an atomic buffer into a new `atomic_buf`.
     ///
-    /// The bytes need to be aligned to `ALIGNMENT`.
+    /// The bytes need to be aligned to `ALIGNMENT`. Returns `None` if these checks fail and return
+    /// the newly wrapped buffer in `Some` otherwise.
     pub fn from_bytes(bytes: AtomicSliceRef<u8>) -> Option<&Self> {
         if bytes.start % Self::ALIGNMENT == 0 {
             let offset = bytes.start / core::mem::size_of::<AtomicPart>();
@@ -444,7 +445,8 @@ impl atomic_buf {
     /// Wrap bytes in an atomic `buf`.
     ///
     /// The bytes need to be aligned to `ALIGNMENT`. Additionally the length must be a multiple of
-    /// the `MaxAtomic` size's units.
+    /// the `MaxAtomic` size's units. Returns `None` if these checks fail and return the newly
+    /// wrapped buffer in `Some` otherwise.
     pub fn from_bytes_mut(bytes: &mut [u8]) -> Option<&Self> {
         if bytes.as_ptr() as usize % Self::ALIGNMENT != 0 {
             None
