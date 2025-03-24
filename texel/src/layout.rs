@@ -250,6 +250,49 @@ pub trait RasterMut<Pixel>: Raster<Pixel> {
     }
 }
 
+/// An index type that identifies a 'plane' of an image layout.
+///
+/// The byte offset of all planes must adhere to alignment requirements as set by [`MaxAligned`],
+/// each individually. This ensures that each plane can be addressed equally.
+///
+/// Planes may be any part of the image that can be addressed independently. This could be that
+/// the component matrices of different channels are stored after each other, or interleaved ways
+/// of storing different quantization levels, optimizations for cache oblivious layouts etc. While
+/// planes usually constructed to be non-overlapping this requirement is not inherent in the trait.
+/// However, consider that mutable access to overlapping planes is not possible.
+///
+/// There may be multiple different ways of indexing into the same layout. Similar to the standard
+/// libraries [Index](`core::ops::Index`) trait, this trait can be implemented to provide an index
+/// into a layout defined in a different crate.
+pub trait PlaneOf<L> {
+    type Plane: Layout;
+
+    /// Get the layout describing the plane.
+    fn get_plane(self, layout: &L) -> Option<Self::Plane>;
+}
+
+/// A layout that supports being moved in memory.
+///
+/// Such a layout only occupies a smaller but contiguous range of its full buffer length. One can
+/// query that offset and modify it.
+pub trait Relocate: Layout {
+    /// The offset of the first relevant byte of this layout.
+    ///
+    /// This should be smaller or equal to the length.
+    fn offset(&self) -> usize;
+
+    /// Move the layout to another start offset, in bytes.
+    ///
+    /// The length of the layout should implicitly be modified by this operation, that is the range
+    /// between the start offset and its apparent length should remain the same.
+    ///
+    /// # Panics
+    ///
+    /// This function can, and should, panic if the requested delta would make the length exceed
+    /// `isize::MAX`
+    fn relocate(&mut self, delta: usize);
+}
+
 /// A dynamic descriptor of an image's layout.
 ///
 /// FIXME: figure out if this is 'right' to expose in this crate.

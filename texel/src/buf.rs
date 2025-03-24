@@ -350,6 +350,7 @@ impl buf {
         &mut self.0
     }
 
+    /// Split at an aligned byte offset.
     pub fn split_at(&self, at: usize) -> (&Self, &Self) {
         assert!(at % MAX_ALIGN == 0);
         let (a, b) = self.0.split_at(at);
@@ -358,6 +359,14 @@ impl buf {
         (Self::new(a), Self::new(b))
     }
 
+    /// Remove everything past the given point, return the tail we removed.
+    pub(crate) fn take_at_mut<'a>(this: &mut &'a mut Self, at: usize) -> &'a mut Self {
+        let (pre, post) = buf::split_at_mut(core::mem::take(this), at);
+        *this = pre;
+        post
+    }
+
+    /// Mutably split at an aligned byte offset.
     pub fn split_at_mut(&mut self, at: usize) -> (&mut Self, &mut Self) {
         assert!(at % MAX_ALIGN == 0);
         let (a, b) = self.0.split_at_mut(at);

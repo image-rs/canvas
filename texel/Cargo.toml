@@ -2,10 +2,10 @@
 name = "image-texel"
 version = "0.3.1"
 edition = "2018"
-rust-version = "1.61"
+rust-version = "1.77"
 
 description = "A texel type and allocated buffers suitable for image data."
-authors = ["Andreas Molzer <andreas.molzer@gmx.de>"]
+authors = ["Aurelia Molzer <andreas.molzer@gmx.de>"]
 license = "MIT"
 readme = "Readme.md"
 documentation = "https://docs.rs/image-texel"

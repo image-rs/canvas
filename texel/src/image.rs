@@ -14,7 +14,9 @@ use core::{fmt, ops};
 
 pub(crate) use self::raw::RawImage;
 use crate::buf::{buf, Buffer};
-use crate::layout::{Bytes, Decay, Layout, Mend, Raster, RasterMut, SliceLayout, Take, TryMend};
+use crate::layout::{
+    Bytes, Decay, Layout, Mend, PlaneOf, Raster, RasterMut, Relocate, SliceLayout, Take, TryMend,
+};
 use crate::texel::MAX_ALIGN;
 use crate::{Texel, TexelBuffer};
 
@@ -778,6 +780,71 @@ impl<'data, L> ImageMut<'data, L> {
         *buffer = initial;
 
         RawImage::from_buffer(Bytes(next.len()), next).into()
+    }
+
+    /// Split this mutable reference into independent planes.
+    ///
+    /// This method ignores any of the requested planes which overlap, including if the same plane
+    /// is requested multiple times. Only the first requested plane is returned. Planes that would
+    /// not be aligned to the required alignment are also ignored.
+    pub fn into_planes<const N: usize, D>(
+        self,
+        descriptors: [D; N],
+    ) -> [Option<ImageMut<'data, D::Plane>>; N]
+    where
+        D: PlaneOf<L>,
+        D::Plane: Relocate,
+    {
+        let layout = self.layout();
+        let mut planes = descriptors.map(|d| {
+            let plane = PlaneOf::get_plane(d, layout);
+            let empty_buf = buf::new_mut(&mut []);
+            (plane, empty_buf)
+        });
+
+        // Now re-adjust the planes in order. For this, first collect their associated order.
+        let mut remap = planes.each_mut().map(|plane| {
+            // Maps all undefined planes to the zero-offset, so that they get skipped.
+            let offset = plane.0.as_ref().map_or(0, |p| p.offset());
+            (offset, plane)
+        });
+
+        // Stable sort, we want to keep the first of each plane that overlaps.
+        remap.sort_by_key(|&(offset, _)| offset);
+
+        let mut consumed = 0;
+        let (mut buffer, _) = self.inner.into_parts();
+
+        for (offset, plane) in remap {
+            let Some(skip_by) = offset.checked_sub(consumed) else {
+                plane.0 = None;
+                continue;
+            };
+
+            if skip_by % MAX_ALIGN != 0 {
+                plane.0 = None;
+                continue;
+            }
+
+            let Some(layout) = &mut plane.0 else {
+                continue;
+            };
+
+            buffer = buf::take_at_mut(&mut buffer, skip_by);
+            consumed += skip_by;
+
+            layout.relocate(0);
+            let len = layout.byte_len().div_ceil(MAX_ALIGN);
+            let tail = buf::take_at_mut(&mut buffer, len);
+            consumed += len;
+
+            plane.1 = buffer;
+            buffer = tail;
+        }
+
+        planes.map(|(layout, buffer)| -> Option<_> {
+            Some(RawImage::from_buffer(layout?, buffer).into())
+        })
     }
 }
 
