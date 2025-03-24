@@ -904,107 +904,19 @@ impl cell_buf {
     }
 }
 
-// FIXME: Use `memcmp`. Or can we get away with casting to a byte slice`. Since we *are* the
-// running thread and comparison happens byte-wise it would also not matter if we create reference
-// to the underlying data.
 impl cmp::PartialEq for cell_buf {
     fn eq(&self, other: &Self) -> bool {
-        if self.len() != other.len() {
-            return false;
-        }
-
-        // If they have the same length, they cover the same memory. No need to iterate.
-        if (self as *const cell_buf).addr() == (other as *const cell_buf).addr() {
-            return true;
-        }
-
-        // We can iterate these slices full cells at a time. Note that these are also highly
-        // aligned, hence each load is actually quite perfect.
-        //
-        // TODO: On some x86 the cache predictor can independently fetch-ahead one stream *per
-        // page*. For large enough slices we are guaranteed to fully fill the cache anyways. Hence,
-        // the fastest way to do this is to iterate through multiple pages at a time since we are
-        // never compute bound.
-        //
-        // Then: compare by checking the full units first, and then doing a partial copy into a
-        // stack unit for the tail each.
-        const UNIT_SZ: usize = mem::size_of::<MaxCell>();
-        assert!(UNIT_SZ.is_power_of_two());
-
-        let tail_start = self.len() - self.len() % UNIT_SZ;
-
-        let lhs = self.as_texels(MAX).as_slice_of_cells().iter();
-        let rhs = other.as_texels(MAX).as_slice_of_cells().iter();
-
-        if !lhs.zip(rhs).all(|(a, b)| a.get().0 == b.get().0) {
-            return false;
-        }
-
-        if tail_start == self.len() {
-            return true;
-        }
-
-        use crate::texels::U8;
-        let a = &self.as_texels(U8).as_slice_of_cells()[tail_start..];
-        let b = &other.as_texels(U8).as_slice_of_cells()[tail_start..];
-
-        debug_assert_eq!(a.len(), b.len());
-        let tail_len = a.len();
-
-        // TODO: not clear if the compiler is smart enough to figure out that the special cases of
-        // rather small tails can be 'unrolled' into much smaller comparisons and stack
-        // initialization. Best we can try is to remove any claim over the variable allocation as
-        // soon as possible.
-        let buf_a = &mut [0u8; UNIT_SZ][..tail_len];
-        let buf_b = &mut [0u8; UNIT_SZ][..tail_len];
-
-        U8.load_cell_slice(a, buf_a);
-        U8.load_cell_slice(b, buf_b);
-
-        buf_a == buf_b
+        // Doing this comparison discards alignment information that is probably checked for in the
+        // kernel of memcmp. If the compiler inlines it, it may be able to remove that. Or not.
+        // Should not matter too much but if it does in your benchmarks (be sure to do multiple
+        // platforms and check with assembly throughput) then let me know.
+        crate::texels::U8.cell_memory_eq(self.0.as_slice_of_cells(), other.0.as_slice_of_cells())
     }
 }
 
-// FIXME: Use `memcmp` here?
 impl cmp::PartialEq<[u8]> for cell_buf {
     fn eq(&self, other: &[u8]) -> bool {
-        if self.len() != other.len() {
-            return false;
-        }
-
-        // NOTE: see `PartialEq<cell_buf>` for a more detailed explanation of the algorithm.
-        const UNIT_SZ: usize = mem::size_of::<MaxCell>();
-        assert!(UNIT_SZ.is_power_of_two());
-
-        let tail_start = self.len() - self.len() % UNIT_SZ;
-
-        let lhs = self.as_texels(MAX).as_slice_of_cells().iter();
-        let rhs = other.chunks_exact(UNIT_SZ);
-
-        if !lhs.zip(rhs).all(|(a, b)| a.get().0 == *b) {
-            return false;
-        }
-
-        if tail_start == self.len() {
-            return true;
-        }
-
-        use crate::texels::U8;
-        let a = &self.as_texels(U8).as_slice_of_cells()[tail_start..];
-        let b = &other[tail_start..];
-
-        debug_assert_eq!(a.len(), b.len());
-        let tail_len = a.len();
-
-        // TODO: not clear if the compiler is smart enough to figure out that the special cases of
-        // rather small tails can be 'unrolled' into much smaller comparisons and stack
-        // initialization. Best we can try is to remove any claim over the variable allocation as
-        // soon as possible.
-        let buf_a = &mut [0u8; UNIT_SZ][..tail_len];
-
-        U8.load_cell_slice(a, buf_a);
-
-        buf_a == b
+        crate::texels::U8.cell_bytes_eq(self.0.as_slice_of_cells(), other)
     }
 }
 

@@ -936,6 +936,58 @@ impl<P> Texel<P> {
         }
     }
 
+    /// Compare two cell slices by memory, not by any content equality.
+    ///
+    /// TODO: expose this, but under what name?
+    pub(crate) fn cell_memory_eq<'a, 'b>(self, a: &'a [Cell<P>], b: &'b [Cell<P>]) -> bool {
+        let len = mem::size_of_val(a);
+
+        if len != mem::size_of_val(b) {
+            return false;
+        }
+
+        // SAFETY: the same reasoning applies for both.
+        // - this covers the exact memory range as the underlying slice of cells.
+        // - the Texel certifies it is initialized memory.
+        // - the lifetime is the same.
+        // - the memory in the slice is not mutated. This is a little more subtle but `Cell` is not
+        //   `Sync` so this thread is the only that could modify those contents currently as we
+        //   have a reference to those contents. But also in this thread this function _is
+        //   currently running_ and so it suffices that it does not to modify the contents. It does
+        //   not access the slice through the cell in any way.
+        // - the total size is at most `isize::MAX` since it was already a reference to it.
+        let lhs: &'a [u8] = unsafe { slice::from_raw_parts(a.as_ptr() as *const u8, len) };
+        let rhs: &'b [u8] = unsafe { slice::from_raw_parts(b.as_ptr() as *const u8, len) };
+
+        lhs == rhs
+    }
+
+    /// Compare a slices with untyped memory.
+    ///
+    /// TODO: expose this, but under what name?
+    pub(crate) fn cell_bytes_eq<'a, 'b>(self, a: &'a [Cell<P>], rhs: &[u8]) -> bool {
+        let len = mem::size_of_val(a);
+
+        if len != mem::size_of_val(rhs) {
+            return false;
+        }
+
+        // SAFETY: see `cell_memory_eq`.
+        let lhs: &'a [u8] = unsafe { slice::from_raw_parts(a.as_ptr() as *const u8, len) };
+
+        // Really these two should not be overlapping! If the compiler knew, maybe a better memory
+        // compare that is more aware of the cache effects of loading? But to be honest it should
+        // not matter much.
+        debug_assert!({
+            let a_range = lhs.as_ptr_range();
+            let b_range = rhs.as_ptr_range();
+
+            a_range.end <= b_range.start || b_range.end <= a_range.start
+        });
+
+        lhs == rhs
+    }
+
     pub(crate) fn cast_buf<'buf>(self, buffer: &'buf buf) -> &'buf [P] {
         debug_assert_eq!(buffer.as_ptr() as usize % mem::align_of::<MaxAligned>(), 0);
         debug_assert_eq!(buffer.as_ptr() as usize % mem::align_of::<P>(), 0);
