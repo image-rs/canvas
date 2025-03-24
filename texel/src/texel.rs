@@ -454,10 +454,11 @@ impl atomic_buf {
             None
         } else {
             let len = bytes.len() / core::mem::size_of::<MaxAtomic>();
-            let ptr = bytes.as_ptr() as *mut u8 as *mut MaxAtomic;
+            let ptr = bytes.as_mut_ptr() as *mut MaxAtomic;
             // SAFETY: We fulfill the alignment and length requirements for this cast, i.e. there
             // are enough bytes available in this slice. Additionally, we still guarantee that this
-            // is at least aligned to `MAX_ALIGN`.
+            // is at least aligned to `MAX_ALIGN`. We also have the shared read-write provenance on
+            // our pointer that a shared reference to atomic requires.
             let slice = unsafe { &*ptr::slice_from_raw_parts(ptr, len) };
             Some(atomic_buf::from_slice(slice))
         }
@@ -635,25 +636,48 @@ impl<P> Texel<P> {
     }
 
     /// Efficiently store a slice of shared read values to cells.
+    ///
+    /// We choose an outer slice for the parameter only since the standard library offers the
+    /// transposition out of the type parameter, but not its inverse yet. Call
+    /// [`Cell::as_slice_of_cells`] as needed.
     #[track_caller]
-    pub fn store_cell_slice(self, val: &Cell<[P]>, from: &[P]) {
-        assert_eq!(from.len(), val.as_slice_of_cells().len());
+    pub fn store_cell_slice(self, val: &[Cell<P>], from: &[P]) {
+        assert_eq!(from.len(), val.len());
         // SAFETY: by the constructor, this inner type can be copied byte-by-byte. And `Cell` is a
         // transparent wrapper. By our assertion the slices are of the same length. Note we do not
         // assert these slices to be non-overlapping! We could have `P = Cell<X>` and then it's
         // unclear if Rust allows these to overlap or not. I guess we currently have that `Cell<X>`
         // is never `Copy` so we couldn't have such a `Texel` but alas that negative impl is not
         // guaranteed by any logic I came across.
-        unsafe { ptr::copy(from.as_ptr(), Cell::as_ptr(val).cast(), from.len()) }
+        unsafe {
+            ptr::copy(
+                from.as_ptr(),
+                // SAFETY: the slice of `Cell`s is all `UnsafeCell`.
+                //
+                // <https://github.com/rust-lang/rust/issues/88248#issuecomment-2397394716>
+                (val as *const [Cell<P>] as *mut [Cell<P>]).cast(),
+                from.len(),
+            )
+        }
     }
 
     /// Efficiently copy a slice of values from cells to an owned buffer.
+    ///
+    /// We choose an outer slice for the parameter only since the standard library offers the
+    /// transposition out of the type parameter, but not its inverse yet. Call
+    /// [`Cell::as_slice_of_cells`] as needed.
     #[track_caller]
-    pub fn load_cell_slice(self, val: &Cell<[P]>, into: &mut [P]) {
-        assert_eq!(into.len(), val.as_slice_of_cells().len());
+    pub fn load_cell_slice(self, val: &[Cell<P>], into: &mut [P]) {
+        assert_eq!(into.len(), val.len());
         // SAFETY: see `store_cell_slice` but since we have a mutable reference to the target we
         // can assume it does not overlap.
-        unsafe { ptr::copy_nonoverlapping(Cell::as_ptr(val).cast(), into.as_mut_ptr(), into.len()) }
+        unsafe {
+            ptr::copy_nonoverlapping(
+                (val as *const [Cell<P>]).cast(),
+                into.as_mut_ptr(),
+                into.len(),
+            )
+        }
     }
 
     /// Load a value from an atomic slice.

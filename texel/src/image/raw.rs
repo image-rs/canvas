@@ -558,7 +558,8 @@ impl BufferLike for &'_ cell_buf {
 
     fn into_owned(self) -> Buffer {
         let mut target = Buffer::new(self.byte_len());
-        crate::texels::U8.load_cell_slice(self.as_texels(crate::texels::U8), target.as_bytes_mut());
+        let texels = self.as_texels(crate::texels::U8).as_slice_of_cells();
+        crate::texels::U8.load_cell_slice(texels, target.as_bytes_mut());
         target
     }
 

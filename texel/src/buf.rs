@@ -904,6 +904,112 @@ impl cell_buf {
     }
 }
 
+// FIXME: Use `memcmp`. Or can we get away with casting to a byte slice`. Since we *are* the
+// running thread and comparison happens byte-wise it would also not matter if we create reference
+// to the underlying data.
+impl cmp::PartialEq for cell_buf {
+    fn eq(&self, other: &Self) -> bool {
+        if self.len() != other.len() {
+            return false;
+        }
+
+        // If they have the same length, they cover the same memory. No need to iterate.
+        if (self as *const cell_buf).addr() == (other as *const cell_buf).addr() {
+            return true;
+        }
+
+        // We can iterate these slices full cells at a time. Note that these are also highly
+        // aligned, hence each load is actually quite perfect.
+        //
+        // TODO: On some x86 the cache predictor can independently fetch-ahead one stream *per
+        // page*. For large enough slices we are guaranteed to fully fill the cache anyways. Hence,
+        // the fastest way to do this is to iterate through multiple pages at a time since we are
+        // never compute bound.
+        //
+        // Then: compare by checking the full units first, and then doing a partial copy into a
+        // stack unit for the tail each.
+        const UNIT_SZ: usize = mem::size_of::<MaxCell>();
+        assert!(UNIT_SZ.is_power_of_two());
+
+        let tail_start = self.len() - self.len() % UNIT_SZ;
+
+        let lhs = self.as_texels(MAX).as_slice_of_cells().iter();
+        let rhs = other.as_texels(MAX).as_slice_of_cells().iter();
+
+        if !lhs.zip(rhs).all(|(a, b)| a.get().0 == b.get().0) {
+            return false;
+        }
+
+        if tail_start == self.len() {
+            return true;
+        }
+
+        use crate::texels::U8;
+        let a = &self.as_texels(U8).as_slice_of_cells()[tail_start..];
+        let b = &other.as_texels(U8).as_slice_of_cells()[tail_start..];
+
+        debug_assert_eq!(a.len(), b.len());
+        let tail_len = a.len();
+
+        // TODO: not clear if the compiler is smart enough to figure out that the special cases of
+        // rather small tails can be 'unrolled' into much smaller comparisons and stack
+        // initialization. Best we can try is to remove any claim over the variable allocation as
+        // soon as possible.
+        let buf_a = &mut [0u8; UNIT_SZ][..tail_len];
+        let buf_b = &mut [0u8; UNIT_SZ][..tail_len];
+
+        U8.load_cell_slice(a, buf_a);
+        U8.load_cell_slice(b, buf_b);
+
+        buf_a == buf_b
+    }
+}
+
+// FIXME: Use `memcmp` here?
+impl cmp::PartialEq<[u8]> for cell_buf {
+    fn eq(&self, other: &[u8]) -> bool {
+        if self.len() != other.len() {
+            return false;
+        }
+
+        // NOTE: see `PartialEq<cell_buf>` for a more detailed explanation of the algorithm.
+        const UNIT_SZ: usize = mem::size_of::<MaxCell>();
+        assert!(UNIT_SZ.is_power_of_two());
+
+        let tail_start = self.len() - self.len() % UNIT_SZ;
+
+        let lhs = self.as_texels(MAX).as_slice_of_cells().iter();
+        let rhs = other.chunks_exact(UNIT_SZ);
+
+        if !lhs.zip(rhs).all(|(a, b)| a.get().0 == *b) {
+            return false;
+        }
+
+        if tail_start == self.len() {
+            return true;
+        }
+
+        use crate::texels::U8;
+        let a = &self.as_texels(U8).as_slice_of_cells()[tail_start..];
+        let b = &other[tail_start..];
+
+        debug_assert_eq!(a.len(), b.len());
+        let tail_len = a.len();
+
+        // TODO: not clear if the compiler is smart enough to figure out that the special cases of
+        // rather small tails can be 'unrolled' into much smaller comparisons and stack
+        // initialization. Best we can try is to remove any claim over the variable allocation as
+        // soon as possible.
+        let buf_a = &mut [0u8; UNIT_SZ][..tail_len];
+
+        U8.load_cell_slice(a, buf_a);
+
+        buf_a == b
+    }
+}
+
+impl cmp::Eq for cell_buf {}
+
 impl TexelMappingBuffer for &'_ cell_buf {
     /// Internally mapping function when the mapping can be done forwards.
     fn map_forward<P, Q>(
@@ -1035,6 +1141,53 @@ impl atomic_buf {
         TexelMappingBuffer::map_within(&mut that, src, dest, f, p, q)
     }
 }
+
+impl cmp::PartialEq for atomic_buf {
+    fn eq(&self, other: &Self) -> bool {
+        if self.len() != other.len() {
+            return false;
+        }
+
+        // If they have the same length, they cover the same memory. Do not iterate.
+        if (self as *const atomic_buf).addr() == (other as *const atomic_buf).addr() {
+            return true;
+        }
+
+        // We can iterate these slices in `AtomicPart` at a time. Note that this is not as complex
+        // as the `cell_buf` case since it can not cover a partial unit. That complexity only comes
+        // with `AtomicSliceRef`.
+        let lhs = self.0.iter();
+        let rhs = other.0.iter();
+
+        lhs.zip(rhs)
+            .all(|(a, b)| a.load(atomic::Ordering::Relaxed) == b.load(atomic::Ordering::Relaxed))
+    }
+}
+
+impl cmp::PartialEq<[u8]> for atomic_buf {
+    fn eq(&self, other: &[u8]) -> bool {
+        if self.len() != other.len() {
+            return false;
+        }
+
+        // We can iterate these slices in `AtomicPart` at a time. Note that this is not as complex
+        // as the `cell_buf` case since it can not cover a partial unit. That complexity only comes
+        // with `AtomicSliceRef`.
+        let lhs = self.0.iter();
+        let rhs = other.chunks_exact(mem::size_of::<AtomicPart>());
+
+        lhs.zip(rhs)
+            // Let the compiler deal with the potentially unaligned load. However it may run better
+            // if we also had an aligned other buffer as a (semi-common) special case? Note how the
+            // value loaded from the atomic varies by platform but all integers have that
+            // `to_ne_bytes´ method and we iterate the slice by that type's size chunks. Should get
+            // optimized away as a compile time constant but we could switch to `array_chunks` in
+            // due time.
+            .all(|(a, b)| a.load(atomic::Ordering::Relaxed).to_ne_bytes() == *b)
+    }
+}
+
+impl cmp::Eq for atomic_buf {}
 
 impl TexelMappingBuffer for &'_ atomic_buf {
     /// Internally mapping function when the mapping can be done forwards.
@@ -1504,14 +1657,20 @@ mod tests {
         let another_first = cell_buf::new(&data[..1]);
 
         let data: Vec<_> = (0u8..).take(MAX_ALIGN).collect();
-        U8.store_cell_slice(first.as_texels(U8), &data);
+        U8.store_cell_slice(first.as_texels(U8).as_slice_of_cells(), &data);
         let mut alternative: Vec<_> = (1u8..).take(MAX_ALIGN).collect();
-        U8.load_cell_slice(another_first.as_texels(U8), &mut alternative);
+        U8.load_cell_slice(
+            another_first.as_texels(U8).as_slice_of_cells(),
+            &mut alternative,
+        );
 
         // These two alias, so the read must have worked. Alternative must now be changed.
         assert_eq!(data, alternative);
 
-        U8.load_cell_slice(tail.truncate(MAX_ALIGN).as_texels(U8), &mut alternative);
+        U8.load_cell_slice(
+            tail.truncate(MAX_ALIGN).as_texels(U8).as_slice_of_cells(),
+            &mut alternative,
+        );
         assert_ne!(data, alternative);
     }
 
@@ -1572,6 +1731,27 @@ mod tests {
         let unaligned = &mut data.1[1..];
         // Should fail since we must not be able to construct a buffer from unaligned bytes.
         assert!(cell_buf::from_bytes_mut(unaligned).is_none());
+    }
+
+    #[test]
+    fn cell_equality() {
+        let data = [const { MaxCell::zero() }; 3];
+        let lhs = cell_buf::new(&data[0..1]);
+        let rhs = cell_buf::new(&data[1..2]);
+
+        let uneq = cell_buf::new(&data[2..3]);
+        uneq.as_texels(U8).as_slice_of_cells()[0].set(1);
+
+        // No `Debug` hence.
+        assert!(lhs == lhs, "Must be equal with itself");
+        assert!(lhs == rhs, "Must be equal with same data");
+        assert!(lhs != uneq, "Must only be equal with same data");
+
+        let mut buffer = [0x42; mem::size_of::<MaxCell>()];
+        assert!(*lhs != buffer[..], "Must only be equal with its data");
+
+        U8.load_cell_slice(lhs.as_texels(U8).as_slice_of_cells(), &mut buffer);
+        assert!(*lhs == buffer[..], "Must be equal with its data");
     }
 
     #[test]
@@ -1658,5 +1838,26 @@ mod tests {
         let unaligned = &mut data.1[1..];
         // Should fail since we must not be able to construct a buffer from unaligned bytes.
         assert!(atomic_buf::from_bytes_mut(unaligned).is_none());
+    }
+
+    #[test]
+    fn atomic_equality() {
+        let data = [const { MaxAtomic::zero() }; 3];
+        let lhs = atomic_buf::new(&data[0..1]);
+        let rhs = atomic_buf::new(&data[1..2]);
+
+        let uneq = atomic_buf::new(&data[2..3]);
+        U8.store_atomic(uneq.as_texels(U8).index_one(0), 1);
+
+        // No `Debug` hence.
+        assert!(lhs == lhs, "Must be equal with itself");
+        assert!(lhs == rhs, "Must be equal with same data");
+        assert!(lhs != uneq, "Must only be equal with same data");
+
+        let mut buffer = [0x42; mem::size_of::<MaxCell>()];
+        assert!(*lhs != buffer[..], "Must only be equal with its data");
+
+        U8.load_atomic_slice(lhs.as_texels(U8), &mut buffer);
+        assert!(*lhs == buffer[..], "Must be equal with its data");
     }
 }

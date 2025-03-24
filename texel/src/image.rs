@@ -8,6 +8,8 @@
 //! possible to use your own texel/pixel wrapper types regardless of the underlying byte
 //! representation. Indeed, the byte buffer need not even represent a pixel matrix (but it's
 //! advised, probably very common, and the only 'supported' use-case).
+mod atomic;
+mod cell;
 mod raw;
 
 use core::{fmt, ops};
@@ -21,6 +23,8 @@ use crate::texel::MAX_ALIGN;
 use crate::{Texel, TexelBuffer};
 
 pub use crate::stride::{StridedBufferMut, StridedBufferRef};
+pub use atomic::AtomicImage;
+pub use cell::CellImage;
 
 /// A container of allocated bytes, parameterized over the layout.
 ///
