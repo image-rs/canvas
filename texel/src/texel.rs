@@ -1107,13 +1107,6 @@ impl MaxAtomic {
 }
 
 impl MaxCell {
-    /// Cast between the wrapper and its internal representation.
-    pub(crate) fn as_raw_cells(this: &[MaxCell]) -> &[Cell<[u8; MAX_ALIGN]>] {
-        // Safety: repr(transparent) and this is its inner representation. The cell of u8s is
-        // always aligned properly for the reference.
-        unsafe { &*(this as *const _ as *const _) }
-    }
-
     /// Create a vector of atomic zero-bytes.
     pub const fn zero() -> Self {
         MaxCell(Cell::new([0; MAX_ALIGN]))
