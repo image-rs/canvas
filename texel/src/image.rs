@@ -568,6 +568,69 @@ impl<'data, L> ImageRef<'data, L> {
 
         RawImage::from_buffer(Bytes(next.len()), next).into()
     }
+
+    /// Split this reference into independent planes.
+    ///
+    /// Planes that fail their indexing operation or that would not be aligned to the required
+    /// alignment are not returned. All other planes are returned in `Some`.
+    pub fn into_planes<const N: usize, D>(
+        self,
+        descriptors: [D; N],
+    ) -> [Option<ImageRef<'data, D::Plane>>; N]
+    where
+        D: PlaneOf<L>,
+        D::Plane: Relocate,
+    {
+        let layout = self.layout();
+        let mut planes = descriptors.map(|d| {
+            let plane = PlaneOf::get_plane(d, layout);
+            let empty_buf = buf::new(&[]);
+            (plane, empty_buf)
+        });
+
+        let (mut buffer, _) = self.inner.into_parts();
+
+        for plane in &mut planes {
+            let Some(layout) = &mut plane.0 else {
+                continue;
+            };
+
+            let skip_by = layout.offset();
+
+            if skip_by % MAX_ALIGN != 0 {
+                plane.0 = None;
+                continue;
+            }
+
+            if buffer.len() < skip_by {
+                plane.0 = None;
+                continue;
+            }
+
+            layout.relocate(0);
+            let len = layout.byte_len().div_ceil(MAX_ALIGN) * MAX_ALIGN;
+
+            // Check this before we consume the buffer. This way the tail can still be used by
+            // following layouts, we ignore this.
+            if buffer.len() - skip_by < len {
+                plane.0 = None;
+                continue;
+            }
+
+            layout.relocate(0);
+            let len = layout.byte_len().div_ceil(MAX_ALIGN);
+
+            let (_pre, tail) = buffer.split_at(skip_by);
+            let (img_buf, _post) = tail.split_at(len);
+
+            plane.1 = img_buf;
+            buffer = tail;
+        }
+
+        planes.map(|(layout, buffer)| -> Option<_> {
+            Some(RawImage::from_buffer(layout?, buffer).into())
+        })
+    }
 }
 
 impl<'data, L> ImageMut<'data, L> {
@@ -816,6 +879,10 @@ impl<'data, L> ImageMut<'data, L> {
         let (mut buffer, _) = self.inner.into_parts();
 
         for (offset, plane) in remap {
+            let Some(layout) = &mut plane.0 else {
+                continue;
+            };
+
             let Some(skip_by) = offset.checked_sub(consumed) else {
                 plane.0 = None;
                 continue;
@@ -826,15 +893,24 @@ impl<'data, L> ImageMut<'data, L> {
                 continue;
             }
 
-            let Some(layout) = &mut plane.0 else {
+            if buffer.len() < skip_by {
+                plane.0 = None;
                 continue;
-            };
+            }
+
+            layout.relocate(0);
+            let len = layout.byte_len().div_ceil(MAX_ALIGN) * MAX_ALIGN;
+
+            // Check this before we consume the buffer. This way the tail can still be used by
+            // following layouts, we ignore this.
+            if buffer.len() - skip_by < len {
+                plane.0 = None;
+                continue;
+            }
 
             buffer = buf::take_at_mut(&mut buffer, skip_by);
             consumed += skip_by;
 
-            layout.relocate(0);
-            let len = layout.byte_len().div_ceil(MAX_ALIGN);
             let tail = buf::take_at_mut(&mut buffer, len);
             consumed += len;
 

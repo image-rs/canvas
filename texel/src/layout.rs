@@ -763,3 +763,25 @@ impl<P> RasterMut<P> for Matrix<P> {
         }
     }
 }
+
+impl<P, L> PlaneOf<&'_ L> for P
+where
+    P: PlaneOf<L>,
+{
+    type Plane = <P as PlaneOf<L>>::Plane;
+
+    fn get_plane(self, layout: &&L) -> Option<Self::Plane> {
+        PlaneOf::get_plane(self, *layout)
+    }
+}
+
+impl<P, L> PlaneOf<&'_ mut L> for P
+where
+    P: PlaneOf<L>,
+{
+    type Plane = <P as PlaneOf<L>>::Plane;
+
+    fn get_plane(self, layout: &&mut L) -> Option<Self::Plane> {
+        PlaneOf::get_plane(self, *layout)
+    }
+}
