@@ -607,7 +607,7 @@ impl<'data, L> ImageRef<'data, L> {
                 continue;
             }
 
-            layout.relocate(0);
+            layout.relocate(Default::default());
             let len = layout.byte_len().div_ceil(MAX_ALIGN) * MAX_ALIGN;
 
             // Check this before we consume the buffer. This way the tail can still be used by
@@ -617,7 +617,6 @@ impl<'data, L> ImageRef<'data, L> {
                 continue;
             }
 
-            layout.relocate(0);
             let len = layout.byte_len().div_ceil(MAX_ALIGN);
 
             let (_pre, tail) = buffer.split_at(skip_by);
@@ -898,7 +897,7 @@ impl<'data, L> ImageMut<'data, L> {
                 continue;
             }
 
-            layout.relocate(0);
+            layout.relocate(Default::default());
             let len = layout.byte_len().div_ceil(MAX_ALIGN) * MAX_ALIGN;
 
             // Check this before we consume the buffer. This way the tail can still be used by

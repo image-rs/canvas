@@ -8,6 +8,9 @@ use ::alloc::boxed::Box;
 use core::{alloc, cmp};
 
 mod matrix;
+mod planar;
+mod relocated;
+mod upsampling;
 
 use crate::image::{Coord, ImageMut, ImageRef};
 pub use crate::stride::{BadStrideError, StrideSpec, StridedBytes, StridedLayout, Strides};
@@ -264,7 +267,7 @@ pub trait RasterMut<Pixel>: Raster<Pixel> {
 /// There may be multiple different ways of indexing into the same layout. Similar to the standard
 /// libraries [Index](`core::ops::Index`) trait, this trait can be implemented to provide an index
 /// into a layout defined in a different crate.
-pub trait PlaneOf<L> {
+pub trait PlaneOf<L: ?Sized> {
     type Plane: Layout;
 
     /// Get the layout describing the plane.
@@ -281,16 +284,53 @@ pub trait Relocate: Layout {
     /// This should be smaller or equal to the length.
     fn offset(&self) -> usize;
 
-    /// Move the layout to another start offset, in bytes.
+    /// Move the layout to another aligned offset.
     ///
     /// The length of the layout should implicitly be modified by this operation, that is the range
     /// between the start offset and its apparent length should remain the same.
     ///
+    /// Moving to an aligned offset must work.
+    ///
     /// # Panics
     ///
-    /// This function can, and should, panic if the requested delta would make the length exceed
-    /// `isize::MAX`
-    fn relocate(&mut self, delta: usize);
+    /// Implementations are encouraged to panic if the newly chosen offset would make the total
+    /// length overflow `isize::MAX`, i.e. possible allocation size.
+    fn relocate(&mut self, offset: AlignedOffset);
+
+    /// Attempt to relocate the offset to another start offset, in bytes.
+    ///
+    /// This method should return `false` if the new offset is not suitable for the layout. The
+    /// default implementation requires an aligned offset. Implementations may work for additional
+    /// offsets.
+    fn relocate_to_byte(&mut self, offset: usize) -> bool {
+        if let Some(aligned_offset) = AlignedOffset::new(offset) {
+            self.relocate(aligned_offset);
+            true
+        } else {
+            false
+        }
+    }
+
+    /// Retrieve the contiguous byte range occupied by this layout.
+    fn byte_range(&self) -> core::ops::Range<usize> {
+        let start = self.offset();
+        let end = start + self.byte_len();
+        start..end
+    }
+}
+
+/// An unsigned offset that is maximally aligned.
+#[derive(Clone, Copy, Default, PartialEq, Eq, PartialOrd, Ord)]
+pub struct AlignedOffset(usize);
+
+impl AlignedOffset {
+    pub fn new(offset: usize) -> Option<Self> {
+        if offset % core::mem::align_of::<MaxAligned>() == 0 {
+            Some(AlignedOffset(offset))
+        } else {
+            None
+        }
+    }
 }
 
 /// A dynamic descriptor of an image's layout.
