@@ -151,6 +151,16 @@ impl<L: Layout> Image<L> {
         self.inner.as_bytes_mut()
     }
 
+    /// Get a reference to the aligned unstructured bytes of the image.
+    pub fn as_buf(&self) -> &buf {
+        self.inner.as_buf()
+    }
+
+    /// Get a reference to the mutable aligned unstructured bytes of the image.
+    pub fn as_mut_buf(&mut self) -> &mut buf {
+        self.inner.as_mut_buf()
+    }
+
     /// If necessary, reallocate the buffer to fit the layout.
     ///
     /// Call this method after having mutated a layout with [`Image::layout_mut_unguarded`]
@@ -533,6 +543,18 @@ impl<'data, L> ImageRef<'data, L> {
     ///
     /// This preserves the lifetime with which the layout is borrowed from the underlying image,
     /// and the `ImageMut` need not stay alive.
+    pub fn into_bytes(self) -> &'data [u8]
+    where
+        L: Layout,
+    {
+        let (visible, layout) = self.inner.into_parts();
+        visible.truncate(layout.byte_len())
+    }
+
+    /// Turn into a slice of the individual samples in the layout.
+    ///
+    /// This preserves the lifetime with which the layout is borrowed from the underlying image,
+    /// and the `ImageMut` need not stay alive.
     pub fn into_slice(self) -> &'data [L::Sample]
     where
         L: SliceLayout,
@@ -573,6 +595,10 @@ impl<'data, L> ImageRef<'data, L> {
     ///
     /// Planes that fail their indexing operation or that would not be aligned to the required
     /// alignment are not returned. All other planes are returned in `Some`.
+    ///
+    /// FIXME: the layout type is not what we want. For instance, with `PlaneMatrices` we get a
+    /// plane type of `Relocated<Matrix<_>>` but when we relocate that to `0` then we would really
+    /// prefer having a simple `Matrix<_>` as the layout type.
     pub fn into_planes<const N: usize, D>(
         self,
         descriptors: [D; N],
@@ -595,7 +621,7 @@ impl<'data, L> ImageRef<'data, L> {
                 continue;
             };
 
-            let skip_by = layout.offset();
+            let skip_by = layout.byte_offset();
 
             if skip_by % MAX_ALIGN != 0 {
                 plane.0 = None;
@@ -616,8 +642,6 @@ impl<'data, L> ImageRef<'data, L> {
                 plane.0 = None;
                 continue;
             }
-
-            let len = layout.byte_len().div_ceil(MAX_ALIGN);
 
             let (_pre, tail) = buffer.split_at(skip_by);
             let (img_buf, _post) = tail.split_at(len);
@@ -867,7 +891,7 @@ impl<'data, L> ImageMut<'data, L> {
         // Now re-adjust the planes in order. For this, first collect their associated order.
         let mut remap = planes.each_mut().map(|plane| {
             // Maps all undefined planes to the zero-offset, so that they get skipped.
-            let offset = plane.0.as_ref().map_or(0, |p| p.offset());
+            let offset = plane.0.as_ref().map_or(0, |p| p.byte_offset());
             (offset, plane)
         });
 

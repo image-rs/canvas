@@ -1,4 +1,5 @@
-use crate::layout::{AlignedOffset, Decay, Layout, PlaneOf, Relocate};
+use crate::layout::{AlignedOffset, Decay, Layout, PlaneOf, Relocate, SliceLayout};
+use crate::texels::TexelRange;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct Relocated<T> {
@@ -18,6 +19,15 @@ impl<T: Layout> Relocated<T> {
     pub fn next_aligned_offset(&self) -> Option<AlignedOffset> {
         self.offset.next_up(self.inner.byte_len())
     }
+
+    /// Get an index addressing all samples covered by the range of this relocated layout.
+    pub fn texel_range(&self) -> TexelRange<T::Sample>
+    where
+        T: SliceLayout,
+    {
+        TexelRange::from_byte_range(self.inner.sample(), self.offset.get()..self.byte_len())
+            .unwrap()
+    }
 }
 
 impl<T: Layout> Layout for Relocated<T> {
@@ -27,7 +37,7 @@ impl<T: Layout> Layout for Relocated<T> {
 }
 
 impl<T: Layout> Relocate for Relocated<T> {
-    fn offset(&self) -> usize {
+    fn byte_offset(&self) -> usize {
         self.offset.0
     }
 
@@ -51,7 +61,7 @@ where
 
     fn get_plane(self, layout: &Relocated<L>) -> Option<Self::Plane> {
         let mut inner = self.get_plane(&layout.inner)?;
-        let mut inner_offset = inner.offset();
+        let mut inner_offset = inner.byte_offset();
         // This addition preserves the alignment up to MAX_ALIGN.
         inner_offset += layout.offset.get();
         // As an approximation this should succeed based on alignment requirements. Otherwise this

@@ -279,6 +279,33 @@ pub trait RasterMut<Pixel>: Raster<Pixel> {
 /// There may be multiple different ways of indexing into the same layout. Similar to the standard
 /// libraries [Index](`core::ops::Index`) trait, this trait can be implemented to provide an index
 /// into a layout defined in a different crate.
+///
+/// # Examples
+///
+/// The `PlaneMatrices` wrapper stores an array of matrix layouts. This trait allows accessing them
+/// by a `usize` index, conveniently interacting with the `ImageRef` and `ImageMut` types.
+///
+/// ```
+/// use image_texel::image::Image;
+/// use image_texel::layout::{PlaneMatrices, Matrix};
+/// use image_texel::texels::U8;
+///
+/// // Imagine a JPEG with progressive DCT coefficient planes.
+/// let rough = Matrix::from_width_height(U8, 8, 8).unwrap();
+/// let dense = Matrix::from_width_height(U8, 64, 64).unwrap();
+///
+/// // The assembled layout can be used to access the disjoint planes.
+/// let matrices = PlaneMatrices::new(U8, [rough, dense]);
+///
+/// let buffer = Image::new(&matrices);
+/// let [p0, p1] = buffer.as_ref().into_planes([0, 1]);
+///
+/// let rough_coeffs = p0.unwrap().into_bytes();
+/// let dense_coeffs = p1.unwrap().into_bytes();
+///
+/// assert_eq!(rough_coeffs.len(), 8 * 8);
+/// assert_eq!(dense_coeffs.len(), 64 * 64);
+/// ```
 pub trait PlaneOf<L: ?Sized> {
     type Plane: Layout;
 
@@ -295,7 +322,7 @@ pub trait Relocate: Layout {
     /// The offset of the first relevant byte of this layout.
     ///
     /// This should be smaller or equal to the length.
-    fn offset(&self) -> usize;
+    fn byte_offset(&self) -> usize;
 
     /// Move the layout to another aligned offset.
     ///
@@ -326,7 +353,7 @@ pub trait Relocate: Layout {
 
     /// Retrieve the contiguous byte range occupied by this layout.
     fn byte_range(&self) -> core::ops::Range<usize> {
-        let start = self.offset();
+        let start = self.byte_offset();
         let end = self.byte_len();
 
         debug_assert!(
@@ -338,15 +365,11 @@ pub trait Relocate: Layout {
     }
 
     /// Get an index addressing all samples covered by the range of this relocated layout.
-    fn as_offset_index(&self) -> TexelRange<Self::Sample>
+    fn texel_range(&self) -> TexelRange<Self::Sample>
     where
         Self: SliceLayout + Sized,
     {
-        let start = self.offset() / self.sample().size();
-        let end = self.byte_len() / self.sample().size();
-
-        self.sample()
-            .to_range(start..end)
+        TexelRange::from_byte_range(self.sample(), self.byte_offset()..self.byte_len())
             .expect("A layout should fit into memory")
     }
 }

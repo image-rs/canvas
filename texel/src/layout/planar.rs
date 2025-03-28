@@ -1,6 +1,6 @@
 use crate::{
     layout::{
-        AlignedOffset, Layout, Matrix, MatrixBytes, MismatchedPixelError, PlaneOf, Relocate,
+        AlignedOffset, Decay, Layout, Matrix, MatrixBytes, MismatchedPixelError, PlaneOf, Relocate,
         SliceLayout, TexelLayout, TryMend,
     },
     texel::Texel,
@@ -130,6 +130,7 @@ impl<const N: usize> PlaneBytes<N> {
         }
     }
 
+    /// Return a reference to one relocated matrix layout.
     pub fn plane_ref(&self, idx: usize) -> Option<&Relocated<MatrixBytes>> {
         self.planes.inner.get(idx)
     }
@@ -148,7 +149,7 @@ impl<const N: usize> PlaneBytes<N> {
     /// let m1 = MatrixBytes::from_width_height(F32.into(), 16, 16).unwrap();
     ///
     /// let planar = PlaneBytes::new([m0, m1]);
-    /// let only_u8 = planar.coefficients_like(U8.into());
+    /// let only_u8 = planar.retain_coefficients_like(U8.into());
     ///
     /// assert_eq!(planar.plane_ref(0), only_u8.plane_ref(0));
     /// assert_ne!(planar.plane_ref(1), only_u8.plane_ref(1));
@@ -159,7 +160,7 @@ impl<const N: usize> PlaneBytes<N> {
     /// assert_eq!(only_u8.plane_ref(1).unwrap().byte_range().len(), 0);
     /// ```
     #[must_use]
-    pub fn coefficients_like(&self, texel: TexelLayout) -> Self {
+    pub fn retain_coefficients_like(&self, texel: TexelLayout) -> Self {
         let matrices = self.planes.inner.clone();
         let inner = matrices.map(|plane| {
             if plane.inner.element() == texel {
@@ -190,7 +191,7 @@ impl<const N: usize> Layout for PlaneBytes<N> {
 }
 
 impl<const N: usize> Relocate for PlaneBytes<N> {
-    fn offset(&self) -> usize {
+    fn byte_offset(&self) -> usize {
         if N == 0 {
             0
         } else {
@@ -254,11 +255,61 @@ impl<T, const N: usize> TryMend<PlaneBytes<N>> for Texel<T> {
 
 /// An array of byte matrices.
 ///
-/// This type is optimized for the concrete layout type.
+/// This type is optimized for the concrete layout type of matrix planes.
+///
+/// # Examples
+///
+/// ```
+/// use image_texel::image::Image;
+/// use image_texel::layout::{PlaneMatrices, Matrix};
+/// use image_texel::texels::U8;
+///
+/// // Imagine a JPEG with progressive DCT coefficient planes.
+/// let rough = Matrix::from_width_height(U8, 8, 8).unwrap();
+/// let dense = Matrix::from_width_height(U8, 64, 64).unwrap();
+///
+/// // The assembled layout can be used to access the disjoint planes.
+/// let matrices = PlaneMatrices::new(U8, [rough, dense]);
+/// let rough = matrices.plane_ref(0).unwrap();
+/// let dense = matrices.plane_ref(1).unwrap();
+///
+/// let buffer = Image::new(&matrices);
+/// let rough_coeffs = &buffer.as_buf()[rough.texel_range()];
+/// assert_eq!(rough_coeffs.len(), 8 * 8);
+///
+/// let dense_coeffs = &buffer.as_buf()[dense.texel_range()];
+/// assert_eq!(dense_coeffs.len(), 64 * 64);
+///
+/// // The coefficient planes are disjoint and well-ordered.
+/// assert!(rough_coeffs.as_ptr_range().end <= dense_coeffs.as_ptr());
+/// ```
 #[derive(Clone)]
 pub struct PlaneMatrices<T, const N: usize> {
     planes: Planes<[Relocated<Matrix<T>>; N]>,
     texel: Texel<T>,
+}
+
+impl<T, const N: usize> PlaneMatrices<T, N> {
+    /// Construct from separate matrices.
+    ///
+    /// Relocates each consecutive matrix such that they do not overlap.
+    ///
+    /// # Panics
+    ///
+    /// This method panics if the overall layout length would exceed `isize::MAX`.
+    pub fn new(texel: Texel<T>, inner: [Matrix<T>; N]) -> Self {
+        use crate::layout::{Decay, TryMend};
+        let bytes = inner.each_ref().map(|m| MatrixBytes::decay(m));
+        let planes = PlaneBytes::new(bytes);
+        texel
+            .try_mend(&planes)
+            .expect("input matrices have this texel")
+    }
+
+    /// Return a reference to one relocated matrix layout.
+    pub fn plane_ref(&self, idx: usize) -> Option<&Relocated<Matrix<T>>> {
+        self.planes.inner.get(idx)
+    }
 }
 
 impl<T, const N: usize> PlaneOf<PlaneMatrices<T, N>> for usize {
@@ -285,5 +336,18 @@ impl<T, const N: usize> SliceLayout for PlaneMatrices<T, N> {
 
     fn sample(&self) -> Texel<Self::Sample> {
         self.texel
+    }
+}
+
+impl<T, const N: usize> Decay<PlaneMatrices<T, N>> for PlaneBytes<N> {
+    fn decay(from: PlaneMatrices<T, N>) -> PlaneBytes<N> {
+        let bytes = from.planes.inner.each_ref().map(|rel| Relocated {
+            offset: rel.offset,
+            inner: MatrixBytes::decay(&rel.inner),
+        });
+
+        PlaneBytes {
+            planes: Planes::new(bytes),
+        }
     }
 }
