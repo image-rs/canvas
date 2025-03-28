@@ -1094,6 +1094,47 @@ impl<P> Clone for AtomicRef<'_, P> {
 
 impl<P> Copy for AtomicRef<'_, P> {}
 
+/// A range representation that casts bytes to a specific texel type.
+///
+/// Note this type also has the invariant that the identified range fits into memory for the given
+/// texel type.
+#[derive(Clone, Copy, Debug)]
+pub struct TexelRange<T> {
+    texel: Texel<T>,
+    start: usize,
+    end: usize,
+}
+
+impl<T> TexelRange<T> {
+    /// Create a new range from a texel type and a range (in units of `T`).
+    pub fn new(texel: Texel<T>, range: ops::Range<usize>) -> Option<Self> {
+        let _byte_end = range
+            .end
+            .checked_mul(texel.size())
+            .filter(|&n| n <= isize::MAX as usize)?;
+
+        Some(TexelRange {
+            texel,
+            start: range.start.min(range.end),
+            end: range.end,
+        })
+    }
+}
+
+impl<T> core::ops::Index<TexelRange<T>> for buf {
+    type Output = [T];
+
+    fn index(&self, index: TexelRange<T>) -> &Self::Output {
+        &self.as_texels(index.texel)[index.start..index.end]
+    }
+}
+
+impl<T> core::ops::IndexMut<TexelRange<T>> for buf {
+    fn index_mut(&mut self, index: TexelRange<T>) -> &mut Self::Output {
+        &mut self.as_mut_texels(index.texel)[index.start..index.end]
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

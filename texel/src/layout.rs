@@ -2,7 +2,7 @@
 //!
 //! The `*Layout` traits define generic standard layouts with a normal form. Other traits provide
 //! operations to convert between layouts, operations on the underlying image bytes, etc.
-use crate::texel::MaxAligned;
+use crate::texels::{MaxAligned, TexelRange};
 use crate::{AsTexel, Texel};
 use ::alloc::boxed::Box;
 use core::{alloc, cmp};
@@ -214,7 +214,16 @@ pub trait SliceLayout: Layout {
     fn len(&self) -> usize {
         self.byte_len() / self.sample().size()
     }
+
+    fn as_index(&self) -> TexelRange<Self::Sample> {
+        self.sample()
+            .to_range(0..self.len())
+            .expect("A layout should fit into memory")
+    }
 }
+
+// Just assert that `dyn SliceLayout<Sample = T>` is a valid type.
+impl<T> dyn SliceLayout<Sample = T> {}
 
 /// A layout of individually addressable raster elements.
 ///
@@ -277,7 +286,8 @@ pub trait PlaneOf<L: ?Sized> {
 /// A layout that supports being moved in memory.
 ///
 /// Such a layout only occupies a smaller but contiguous range of its full buffer length. One can
-/// query that offset and modify it.
+/// query that offset and modify it. Note that a relocatable layout should still report its
+/// [`Layout::byte_len`] as the past-the-end of its last relevant byte.
 pub trait Relocate: Layout {
     /// The offset of the first relevant byte of this layout.
     ///
@@ -314,22 +324,76 @@ pub trait Relocate: Layout {
     /// Retrieve the contiguous byte range occupied by this layout.
     fn byte_range(&self) -> core::ops::Range<usize> {
         let start = self.offset();
-        let end = start + self.byte_len();
-        start..end
+        let end = self.byte_len();
+
+        debug_assert!(
+            start <= end,
+            "The length calculation of this layout is buggy"
+        );
+
+        start..end.min(start)
+    }
+
+    /// Get an index addressing all samples covered by the range of this relocated layout.
+    fn as_offset_index(&self) -> TexelRange<Self::Sample>
+    where
+        Self: SliceLayout + Sized,
+    {
+        let start = self.offset() / self.sample().size();
+        let end = self.byte_len() / self.sample().size();
+
+        self.sample()
+            .to_range(start..end)
+            .expect("A layout should fit into memory")
     }
 }
 
+impl dyn Relocate {}
+
 /// An unsigned offset that is maximally aligned.
-#[derive(Clone, Copy, Default, PartialEq, Eq, PartialOrd, Ord)]
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, PartialOrd, Ord)]
 pub struct AlignedOffset(usize);
 
 impl AlignedOffset {
+    const ALIGN: usize = core::mem::align_of::<MaxAligned>();
+
+    /// Try to construct an aligned offset.
     pub fn new(offset: usize) -> Option<Self> {
-        if offset % core::mem::align_of::<MaxAligned>() == 0 {
+        if offset % Self::ALIGN == 0 && offset <= isize::MAX as usize {
             Some(AlignedOffset(offset))
         } else {
             None
         }
+    }
+
+    /// Get the wrapped offset as a `usize`.
+    pub fn get(self) -> usize {
+        self.0
+    }
+
+    /// Get the next valid offset after adding `bytes` to this.
+    ///
+    /// ```
+    /// use image_texel::layout::AlignedOffset;
+    ///
+    /// let zero = AlignedOffset::default();
+    ///
+    /// assert_eq!(zero.next_up(0), Some(zero));
+    /// assert_eq!(zero.next_up(1), zero.next_up(2));
+    ///
+    /// assert!(zero.next_up(usize::MAX).is_none());
+    /// assert!(zero.next_up(isize::MAX as usize).is_none());
+    /// ```
+    #[must_use]
+    pub fn next_up(self, bytes: usize) -> Option<Self> {
+        let range_start = self.0.checked_add(bytes)?;
+        let new_offset = range_start.checked_next_multiple_of(Self::ALIGN)?;
+
+        if new_offset > isize::MAX as usize {
+            return None;
+        }
+
+        AlignedOffset::new(new_offset)
     }
 }
 
@@ -489,6 +553,16 @@ impl TexelLayout {
 
     pub const fn superset_of(&self, other: TexelLayout) -> bool {
         self.size >= other.size && self.align >= other.align
+    }
+}
+
+/// Convert a pixel to an element, discarding the exact type information.
+impl<T> From<Texel<T>> for TexelLayout {
+    fn from(texel: Texel<T>) -> Self {
+        TexelLayout {
+            size: texel.size(),
+            align: texel.align(),
+        }
     }
 }
 
@@ -665,16 +739,6 @@ where
 
     fn sample(&self) -> Texel<Self::Sample> {
         (**self).sample()
-    }
-}
-
-/// Convert a pixel to an element, discarding the exact type information.
-impl<P> From<Texel<P>> for TexelLayout {
-    fn from(pix: Texel<P>) -> Self {
-        TexelLayout {
-            size: pix.size(),
-            align: pix.align(),
-        }
     }
 }
 

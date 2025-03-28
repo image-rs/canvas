@@ -1,6 +1,6 @@
 use crate::layout::{AlignedOffset, Decay, Layout, Matrix, MatrixBytes, PlaneOf, Relocate};
 
-#[derive(Clone, Copy)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct Relocated<T> {
     pub offset: AlignedOffset,
     pub inner: T,
@@ -12,6 +12,11 @@ impl<T: Layout> Relocated<T> {
             offset: AlignedOffset::default(),
             inner,
         }
+    }
+
+    /// Get the next aligned offset that comes after this relocated layout.
+    pub fn next_aligned_offset(&self) -> Option<AlignedOffset> {
+        self.offset.next_up(self.inner.byte_len())
     }
 }
 
