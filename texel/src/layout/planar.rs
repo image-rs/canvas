@@ -1,6 +1,9 @@
 use crate::{
-    layout::{Decay, Layout, Matrix, MatrixBytes, PlaneOf},
-    Texel,
+    layout::{
+        AlignedOffset, Layout, Matrix, MatrixBytes, MismatchedPixelError, PlaneOf, Relocate,
+        SliceLayout, TexelLayout, TryMend,
+    },
+    texel::Texel,
 };
 
 use super::relocated::Relocated;
@@ -85,6 +88,21 @@ where
 /// An array of byte matrices.
 ///
 /// This type is optimized for the concrete layout type.
+///
+/// ```
+/// use image_texel::texels::{U8, F32};
+/// use image_texel::layout::{Layout, PlaneBytes, MatrixBytes};
+///
+/// let m0 = MatrixBytes::from_width_height(U8.into(), 4, 4).unwrap();
+/// let m1 = MatrixBytes::from_width_height(F32.into(), 16, 16).unwrap();
+///
+/// let planar = PlaneBytes::new([m0, m1]);
+/// let ref_to_m0 = planar.plane_ref(0).unwrap();
+/// let ref_to_m1 = planar.plane_ref(1).unwrap();
+///
+/// assert!(ref_to_m0.byte_len() <= ref_to_m1.offset.get());
+/// assert!(ref_to_m1.byte_len() == planar.byte_len());
+/// ```
 #[derive(Clone)]
 pub struct PlaneBytes<const N: usize> {
     planes: Planes<[Relocated<MatrixBytes>; N]>,
@@ -92,9 +110,98 @@ pub struct PlaneBytes<const N: usize> {
 
 impl<const N: usize> PlaneBytes<N> {
     /// Construct from separate matrices.
+    ///
+    /// Relocates each consecutive matrix such that they do not overlap.
+    ///
+    /// # Panics
+    ///
+    /// This method panics if the overall layout length would exceed `isize::MAX`.
     pub fn new(inner: [MatrixBytes; N]) -> Self {
+        let mut inner = inner.map(Relocated::new);
+        let mut offset = AlignedOffset::default();
+
+        for plane in inner.iter_mut() {
+            plane.relocate(offset);
+            offset = plane.next_aligned_offset().expect("layout too large");
+        }
+
         PlaneBytes {
-            planes: Planes::new(inner.map(Relocated::new)),
+            planes: Planes::new(inner),
+        }
+    }
+
+    pub fn plane_ref(&self, idx: usize) -> Option<&Relocated<MatrixBytes>> {
+        self.planes.inner.get(idx)
+    }
+
+    /// Return a layout where only planes with a matching texel layout are preserved.
+    ///
+    /// All other planes are rewritten to be empty matrices of that layout. All offsets are
+    /// preserved.
+    ///
+    /// ```
+    ///
+    /// use image_texel::texels::{U8, F32};
+    /// use image_texel::layout::{Layout, PlaneBytes, MatrixBytes};
+    ///
+    /// let m0 = MatrixBytes::from_width_height(U8.into(), 4, 4).unwrap();
+    /// let m1 = MatrixBytes::from_width_height(F32.into(), 16, 16).unwrap();
+    ///
+    /// let planar = PlaneBytes::new([m0, m1]);
+    /// let only_u8 = planar.coefficients_like(U8.into());
+    ///
+    /// assert_eq!(planar.plane_ref(0), only_u8.plane_ref(0));
+    /// assert_ne!(planar.plane_ref(1), only_u8.plane_ref(1));
+    ///
+    /// use image_texel::layout::Relocate;
+    /// // That second plane is still offset, but empty
+    /// assert!(only_u8.plane_ref(1).unwrap().byte_len() > 0);
+    /// assert_eq!(only_u8.plane_ref(1).unwrap().byte_range().len(), 0);
+    /// ```
+    #[must_use]
+    pub fn coefficients_like(&self, texel: TexelLayout) -> Self {
+        let matrices = self.planes.inner.clone();
+        let inner = matrices.map(|plane| {
+            if plane.inner.element() == texel {
+                plane
+            } else {
+                Relocated {
+                    offset: plane.offset,
+                    inner: MatrixBytes::empty(texel),
+                }
+            }
+        });
+
+        PlaneBytes {
+            planes: Planes::new(inner),
+        }
+    }
+}
+
+impl<const N: usize> Layout for PlaneBytes<N> {
+    fn byte_len(&self) -> usize {
+        if N == 0 {
+            0
+        } else {
+            // We made sure that planes are sorted!
+            self.planes.inner[N - 1].byte_len()
+        }
+    }
+}
+
+impl<const N: usize> Relocate for PlaneBytes<N> {
+    fn offset(&self) -> usize {
+        if N == 0 {
+            0
+        } else {
+            self.planes.inner[0].byte_len()
+        }
+    }
+
+    fn relocate(&mut self, mut offset: AlignedOffset) {
+        for plane in self.planes.inner.iter_mut() {
+            plane.relocate(offset);
+            offset = plane.next_aligned_offset().expect("layout too large");
         }
     }
 }
@@ -104,6 +211,44 @@ impl<const N: usize> PlaneOf<PlaneBytes<N>> for usize {
 
     fn get_plane(self, layout: &PlaneBytes<N>) -> Option<Self::Plane> {
         layout.planes.inner.get(self).copied()
+    }
+}
+
+/// Upgrade to a collection of planes of the same texel.
+impl<T, const N: usize> TryMend<PlaneBytes<N>> for Texel<T> {
+    type Into = PlaneMatrices<T, N>;
+
+    type Err = MismatchedPixelError;
+
+    fn try_mend(self, from: &PlaneBytes<N>) -> Result<Self::Into, Self::Err> {
+        let planes = from.planes.inner.each_ref();
+
+        // FIXME: use `try_map` once stable.
+        let mut results: [Result<_, MismatchedPixelError>; N] = planes.map(|plane| {
+            let matrix = self.try_mend(&plane.inner)?;
+            Ok(Relocated {
+                offset: plane.offset,
+                inner: matrix,
+            })
+        });
+
+        if let Some(err) = results.iter().position(|e| e.is_err()) {
+            let mut replacement = Ok(Relocated::new(Matrix::empty(self)));
+            core::mem::swap(&mut results[err], &mut replacement);
+
+            return Err(match replacement {
+                Err(err) => err,
+                Ok(_) => unreachable!(),
+            });
+        }
+
+        // FIXME: `try_map` until here.
+        let inner = results.map(|res| res.unwrap());
+
+        Ok(PlaneMatrices {
+            planes: Planes::new(inner),
+            texel: self,
+        })
     }
 }
 
@@ -121,5 +266,24 @@ impl<T, const N: usize> PlaneOf<PlaneMatrices<T, N>> for usize {
 
     fn get_plane(self, layout: &PlaneMatrices<T, N>) -> Option<Self::Plane> {
         layout.planes.inner.get(self).copied()
+    }
+}
+
+impl<T, const N: usize> Layout for PlaneMatrices<T, N> {
+    fn byte_len(&self) -> usize {
+        if N == 0 {
+            0
+        } else {
+            // We made sure that planes are sorted!
+            self.planes.inner[N - 1].byte_len()
+        }
+    }
+}
+
+impl<T, const N: usize> SliceLayout for PlaneMatrices<T, N> {
+    type Sample = T;
+
+    fn sample(&self) -> Texel<Self::Sample> {
+        self.texel
     }
 }

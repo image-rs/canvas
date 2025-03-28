@@ -1,4 +1,4 @@
-use crate::layout::{AlignedOffset, Decay, Layout, Matrix, MatrixBytes, PlaneOf, Relocate};
+use crate::layout::{AlignedOffset, Decay, Layout, PlaneOf, Relocate};
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct Relocated<T> {
@@ -39,5 +39,27 @@ impl<T: Layout> Relocate for Relocated<T> {
 impl<T: Layout> Decay<T> for Relocated<T> {
     fn decay(inner: T) -> Relocated<T> {
         Relocated::new(inner)
+    }
+}
+
+impl<Idx, L> PlaneOf<Relocated<L>> for Idx
+where
+    Idx::Plane: Relocate,
+    Idx: PlaneOf<L>,
+{
+    type Plane = Idx::Plane;
+
+    fn get_plane(self, layout: &Relocated<L>) -> Option<Self::Plane> {
+        let mut inner = self.get_plane(&layout.inner)?;
+        let mut inner_offset = inner.offset();
+        // This addition preserves the alignment up to MAX_ALIGN.
+        inner_offset += layout.offset.get();
+        // As an approximation this should succeed based on alignment requirements. Otherwise this
+        // is a best attempt.
+        if inner.relocate_to_byte(inner_offset) {
+            Some(inner)
+        } else {
+            None
+        }
     }
 }

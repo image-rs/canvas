@@ -583,7 +583,7 @@ impl<'data, L> ImageRef<'data, L> {
     {
         let layout = self.layout();
         let mut planes = descriptors.map(|d| {
-            let plane = PlaneOf::get_plane(d, layout);
+            let plane = <D as PlaneOf<L>>::get_plane(d, layout);
             let empty_buf = buf::new(&[]);
             (plane, empty_buf)
         });
@@ -859,7 +859,7 @@ impl<'data, L> ImageMut<'data, L> {
     {
         let layout = self.layout();
         let mut planes = descriptors.map(|d| {
-            let plane = PlaneOf::get_plane(d, layout);
+            let plane = <D as PlaneOf<L>>::get_plane(d, layout);
             let empty_buf = buf::new_mut(&mut []);
             (plane, empty_buf)
         });
