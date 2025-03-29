@@ -6,9 +6,9 @@
 use core::cell::Cell;
 use core::cmp::{Eq, Ord, Ordering, PartialEq, PartialOrd};
 use core::marker::PhantomData;
-use core::{fmt, hash, mem, num, ptr, slice, sync::atomic};
+use core::{fmt, hash, mem, num, ops, ptr, slice, sync::atomic};
 
-use crate::buf::{atomic_buf, buf, cell_buf, AtomicRef, AtomicSliceRef};
+use crate::buf::{atomic_buf, buf, cell_buf, AtomicRef, AtomicSliceRef, TexelRange};
 
 /// Marker struct to denote a texel type.
 ///
@@ -836,6 +836,27 @@ impl<P> Texel<P> {
                 buffer.len() / self.size_nz().get(),
             )
         }
+    }
+
+    /// Construct a range indexing to a slice of this texel.
+    ///
+    /// See [`TexelRange::new`] as this is just a proxy.
+    ///
+    /// ```
+    /// use image_texel::{texels::{U16, buf}, TexelBuffer};
+    ///
+    /// let buffer = TexelBuffer::with_elements(&[1u32, 2, 3, 4]);
+    /// let range = U16.to_range(4..8).unwrap();
+    /// let u16_view = &buffer.as_buf()[range];
+    ///
+    /// assert_eq!(u16_view.len(), 4);
+    /// // This view extends over the `3u32` and `4u32` elements.
+    /// // Results depend on native endianess of the `u32` type.
+    /// assert!(u16_view[0] == 3 || u16_view[1] == 3);
+    /// assert!(u16_view[2] == 4 || u16_view[3] == 4);
+    /// ```
+    pub fn to_range(self, range: ops::Range<usize>) -> Option<TexelRange<P>> {
+        TexelRange::new(self, range)
     }
 }
 

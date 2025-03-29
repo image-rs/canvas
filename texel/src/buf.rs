@@ -350,6 +350,8 @@ impl buf {
         &mut self.0
     }
 
+    /// Split at an aligned byte offset.
+    #[track_caller]
     pub fn split_at(&self, at: usize) -> (&Self, &Self) {
         assert!(at % MAX_ALIGN == 0);
         let (a, b) = self.0.split_at(at);
@@ -358,6 +360,14 @@ impl buf {
         (Self::new(a), Self::new(b))
     }
 
+    /// Remove everything past the given point, return the tail we removed.
+    pub(crate) fn take_at_mut<'a>(this: &mut &'a mut Self, at: usize) -> &'a mut Self {
+        let (pre, post) = buf::split_at_mut(core::mem::take(this), at);
+        *this = pre;
+        post
+    }
+
+    /// Mutably split at an aligned byte offset.
     pub fn split_at_mut(&mut self, at: usize) -> (&mut Self, &mut Self) {
         assert!(at % MAX_ALIGN == 0);
         let (a, b) = self.0.split_at_mut(at);
@@ -839,6 +849,7 @@ impl cell_buf {
         Self::from_bytes(&self.0.as_slice_of_cells()[..at]).unwrap()
     }
 
+    #[track_caller]
     pub fn split_at(&self, at: usize) -> (&Self, &Self) {
         assert!(at % MAX_ALIGN == 0);
         let (a, b) = self.0.as_slice_of_cells().split_at(at);
@@ -1084,6 +1095,83 @@ impl<P> Clone for AtomicRef<'_, P> {
 }
 
 impl<P> Copy for AtomicRef<'_, P> {}
+
+/// A range representation that casts bytes to a specific texel type.
+///
+/// Note this type also has the invariant that the identified range fits into memory for the given
+/// texel type.
+#[derive(Clone, Copy, Debug)]
+pub struct TexelRange<T> {
+    texel: Texel<T>,
+    start_per_align: usize,
+    end_per_align: usize,
+}
+
+impl<T> TexelRange<T> {
+    /// Create a new range from a texel type and a range (in units of `T`).
+    pub fn new(texel: Texel<T>, range: ops::Range<usize>) -> Option<Self> {
+        let end_byte = range
+            .end
+            .checked_mul(texel.size())
+            .filter(|&n| n <= isize::MAX as usize)?;
+        let start_byte = (range.start.min(range.end))
+            .checked_mul(texel.size())
+            .filter(|&n| n <= isize::MAX as usize)?;
+
+        debug_assert!(
+            end_byte % texel.align() == 0,
+            "Texel must be valid for its type layout"
+        );
+
+        debug_assert!(
+            start_byte % texel.align() == 0,
+            "Texel must be valid for its type layout"
+        );
+
+        Some(TexelRange {
+            texel,
+            start_per_align: start_byte / texel.align(),
+            end_per_align: end_byte / texel.align(),
+        })
+    }
+
+    pub fn from_byte_range(texel: Texel<T>, range: ops::Range<usize>) -> Option<Self> {
+        let start_byte = range.start;
+        let end_byte = range.end;
+
+        if start_byte % texel.align() != 0 || end_byte % texel.align() != 0 {
+            return None;
+        }
+
+        Some(TexelRange {
+            texel,
+            start_per_align: start_byte / texel.align(),
+            end_per_align: end_byte / texel.align(),
+        })
+    }
+}
+
+impl<T> core::ops::Index<TexelRange<T>> for buf {
+    type Output = [T];
+
+    fn index(&self, index: TexelRange<T>) -> &Self::Output {
+        let scale = index.texel.align();
+        let bytes = &self.0[scale * index.start_per_align..scale * index.end_per_align];
+        let slice = index.texel.try_to_slice(bytes);
+        // We just multiplied the indices by the alignment..
+        slice.expect("byte indices validly aligned")
+    }
+}
+
+impl<T> core::ops::IndexMut<TexelRange<T>> for buf {
+    fn index_mut(&mut self, index: TexelRange<T>) -> &mut Self::Output {
+        let scale = index.texel.align();
+        let bytes = &mut self.0[scale * index.start_per_align..scale * index.end_per_align];
+        let slice = index.texel.try_to_slice_mut(bytes);
+        // We just multiplied the indices by the alignment..
+        slice.expect("byte indices validly aligned")
+    }
+}
 
 #[cfg(test)]
 mod tests {

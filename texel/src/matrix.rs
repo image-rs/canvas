@@ -193,7 +193,7 @@ impl<P> Matrix<P> {
     fn new_raw(inner: TexelBuffer<P>, layout: Layout<P>) -> Self {
         assert_eq!(inner.len(), layout.len(), "Texel count agrees with buffer");
         Matrix {
-            inner: RawImage::from_buffer(inner, layout),
+            inner: RawImage::from_texel_buffer(inner, layout),
         }
     }
 
@@ -243,7 +243,7 @@ impl<P> Matrix<P> {
     /// all indices are valid in both directions.
     pub fn transmute_to<Q: AsTexel>(self, pixel: Texel<Q>) -> Matrix<Q> {
         let layout = self.layout().transmute_to(pixel);
-        let inner = self.inner.reinterpret_unguarded(|_| layout);
+        let inner = self.inner.mogrify_layout(|_| layout);
         Matrix { inner }
     }
 
@@ -339,36 +339,6 @@ impl<P> Matrix<P> {
 }
 
 impl<P> Layout<P> {
-    pub fn width_and_height_for_texel(
-        pixel: Texel<P>,
-        width: usize,
-        height: usize,
-    ) -> Option<Self> {
-        let max_index = Self::max_index(width, height)?;
-        let _ = max_index.checked_mul(pixel.size())?;
-
-        Some(Layout {
-            width,
-            height,
-            pixel,
-        })
-    }
-
-    pub fn width_and_height(width: usize, height: usize) -> Option<Self>
-    where
-        P: AsTexel,
-    {
-        Self::width_and_height_for_texel(P::texel(), width, height)
-    }
-
-    pub const fn empty(pixel: Texel<P>) -> Self {
-        Layout {
-            pixel,
-            width: 0,
-            height: 0,
-        }
-    }
-
     pub fn with_matrix(pixel: Texel<P>, matrix: layout::MatrixBytes) -> Option<Self> {
         if pixel.size() == matrix.element.size() {
             Some(Layout {
@@ -379,73 +349,6 @@ impl<P> Layout<P> {
         } else {
             None
         }
-    }
-
-    pub fn into_matrix_bytes(self) -> layout::MatrixBytes {
-        layout::MatrixBytes {
-            element: self.pixel.into(),
-            first_dim: self.width,
-            second_dim: self.height,
-        }
-    }
-
-    /// Get the required bytes for this layout.
-    pub fn byte_len(self) -> usize {
-        // Exactly this does not overflow due to construction.
-        self.pixel.size() * self.width * self.height
-    }
-
-    /// The number of pixels in this layout
-    pub fn len(self) -> usize {
-        self.width * self.height
-    }
-
-    pub fn width(self) -> usize {
-        self.width
-    }
-
-    pub fn height(self) -> usize {
-        self.height
-    }
-
-    pub fn pixel(self) -> Texel<P> {
-        self.pixel
-    }
-
-    /// Reinterpret to another, same size pixel type.
-    ///
-    /// See `transmute_to` for details.
-    pub fn transmute<Q: AsTexel>(self) -> Layout<Q> {
-        self.transmute_to(Q::texel())
-    }
-
-    /// Reinterpret to another, same size pixel type.
-    ///
-    /// # Panics
-    /// Like `std::mem::transmute`, the size of the two types need to be equal. This ensures that
-    /// all indices are valid in both directions.
-    pub fn transmute_to<Q>(self, pixel: Texel<Q>) -> Layout<Q> {
-        assert!(
-            self.pixel.size() == pixel.size(),
-            "{} vs {}",
-            self.pixel.size(),
-            pixel.size()
-        );
-        Layout {
-            width: self.width,
-            height: self.height,
-            pixel,
-        }
-    }
-
-    /// Utility method to change the pixel type without changing the dimensions.
-    pub fn map<Q: AsTexel>(self) -> Option<Layout<Q>> {
-        self.map_to(Q::texel())
-    }
-
-    /// Utility method to change the pixel type without changing the dimensions.
-    pub fn map_to<Q>(self, pixel: Texel<Q>) -> Option<Layout<Q>> {
-        Layout::width_and_height_for_texel(pixel, self.width, self.height)
     }
 
     pub(crate) fn index_of(self, x: usize, y: usize) -> usize {
@@ -459,7 +362,7 @@ impl<P> Layout<P> {
         x < self.width && y < self.height
     }
 
-    fn max_index(width: usize, height: usize) -> Option<usize> {
+    pub(crate) fn max_index(width: usize, height: usize) -> Option<usize> {
         width.checked_mul(height)
     }
 }

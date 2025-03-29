@@ -8,17 +8,17 @@
 //! possible to use your own texel/pixel wrapper types regardless of the underlying byte
 //! representation. Indeed, the byte buffer need not even represent a pixel matrix (but it's
 //! advised, probably very common, and the only 'supported' use-case).
-// Distributed under The MIT License (MIT)
-//
-// Copyright (c) 2019, 2020 The `image-rs` developers
+mod raw;
+
 use core::{fmt, ops};
 
+pub(crate) use self::raw::RawImage;
 use crate::buf::{buf, Buffer};
 use crate::layout::{
-    Bytes, Decay, DynLayout, Layout, Mend, Raster, RasterMut, SliceLayout, Take, TryMend,
+    Bytes, Decay, Layout, Mend, PlaneOf, Raster, RasterMut, Relocate, SliceLayout, Take, TryMend,
 };
 use crate::texel::MAX_ALIGN;
-use crate::{BufferReuseError, Texel, TexelBuffer};
+use crate::{Texel, TexelBuffer};
 
 pub use crate::stride::{StridedBufferMut, StridedBufferRef};
 
@@ -29,16 +29,17 @@ pub use crate::stride::{StridedBufferMut, StridedBufferRef};
 /// lead to a diverging size of the memory buffer and the layout. Hence, access to the image pixels
 /// should not lead to panic unless an incorrectly implemented layout is used.
 ///
-/// It possible to convert the layout to a less strictly typed one without reallocating the buffer.
-/// For example, all standard layouts such as `Matrix` can be weakened to `DynLayout`. The reverse
-/// can not be done unchecked but is possible with fallible conversions.
+/// It possible to convert the layout to a less strictly typed one without reallocating the buffer,
+/// by re-interpreting the bytes. For example, all standard layouts such as
+/// [`Matrix`](`crate::layout::Matrix`) can be weakened to [`Bytes`]. The reverse can not be done
+/// unchecked but is possible with fallible conversions.
 ///
-/// Indeed, the image can _arbitrarily_ change its own layout—different `ImageRef` and
-/// `ImageMut` may even chose _conflicting layouts—and thus overwrite the content with completely
+/// Indeed, the image can _arbitrarily_ change its own layout—different [`ImageRef`] and
+/// [`ImageMut`] may even chose _conflicting layouts—and thus overwrite the content with completely
 /// different types and layouts. This is intended to maximize the flexibility for users. In
 /// complicated cases it could be hard for the type system to reflect the compatibility of a custom
 /// pixel layout and a standard one. It is solely the user's responsibility to use the interface
-/// sensibly. The _soundness_ of standard channel types (e.g. `u8` or `u32`) is not impacted by
+/// sensibly. The _soundness_ of standard channel types (e.g. [`u8`] or [`u32`]) is not impacted by
 /// this as any byte content is valid for them.
 ///
 /// ## Examples
@@ -85,16 +86,25 @@ pub struct Image<Layout = Bytes> {
 /// A read-only view of an image.
 ///
 /// Note that this requires its underlying buffer to be highly aligned! For that reason it is not
-/// possible to take a reference at an arbitrary number of bytes.
+/// possible to take a reference at an arbitrary byte slice for its initialization.
 #[derive(Clone, PartialEq, Eq)]
 pub struct ImageRef<'buf, Layout = &'buf Bytes> {
     inner: RawImage<&'buf buf, Layout>,
 }
 
 /// A writeable reference to an image buffer.
+///
+/// Note that this requires its underlying buffer to be highly aligned! For that reason it is not
+/// possible to take a reference at an arbitrary byte slice for its initialization.
 #[derive(PartialEq, Eq)]
 pub struct ImageMut<'buf, Layout = &'buf mut Bytes> {
     inner: RawImage<&'buf mut buf, Layout>,
+}
+
+/// Returned when failing to split an image into planes.
+#[allow(dead_code)]
+pub struct IntoPlanesError {
+    index_errors: core::num::NonZeroUsize,
 }
 
 /// Describes an image coordinate.
@@ -102,42 +112,25 @@ pub struct ImageMut<'buf, Layout = &'buf mut Bytes> {
 pub struct Coord(pub u32, pub u32);
 
 impl Coord {
+    /// The coordinate across the width of the image (horizontal direction).
     pub fn x(self) -> u32 {
         self.0
     }
 
+    /// The coordinate across the height of the image (horizontal direction).
     pub fn y(self) -> u32 {
         self.1
     }
 
+    /// Access both coordinates as a tuple.
     pub fn yx(self) -> (u32, u32) {
         (self.1, self.0)
     }
 
+    /// Access both coordinates as a tuple.
     pub fn xy(self) -> (u32, u32) {
         (self.0, self.1)
     }
-}
-
-/// Inner buffer implementation.
-///
-/// Not exposed to avoid leaking the implementation detail of the `Buf` type parameter. This allows
-/// a single implementation for borrowed and owned buffers while keeping `buf`, `Cog` etc. private.
-#[derive(Default, Clone, PartialEq, Eq)]
-pub(crate) struct RawImage<Buf, Layout> {
-    buffer: Buf,
-    layout: Layout,
-}
-
-pub(crate) trait BufferLike: ops::Deref<Target = buf> {
-    fn into_owned(self) -> Buffer;
-    fn take(&mut self) -> Self;
-}
-
-pub(crate) trait BufferMut: BufferLike + ops::DerefMut {}
-
-pub(crate) trait Growable: BufferLike {
-    fn grow_to(&mut self, _: usize);
 }
 
 /// Image methods for all layouts.
@@ -157,7 +150,7 @@ impl<L: Layout> Image<L> {
     /// The memory is reused as much as possible. If the layout is too large for the buffer then
     /// the remainder is filled up with zeroed bytes.
     pub fn with_buffer<T>(layout: L, bytes: TexelBuffer<T>) -> Self {
-        RawImage::with_buffer(Bytes(0), bytes.into_inner())
+        RawImage::from_buffer(Bytes(0), bytes.into_inner())
             .with_layout(layout)
             .into()
     }
@@ -170,6 +163,16 @@ impl<L: Layout> Image<L> {
     /// Get a mutable reference to those bytes used by the layout.
     pub fn as_bytes_mut(&mut self) -> &mut [u8] {
         self.inner.as_bytes_mut()
+    }
+
+    /// Get a reference to the aligned unstructured bytes of the image.
+    pub fn as_buf(&self) -> &buf {
+        self.inner.as_buf()
+    }
+
+    /// Get a reference to the mutable aligned unstructured bytes of the image.
+    pub fn as_mut_buf(&mut self) -> &mut buf {
+        self.inner.as_mut_buf()
     }
 
     /// If necessary, reallocate the buffer to fit the layout.
@@ -256,7 +259,7 @@ impl<L: Layout> Image<L> {
         L: Take,
     {
         let new_layout = mend.mend(self.inner.layout());
-        self.inner.reinterpret_unguarded(|_| new_layout).into()
+        self.inner.mogrify_layout(|_| new_layout).into()
     }
 
     /// Strengthen the layout of the image.
@@ -274,11 +277,7 @@ impl<L: Layout> Image<L> {
         L: Take,
     {
         let new_layout = mend.try_mend(self.inner.layout())?;
-        Ok(self
-            .inner
-            .take()
-            .reinterpret_unguarded(|_| new_layout)
-            .into())
+        Ok(self.inner.take().mogrify_layout(|_| new_layout).into())
     }
 }
 
@@ -307,6 +306,22 @@ impl<L> Image<L> {
     /// [`as_bytes_mut`]: #method.as_bytes_mut
     pub fn as_capacity_bytes_mut(&mut self) -> &mut [u8] {
         self.inner.as_capacity_bytes_mut()
+    }
+
+    /// Get a reference to the aligned unstructured bytes of the image.
+    ///
+    /// Note that this may return more bytes than required for the specific layout for various
+    /// reasons. See also [`Self::as_capacity_bytes`].
+    pub fn as_capacity_buf(&self) -> &buf {
+        self.inner.as_capacity_buf()
+    }
+
+    /// Get a mutable reference to the unstructured bytes of the image.
+    ///
+    /// Note that this may return more bytes than required for the specific layout for various
+    /// reasons. See also [`Self::as_capacity_bytes_mut`].
+    pub fn as_capacity_buf_mut(&mut self) -> &mut buf {
+        self.inner.as_capacity_buf_mut()
     }
 
     /// View this buffer as a slice of pixels.
@@ -352,7 +367,7 @@ impl<L> Image<L> {
 
     /// Get a view of this image.
     pub fn as_ref(&self) -> ImageRef<'_, &'_ L> {
-        self.inner.borrow().into()
+        self.inner.as_borrow().into()
     }
 
     /// Get a view of this image, if the alternate layout fits.
@@ -362,7 +377,7 @@ impl<L> Image<L> {
 
     /// Get a mutable view of this image.
     pub fn as_mut(&mut self) -> ImageMut<'_, &'_ mut L> {
-        self.inner.borrow_mut().into()
+        self.inner.as_borrow_mut().into()
     }
 
     /// Get a mutable view under an alternate layout.
@@ -417,7 +432,7 @@ impl<L: SliceLayout> Image<L> {
     /// This function will panic if the buffer is shorter than the layout.
     pub fn from_buffer(buffer: TexelBuffer<L::Sample>, layout: L) -> Self {
         assert!(buffer.byte_len() >= layout.byte_len());
-        RawImage::from_buffer(buffer, layout).into()
+        RawImage::from_texel_buffer(buffer, layout).into()
     }
 
     /// Get a slice of the individual samples in the layout.
@@ -452,12 +467,12 @@ impl<'data, L> ImageRef<'data, L> {
     }
 
     pub fn layout(&self) -> &L {
-        &self.inner.layout
+        self.inner.layout()
     }
 
     /// Get a view of this image.
     pub fn as_ref(&self) -> ImageRef<'_, &'_ L> {
-        self.inner.borrow().into()
+        self.inner.as_borrow().into()
     }
 
     /// Check if a call to [`ImageRef::with_layout`] would succeed.
@@ -505,16 +520,7 @@ impl<'data, L> ImageRef<'data, L> {
         M: Decay<L>,
         M: Layout,
     {
-        let layout = M::decay(self.inner.layout);
-        let image = RawImage {
-            layout,
-            buffer: self.inner.buffer,
-        };
-        if image.fits(&image.layout) {
-            Some(image.into())
-        } else {
-            None
-        }
+        Some(self.inner.checked_decay()?.into())
     }
 
     /// Copy all bytes to a newly allocated image.
@@ -522,7 +528,7 @@ impl<'data, L> ImageRef<'data, L> {
     where
         L: Layout + Clone,
     {
-        Image::with_bytes(self.inner.layout.clone(), self.inner.as_bytes())
+        Image::with_bytes(self.inner.layout().clone(), self.inner.as_bytes())
     }
 
     /// Get a slice of the individual samples in the layout.
@@ -551,12 +557,24 @@ impl<'data, L> ImageRef<'data, L> {
     ///
     /// This preserves the lifetime with which the layout is borrowed from the underlying image,
     /// and the `ImageMut` need not stay alive.
+    pub fn into_bytes(self) -> &'data [u8]
+    where
+        L: Layout,
+    {
+        let (visible, layout) = self.inner.into_parts();
+        visible.truncate(layout.byte_len())
+    }
+
+    /// Turn into a slice of the individual samples in the layout.
+    ///
+    /// This preserves the lifetime with which the layout is borrowed from the underlying image,
+    /// and the `ImageMut` need not stay alive.
     pub fn into_slice(self) -> &'data [L::Sample]
     where
         L: SliceLayout,
     {
-        let buf = self.inner.buffer.truncate(self.inner.layout.len());
-        self.inner.layout.sample().cast_buf(buf)
+        let (visible, layout) = self.inner.into_parts();
+        layout.sample().cast_buf(visible)
     }
 
     /// Retrieve a single texel from a raster image.
@@ -573,17 +591,102 @@ impl<'data, L> ImageRef<'data, L> {
         L: Layout,
     {
         // Need to roundup to correct alignment.
-        let size = self.inner.layout.byte_len();
+        let size = self.inner.layout().byte_len();
         let round_up = (size.wrapping_neg() & !(MAX_ALIGN - 1)).wrapping_neg();
+        let buffer = self.inner.get_mut();
 
-        if round_up > self.inner.buffer.len() {
-            return RawImage::with_buffer(Bytes(0), buf::new(&[])).into();
+        if round_up > buffer.len() {
+            return RawImage::from_buffer(Bytes(0), buf::new(&[])).into();
         }
 
-        let (initial, next) = self.inner.buffer.split_at(round_up);
-        self.inner.buffer = initial;
+        let (initial, next) = buffer.split_at(round_up);
+        *buffer = initial;
 
-        RawImage::with_buffer(Bytes(next.len()), next).into()
+        RawImage::from_buffer(Bytes(next.len()), next).into()
+    }
+
+    /// Split this reference into independent planes.
+    ///
+    /// If any plane fails their indexing operation or would not be aligned to the required
+    /// alignment or any plane layouts would overlap, an error is returned. The planes are returned
+    /// in the order of the descriptors.
+    ///
+    /// FIXME: the layout type is not what we want. For instance, with `PlaneMatrices` we get a
+    /// plane type of `Relocated<Matrix<_>>` but when we relocate that to `0` then we would really
+    /// prefer having a simple `Matrix<_>` as the layout type.
+    ///
+    /// # Examples
+    ///
+    /// A layout describing a matrix array can be split:
+    ///
+    /// ```
+    /// use image_texel::image::{Image, ImageRef};
+    /// use image_texel::layout::{PlaneMatrices, Matrix};
+    /// use image_texel::texels::U8;
+    ///
+    /// let mat = Matrix::from_width_height(U8, 8, 8).unwrap();
+    /// let buffer = Image::new(PlaneMatrices::<_, 2>::from_repeated(mat));
+    /// let image: ImageRef<'_, _> = buffer.as_ref();
+    ///
+    /// let [p0, p1] = buffer.as_ref().into_planes([0, 1]).unwrap();
+    /// ```
+    ///
+    /// You may select the same plane twice:
+    ///
+    pub fn into_planes<const N: usize, D>(
+        self,
+        descriptors: [D; N],
+    ) -> Result<[ImageRef<'data, D::Plane>; N], IntoPlanesError>
+    where
+        D: PlaneOf<L>,
+        D::Plane: Relocate,
+    {
+        let layout = self.layout();
+        let mut planes = descriptors.map(|d| {
+            let plane = <D as PlaneOf<L>>::get_plane(d, layout);
+            let empty_buf = buf::new(&[]);
+            (plane, empty_buf)
+        });
+
+        let (mut buffer, _) = self.inner.into_parts();
+
+        for plane in &mut planes {
+            let Some(layout) = &mut plane.0 else {
+                continue;
+            };
+
+            let skip_by = layout.byte_offset();
+
+            // FIXME: do we want failure reasons?
+            if skip_by % MAX_ALIGN != 0 {
+                plane.0 = None;
+                continue;
+            }
+
+            if buffer.len() < skip_by {
+                plane.0 = None;
+                continue;
+            }
+
+            layout.relocate(Default::default());
+            let len = layout.byte_len().div_ceil(MAX_ALIGN) * MAX_ALIGN;
+
+            // Check this before we consume the buffer. This way the tail can still be used by
+            // following layouts, we ignore this.
+            if buffer.len() - skip_by < len {
+                plane.0 = None;
+                continue;
+            }
+
+            let (_pre, tail) = buffer.split_at(skip_by);
+            let (img_buf, _post) = tail.split_at(len);
+
+            plane.1 = img_buf;
+            buffer = tail;
+        }
+
+        let planes = IntoPlanesError::from_array(planes)?;
+        Ok(planes.map(|(layout, buffer)| RawImage::from_buffer(layout, buffer).into()))
     }
 }
 
@@ -605,26 +708,23 @@ impl<'data, L> ImageMut<'data, L> {
     }
 
     pub fn layout(&self) -> &L {
-        &self.inner.layout
+        self.inner.layout()
     }
 
     /// Get a view of this image.
     pub fn as_ref(&self) -> ImageRef<'_, &'_ L> {
-        self.inner.borrow().into()
+        self.inner.as_borrow().into()
     }
 
     /// Get a mutable view of this image.
     pub fn as_mut(&mut self) -> ImageMut<'_, &'_ mut L> {
-        self.inner.borrow_mut().into()
+        self.inner.as_borrow_mut().into()
     }
 
     /// Convert to a view of this image.
     pub fn into_ref(self) -> ImageRef<'data, L> {
-        RawImage {
-            layout: self.inner.layout,
-            buffer: &*self.inner.buffer,
-        }
-        .into()
+        let (buffer, layout) = self.inner.into_parts();
+        RawImage::with_buffer_unchecked(layout, &*buffer).into()
     }
 
     /// Check if a call to [`ImageMut::with_layout`] would succeed, without consuming this reference.
@@ -672,16 +772,7 @@ impl<'data, L> ImageMut<'data, L> {
         M: Decay<L>,
         M: Layout,
     {
-        let layout = M::decay(self.inner.layout);
-        let image = RawImage {
-            layout,
-            buffer: self.inner.buffer,
-        };
-        if image.fits(&image.layout) {
-            Some(image.into())
-        } else {
-            None
-        }
+        Some(self.inner.checked_decay()?.into())
     }
 
     /// Copy the bytes and layout to an owned container.
@@ -689,7 +780,7 @@ impl<'data, L> ImageMut<'data, L> {
     where
         L: Layout + Clone,
     {
-        Image::with_bytes(self.inner.layout.clone(), self.inner.as_bytes())
+        Image::with_bytes(self.inner.layout().clone(), self.inner.as_bytes())
     }
 
     /// Get a slice of the individual samples in the layout.
@@ -744,8 +835,8 @@ impl<'data, L> ImageMut<'data, L> {
     where
         L: SliceLayout,
     {
-        let buf = self.inner.buffer.truncate(self.inner.layout.len());
-        self.inner.layout.sample().cast_buf(buf)
+        let (visible, layout) = self.inner.into_parts();
+        layout.sample().cast_mut_buf(visible)
     }
 
     /// Turn into a mutable slice of the individual samples in the layout.
@@ -756,8 +847,8 @@ impl<'data, L> ImageMut<'data, L> {
     where
         L: SliceLayout,
     {
-        let buf = self.inner.buffer.truncate_mut(self.inner.layout.len());
-        self.inner.layout.sample().cast_mut_buf(buf)
+        let (visible, layout) = self.inner.into_parts();
+        layout.sample().cast_mut_buf(visible)
     }
 
     /// Retrieve a single texel from a raster image.
@@ -794,19 +885,150 @@ impl<'data, L> ImageMut<'data, L> {
         L: Layout,
     {
         // Need to roundup to correct alignment.
-        let size = self.inner.layout.byte_len();
+        let size = self.inner.layout().byte_len();
         let round_up = (size.wrapping_neg() & !(MAX_ALIGN - 1)).wrapping_neg();
+        let buffer = self.inner.get_mut();
 
         let empty = buf::new_mut(&mut []);
-        if round_up > self.inner.buffer.len() {
-            return RawImage::with_buffer(Bytes(0), empty).into();
+        if round_up > buffer.len() {
+            return RawImage::from_buffer(Bytes(0), empty).into();
         }
 
-        let buffer = core::mem::replace(&mut self.inner.buffer, empty);
-        let (initial, next) = buffer.split_at_mut(round_up);
-        self.inner.buffer = initial;
+        // replace is needed for the type system as we operate on a mutable reference and must not
+        // shorten its lifetime in any way by re-borrowing.
+        let (initial, next) = core::mem::replace(buffer, empty).split_at_mut(round_up);
+        *buffer = initial;
 
-        RawImage::with_buffer(Bytes(next.len()), next).into()
+        RawImage::from_buffer(Bytes(next.len()), next).into()
+    }
+
+    /// Split this mutable reference into independent planes.
+    ///
+    /// If any plane fails their indexing operation or would not be aligned to the required
+    /// alignment or the same index is used twice or any plane layouts would overlap for other
+    /// reasons, an error is returned. The planes are returned in the order of the descriptors.
+    ///
+    /// # Examples
+    ///
+    /// A layout describing a matrix array can be split:
+    ///
+    /// ```
+    /// use image_texel::image::{Image, ImageMut};
+    /// use image_texel::layout::{PlaneMatrices, Matrix};
+    /// use image_texel::texels::U8;
+    ///
+    /// let mat = Matrix::from_width_height(U8, 8, 8).unwrap();
+    /// let mut buffer = Image::new(PlaneMatrices::<_, 2>::from_repeated(mat));
+    /// let image: ImageMut<'_, _> = buffer.as_mut();
+    ///
+    /// let [p0, p1] = image.into_planes([0, 1]).unwrap();
+    /// ```
+    ///
+    /// Contrary to a shared buffer, it is not possible to select the same plane twice or for
+    /// planes to overlap:
+    ///
+    /// ```
+    /// use image_texel::image::{Image, ImageMut};
+    /// use image_texel::layout::{PlaneMatrices, Matrix};
+    /// use image_texel::texels::U8;
+    ///
+    /// let mat = Matrix::from_width_height(U8, 8, 8).unwrap();
+    /// let mut buffer = Image::new(PlaneMatrices::<_, 2>::from_repeated(mat));
+    /// let image: ImageMut<'_, _> = buffer.as_mut();
+    ///
+    /// assert!(image.into_planes([0, 0]).is_err(), "cannot have the same mutable references");
+    /// ```
+    pub fn into_planes<const N: usize, D>(
+        self,
+        descriptors: [D; N],
+    ) -> Result<[ImageMut<'data, D::Plane>; N], IntoPlanesError>
+    where
+        D: PlaneOf<L>,
+        D::Plane: Relocate,
+    {
+        let layout = self.layout();
+        let mut planes = descriptors.map(|d| {
+            let plane = <D as PlaneOf<L>>::get_plane(d, layout);
+            let empty_buf = buf::new_mut(&mut []);
+            (plane, empty_buf)
+        });
+
+        // Now re-adjust the planes in order. For this, first collect their associated order.
+        let mut remap = planes.each_mut().map(|plane| {
+            // Maps all undefined planes to the zero-offset, so that they get skipped.
+            let offset = plane.0.as_ref().map_or(0, |p| p.byte_offset());
+            (offset, plane)
+        });
+
+        // Stable sort, we want to keep the first of each plane that overlaps.
+        remap.sort_by_key(|&(offset, _)| offset);
+
+        let mut consumed = 0;
+        let (mut buffer, _) = self.inner.into_parts();
+
+        for (offset, plane) in remap {
+            let Some(layout) = &mut plane.0 else {
+                continue;
+            };
+
+            let Some(skip_by) = offset.checked_sub(consumed) else {
+                plane.0 = None;
+                continue;
+            };
+
+            if skip_by % MAX_ALIGN != 0 {
+                plane.0 = None;
+                continue;
+            }
+
+            if buffer.len() < skip_by {
+                plane.0 = None;
+                continue;
+            }
+
+            layout.relocate(Default::default());
+            let len = layout.byte_len().div_ceil(MAX_ALIGN) * MAX_ALIGN;
+
+            // Check this before we consume the buffer. This way the tail can still be used by
+            // following layouts, we ignore this.
+            if buffer.len() - skip_by < len {
+                plane.0 = None;
+                continue;
+            }
+
+            buffer = buf::take_at_mut(&mut buffer, skip_by);
+            consumed += skip_by;
+
+            let tail = buf::take_at_mut(&mut buffer, len);
+            consumed += len;
+
+            plane.1 = buffer;
+            buffer = tail;
+        }
+
+        let planes = IntoPlanesError::from_array(planes)?;
+        Ok(planes.map(|(layout, buffer)| RawImage::from_buffer(layout, buffer).into()))
+    }
+}
+
+impl IntoPlanesError {
+    pub(crate) fn from_array<L, Buffer, const N: usize>(
+        items: [(Option<L>, Buffer); N],
+    ) -> Result<[(L, Buffer); N], Self> {
+        if let Some(index_errors) = {
+            let count = items.iter().filter(|(l, _)| l.is_none()).count();
+            core::num::NonZeroUsize::new(count)
+        } {
+            return Err(IntoPlanesError { index_errors });
+        }
+
+        Ok(items.map(|(l, b)| (l.unwrap(), b)))
+    }
+}
+
+impl core::fmt::Debug for IntoPlanesError {
+    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+        f.debug_struct("IntoPlanesError").finish()
     }
 }
 
@@ -819,422 +1041,36 @@ impl<'data, L> ImageMut<'data, L> {
 impl<'data, 'l, L: Layout> ImageRef<'data, &'l L> {
     pub(crate) fn as_deref(self) -> ImageRef<'data, &'l L::Target>
     where
-        L: core::ops::Deref,
+        L: ops::Deref,
         L::Target: Layout,
     {
-        self.inner.reinterpret_unguarded(|l| &**l).into()
+        self.inner.mogrify_layout(|l| &**l).into()
     }
 }
 
 impl<'data, 'l, L: Layout> ImageMut<'data, &'l mut L> {
     pub(crate) fn as_deref_mut(self) -> ImageMut<'data, &'l mut L::Target>
     where
-        L: core::ops::DerefMut,
+        L: ops::DerefMut,
         L::Target: Layout,
     {
-        self.inner.reinterpret_unguarded(|l| &mut **l).into()
-    }
-}
-
-/// Layout oblivious methods that can allocate and change to another buffer.
-impl<B: Growable, L> RawImage<B, L> {
-    /// Grow the buffer, preparing for another layout.
-    ///
-    /// This may allocate a new buffer and thus disassociate the image from the currently borrowed
-    /// underlying buffer.
-    ///
-    /// # Panics
-    /// This function will panic if an allocation is necessary but fails.
-    pub(crate) fn grow(&mut self, layout: &impl Layout) {
-        Growable::grow_to(&mut self.buffer, layout.byte_len());
-    }
-
-    /// Convert the inner layout.
-    ///
-    /// This method expects that the converted layout is compatible with the current layout.
-    ///
-    /// # Panics
-    /// This method panics if the new layout requires more bytes and allocation fails.
-    pub(crate) fn decay<Other>(mut self) -> RawImage<B, Other>
-    where
-        Other: Decay<L>,
-    {
-        let layout = Other::decay(self.layout);
-        Growable::grow_to(&mut self.buffer, layout.byte_len());
-        RawImage {
-            buffer: self.buffer,
-            layout,
-        }
-    }
-
-    /// Convert the inner layout to a dynamic one.
-    ///
-    /// This is mostly convenience. Also not that `DynLayout` is of course not _completely_ generic
-    /// but tries to emulate a large number of known layouts.
-    ///
-    /// # Panics
-    /// This method panics if the new layout requires more bytes and allocation fails.
-    pub(crate) fn into_dynamic(self) -> RawImage<B, DynLayout>
-    where
-        DynLayout: Decay<L>,
-    {
-        self.decay()
-    }
-
-    /// Change the layout, reusing and growing the buffer.
-    ///
-    /// # Panics
-    /// This method panics if the new layout requires more bytes and allocation fails.
-    pub(crate) fn with_layout<Other: Layout>(mut self, layout: Other) -> RawImage<B, Other> {
-        Growable::grow_to(&mut self.buffer, layout.byte_len());
-        RawImage {
-            buffer: self.buffer,
-            layout,
-        }
-    }
-
-    /// Mutably borrow this image with another arbitrary layout.
-    ///
-    /// The other layout could be completely incompatible and perform arbitrary mutations. This
-    /// seems counter intuitive at first, but recall that these mutations are not unsound as they
-    /// can not invalidate the bytes themselves and only write unexpected values. This provides
-    /// more flexibility for 'transmutes' than easily expressible in the type system.
-    ///
-    /// # Panics
-    /// This method panics if the new layout requires more bytes and allocation fails.
-    pub(crate) fn as_reinterpreted<Other>(&mut self, other: Other) -> RawImage<&'_ mut buf, Other>
-    where
-        B: BufferMut,
-        Other: Layout,
-    {
-        self.grow(&other);
-        RawImage {
-            buffer: &mut self.buffer,
-            layout: other,
-        }
-    }
-
-    /// Change the layout and then resize the buffer so that it still fits.
-    pub(crate) fn mutate_layout<T>(&mut self, f: impl FnOnce(&mut L) -> T) -> T
-    where
-        L: Layout,
-    {
-        let t = f(&mut self.layout);
-        self.buffer.grow_to(self.layout.byte_len());
-        t
-    }
-}
-
-/// Layout oblivious methods, these also never allocate or panic.
-impl<B: BufferLike, L> RawImage<B, L> {
-    /// Get a mutable reference to the unstructured bytes of the image.
-    ///
-    /// Note that this may return more bytes than required for the specific layout for various
-    /// reasons. See also [`as_layout_bytes_mut`].
-    ///
-    /// [`as_layout_bytes_mut`]: #method.as_layout_bytes_mut
-    pub(crate) fn as_capacity_bytes_mut(&mut self) -> &mut [u8]
-    where
-        B: BufferMut,
-    {
-        self.buffer.as_bytes_mut()
-    }
-
-    /// Take ownership of the image's bytes.
-    ///
-    /// # Panics
-    /// This method panics if allocation fails.
-    pub(crate) fn into_owned(self) -> RawImage<Buffer, L> {
-        RawImage {
-            buffer: BufferLike::into_owned(self.buffer),
-            layout: self.layout,
-        }
-    }
-}
-
-/// Methods specifically with a dynamic layout.
-impl<B> RawImage<B, DynLayout> {
-    pub(crate) fn try_from_dynamic<Other>(self, layout: Other) -> Result<RawImage<B, Other>, Self>
-    where
-        Other: Into<DynLayout> + Clone,
-    {
-        let reference = layout.clone().into();
-        if self.layout == reference {
-            Ok(RawImage {
-                buffer: self.buffer,
-                layout,
-            })
-        } else {
-            Err(self)
-        }
-    }
-}
-
-impl<B, L> RawImage<B, L> {
-    /// Allocate a buffer for a particular layout.
-    pub(crate) fn new(layout: L) -> Self
-    where
-        L: Layout,
-        B: From<Buffer>,
-    {
-        let bytes = layout.byte_len();
-        RawImage {
-            buffer: Buffer::new(bytes).into(),
-            layout,
-        }
-    }
-
-    /// Create a image from a byte slice specifying the contents.
-    ///
-    /// If the layout requires more bytes then the remaining bytes are zero initialized.
-    pub(crate) fn with_contents(buffer: &[u8], layout: L) -> Self
-    where
-        L: Layout,
-        B: From<Buffer>,
-    {
-        let mut buffer = Buffer::from(buffer);
-        buffer.grow_to(layout.byte_len());
-        RawImage {
-            buffer: buffer.into(),
-            layout,
-        }
-    }
-
-    pub(crate) fn with_buffer(layout: L, buffer: B) -> Self
-    where
-        B: ops::Deref<Target = buf>,
-        L: Layout,
-    {
-        assert!(buffer.as_ref().len() <= layout.byte_len());
-        RawImage { buffer, layout }
-    }
-
-    /// Get a reference to the layout.
-    pub(crate) fn layout(&self) -> &L {
-        &self.layout
-    }
-
-    /// Get a mutable reference to the layout.
-    ///
-    /// Be mindful not to modify the layout to exceed the allocated size.
-    pub(crate) fn layout_mut_unguarded(&mut self) -> &mut L {
-        &mut self.layout
-    }
-
-    /// Get a reference to the unstructured bytes of the image.
-    ///
-    /// Note that this may return more bytes than required for the specific layout for various
-    /// reasons. See also [`as_layout_bytes`].
-    ///
-    /// [`as_layout_bytes`]: #method.as_layout_bytes
-    pub(crate) fn as_capacity_bytes(&self) -> &[u8]
-    where
-        B: ops::Deref<Target = buf>,
-    {
-        self.buffer.as_bytes()
-    }
-
-    /// Get a reference to those bytes used by the layout.
-    pub(crate) fn as_bytes(&self) -> &[u8]
-    where
-        B: ops::Deref<Target = buf>,
-        L: Layout,
-    {
-        &self.as_capacity_bytes()[..self.layout.byte_len()]
-    }
-
-    pub fn as_buf(&self) -> &buf
-    where
-        B: ops::Deref<Target = buf>,
-        L: Layout,
-    {
-        let byte_len = self.layout.byte_len();
-        self.buffer.truncate(byte_len)
-    }
-
-    pub fn as_mut_buf(&mut self) -> &mut buf
-    where
-        B: ops::DerefMut<Target = buf>,
-        L: Layout,
-    {
-        let byte_len = self.layout.byte_len();
-        self.buffer.truncate_mut(byte_len)
-    }
-
-    pub(crate) fn as_slice(&self) -> &[L::Sample]
-    where
-        B: ops::Deref<Target = buf>,
-        L: SliceLayout,
-    {
-        let texel = self.layout.sample();
-        texel.cast_buf(self.as_buf())
-    }
-
-    /// Borrow the buffer with the same layout.
-    pub(crate) fn borrow(&self) -> RawImage<&'_ buf, &'_ L>
-    where
-        B: ops::Deref<Target = buf>,
-    {
-        RawImage {
-            buffer: &self.buffer,
-            layout: &self.layout,
-        }
-    }
-
-    /// Borrow the buffer mutably with the same layout.
-    pub(crate) fn borrow_mut(&mut self) -> RawImage<&'_ mut buf, &'_ mut L>
-    where
-        B: ops::DerefMut<Target = buf>,
-    {
-        RawImage {
-            buffer: &mut self.buffer,
-            layout: &mut self.layout,
-        }
-    }
-
-    pub(crate) fn fits(&self, other: &impl Layout) -> bool
-    where
-        B: ops::Deref<Target = buf>,
-    {
-        other.byte_len() <= self.as_capacity_bytes().len()
-    }
-
-    /// Change the layout without checking the buffer.
-    pub(crate) fn reinterpret_unguarded<Other: Layout>(
-        self,
-        layout: impl FnOnce(L) -> Other,
-    ) -> RawImage<B, Other> {
-        RawImage {
-            buffer: self.buffer,
-            layout: layout(self.layout),
-        }
-    }
-
-    /// Reinterpret the bits in another layout.
-    ///
-    /// This method fails if the layout requires more bytes than are currently allocated.
-    pub(crate) fn try_reinterpret<Other>(self, layout: Other) -> Result<RawImage<B, Other>, Self>
-    where
-        B: ops::Deref<Target = buf>,
-        Other: Layout,
-    {
-        if self.buffer.len() < layout.byte_len() {
-            Err(self)
-        } else {
-            Ok(RawImage {
-                buffer: self.buffer,
-                layout,
-            })
-        }
-    }
-}
-
-/// Methods for all `Layouts` (the trait).
-impl<B: BufferLike, L: Layout> RawImage<B, L> {
-    /// Get a mutable reference to those bytes used by the layout.
-    pub(crate) fn as_bytes_mut(&mut self) -> &mut [u8]
-    where
-        B: BufferMut,
-    {
-        let len = self.layout.byte_len();
-        &mut self.as_capacity_bytes_mut()[..len]
-    }
-
-    /// Reuse the buffer for a new image layout of the same type.
-    pub(crate) fn try_reuse(&mut self, layout: L) -> Result<(), BufferReuseError> {
-        if self.as_capacity_bytes().len() >= layout.byte_len() {
-            self.layout = layout;
-            Ok(())
-        } else {
-            Err(BufferReuseError {
-                capacity: self.as_capacity_bytes().len(),
-                requested: Some(layout.byte_len()),
-            })
-        }
-    }
-
-    /// Change the layout but require that the new layout fits the buffer, never reallocate.
-    pub(crate) fn mutate_inplace<T>(&mut self, f: impl FnOnce(&mut L) -> T) -> T
-    where
-        L: Layout,
-    {
-        let t = f(&mut self.layout);
-        assert!(
-            self.layout.byte_len() <= self.buffer.len(),
-            "Modification required buffer allocation, was not in-place"
-        );
-        t
-    }
-
-    /// Take the buffer and layout from this image, moving content into a new instance.
-    ///
-    /// Asserts that the moved-from container can hold the emptied layout.
-    pub(crate) fn take(&mut self) -> Self
-    where
-        L: Take,
-    {
-        let buffer = self.buffer.take();
-        let layout = self.mutate_inplace(Take::take);
-        RawImage::with_buffer(layout, buffer)
-    }
-}
-
-/// Methods for layouts that are slices of individual samples.
-impl<B: BufferLike, L: SliceLayout> RawImage<B, L> {
-    /// Interpret an existing buffer as a pixel image.
-    ///
-    /// The data already contained within the buffer is not modified so that prior initialization
-    /// can be performed or one array of samples reinterpreted for an image of other sample type.
-    /// However, the `TexelBuffer` will be logically resized which will zero-initialize missing elements if
-    /// the current buffer is too short.
-    ///
-    /// # Panics
-    ///
-    /// This function will panic if resizing causes a reallocation that fails.
-    pub(crate) fn from_buffer(buffer: TexelBuffer<L::Sample>, layout: L) -> Self
-    where
-        B: From<Buffer>,
-    {
-        let buffer = buffer.into_inner();
-        assert!(buffer.len() >= layout.byte_len());
-        Self {
-            buffer: buffer.into(),
-            layout,
-        }
-    }
-
-    pub(crate) fn as_mut_slice(&mut self) -> &mut [L::Sample]
-    where
-        B: BufferMut,
-    {
-        self.layout.sample().cast_mut_buf(self.as_mut_buf())
-    }
-
-    /// Convert back into an vector-like of sample types.
-    pub(crate) fn into_buffer(self) -> TexelBuffer<L::Sample> {
-        let sample = self.layout.sample();
-        // Avoid calling any method of `Layout` after this. Not relevant for safety but might be in
-        // the future, if we want to avoid the extra check in `resize`.
-        let count = self.as_slice().len();
-        let buffer = self.buffer.into_owned();
-        let mut rec = TexelBuffer::from_buffer(buffer, sample);
-        // This should never reallocate at this point but we don't really know or care.
-        rec.resize(count);
-        rec
+        self.inner.mogrify_layout(|l| &mut **l).into()
     }
 }
 
 impl<'lt, L: Layout + Clone> From<Image<&'lt L>> for Image<L> {
     fn from(image: Image<&'lt L>) -> Self {
-        let layout: L = (*image.layout()).clone();
-        RawImage::with_buffer(layout, image.inner.buffer).into()
+        let (buffer, layout) = image.inner.into_parts();
+        let layout: L = layout.clone();
+        RawImage::from_buffer(layout, buffer).into()
     }
 }
 
 impl<'lt, L: Layout + Clone> From<Image<&'lt mut L>> for Image<L> {
     fn from(image: Image<&'lt mut L>) -> Self {
-        let layout: L = (*image.layout()).clone();
-        RawImage::with_buffer(layout, image.inner.buffer).into()
+        let (buffer, layout) = image.inner.into_parts();
+        let layout: L = layout.clone();
+        RawImage::from_buffer(layout, buffer).into()
     }
 }
 
@@ -1265,29 +1101,33 @@ impl<'lt, L: Layout + Clone> From<&'lt mut Image<L>> for ImageMut<'lt, L> {
 /* FIXME: decide if this should be an explicit method. */
 impl<'lt, L: Layout + Clone> From<ImageRef<'lt, &'_ L>> for ImageRef<'lt, L> {
     fn from(image: ImageRef<'lt, &'_ L>) -> Self {
-        let layout: L = (*image.layout()).clone();
-        RawImage::with_buffer(layout, image.inner.buffer).into()
+        let (buffer, layout) = image.inner.into_parts();
+        let layout: L = layout.clone();
+        RawImage::from_buffer(layout, buffer).into()
     }
 }
 
 impl<'lt, L: Layout + Clone> From<ImageRef<'lt, &'_ mut L>> for ImageRef<'lt, L> {
     fn from(image: ImageRef<'lt, &'_ mut L>) -> Self {
-        let layout: L = (*image.layout()).clone();
-        RawImage::with_buffer(layout, image.inner.buffer).into()
+        let (buffer, layout) = image.inner.into_parts();
+        let layout: L = layout.clone();
+        RawImage::from_buffer(layout, buffer).into()
     }
 }
 
 impl<'lt, L: Layout + Clone> From<ImageMut<'lt, &'_ L>> for ImageMut<'lt, L> {
     fn from(image: ImageMut<'lt, &'_ L>) -> Self {
-        let layout: L = (*image.layout()).clone();
-        RawImage::with_buffer(layout, image.inner.buffer).into()
+        let (buffer, layout) = image.inner.into_parts();
+        let layout: L = layout.clone();
+        RawImage::from_buffer(layout, buffer).into()
     }
 }
 
 impl<'lt, L: Layout + Clone> From<ImageMut<'lt, &'_ mut L>> for ImageMut<'lt, L> {
     fn from(image: ImageMut<'lt, &'_ mut L>) -> Self {
-        let layout: L = (*image.layout()).clone();
-        RawImage::with_buffer(layout, image.inner.buffer).into()
+        let (buffer, layout) = image.inner.into_parts();
+        let layout: L = layout.clone();
+        RawImage::from_buffer(layout, buffer).into()
     }
 }
 /* FIXME: until here */
@@ -1310,43 +1150,10 @@ impl<'lt, L> From<RawImage<&'lt mut buf, L>> for ImageMut<'lt, L> {
     }
 }
 
-impl BufferLike for Buffer {
-    fn into_owned(self) -> Self {
-        self
-    }
-
-    fn take(&mut self) -> Self {
-        core::mem::take(self)
-    }
-}
-
-impl BufferLike for &'_ mut buf {
-    fn into_owned(self) -> Buffer {
-        Buffer::from(self.as_bytes())
-    }
-
-    fn take(&mut self) -> Self {
-        core::mem::take(self)
-    }
-}
-
-impl Growable for Buffer {
-    fn grow_to(&mut self, bytes: usize) {
-        Buffer::grow_to(self, bytes);
-    }
-}
-
-impl BufferMut for Buffer {}
-
-impl BufferMut for &'_ mut buf {}
-
-impl<Layout: Default> Default for Image<Layout> {
+impl<L: Layout + Default> Default for Image<L> {
     fn default() -> Self {
         Image {
-            inner: RawImage {
-                buffer: Buffer::default(),
-                layout: Layout::default(),
-            },
+            inner: RawImage::from_buffer(L::default(), Buffer::default()),
         }
     }
 }
@@ -1358,7 +1165,7 @@ where
 {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
         f.debug_struct("Image")
-            .field("layout", &self.inner.layout)
+            .field("layout", self.inner.layout())
             .field("content", &self.inner.as_slice())
             .finish()
     }

@@ -278,6 +278,16 @@ impl<P> TexelBuffer<P> {
         self.buf_mut().as_bytes_mut()
     }
 
+    /// View the raw bytes wrapped in the aligned buffer type.
+    pub fn as_buf(&self) -> &buf {
+        self.buf()
+    }
+
+    /// View the mutable raw bytes wrapped in the aligned buffer type.
+    pub fn as_buf_mut(&mut self) -> &mut buf {
+        self.buf_mut()
+    }
+
     /// View the buffer as a different texel type.
     pub fn as_texels<O>(&self, pixel: Texel<O>) -> &[O] {
         self.buf().as_texels(pixel)

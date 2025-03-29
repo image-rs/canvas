@@ -2,15 +2,21 @@
 //!
 //! The `*Layout` traits define generic standard layouts with a normal form. Other traits provide
 //! operations to convert between layouts, operations on the underlying image bytes, etc.
-use crate::texel::MaxAligned;
+use crate::texels::{MaxAligned, TexelRange};
 use crate::{AsTexel, Texel};
 use ::alloc::boxed::Box;
 use core::{alloc, cmp};
 
 mod matrix;
+mod planar;
+mod relocated;
+mod upsampling;
 
 use crate::image::{Coord, ImageMut, ImageRef};
 pub use crate::stride::{BadStrideError, StrideSpec, StridedBytes, StridedLayout, Strides};
+pub use matrix::{Matrix, MatrixBytes, MatrixLayout};
+pub use planar::{PlaneBytes, PlaneMatrices, Planes};
+pub(crate) use upsampling::Yuv420p;
 
 /// A byte layout that only describes the user bytes.
 ///
@@ -52,6 +58,13 @@ pub struct TexelLayout {
 /// subsampled YUV images and even raw Bayer filtered images.
 pub trait Layout {
     fn byte_len(&self) -> usize;
+}
+
+impl dyn Layout + '_ {
+    #[inline]
+    pub fn fits_buf(&self, bytes: &crate::buf::buf) -> bool {
+        self.byte_len() <= bytes.as_bytes().len()
+    }
 }
 
 /// Convert one layout to a less strict one.
@@ -204,7 +217,16 @@ pub trait SliceLayout: Layout {
     fn len(&self) -> usize {
         self.byte_len() / self.sample().size()
     }
+
+    fn as_index(&self) -> TexelRange<Self::Sample> {
+        self.sample()
+            .to_range(0..self.len())
+            .expect("A layout should fit into memory")
+    }
 }
+
+// Just assert that `dyn SliceLayout<Sample = T>` is a valid type.
+impl<T> dyn SliceLayout<Sample = T> {}
 
 /// A layout of individually addressable raster elements.
 ///
@@ -243,6 +265,164 @@ pub trait RasterMut<Pixel>: Raster<Pixel> {
     }
 }
 
+/// An index type that identifies a 'plane' of an image layout.
+///
+/// The byte offset of all planes must adhere to alignment requirements as set by [`MaxAligned`],
+/// each individually. This ensures that each plane can be addressed equally.
+///
+/// Planes may be any part of the image that can be addressed independently. This could be that
+/// the component matrices of different channels are stored after each other, or interleaved ways
+/// of storing different quantization levels, optimizations for cache oblivious layouts etc. While
+/// planes usually constructed to be non-overlapping this requirement is not inherent in the trait.
+/// However, consider that mutable access to overlapping planes is not possible.
+///
+/// There may be multiple different ways of indexing into the same layout. Similar to the standard
+/// libraries [Index](`core::ops::Index`) trait, this trait can be implemented to provide an index
+/// into a layout defined in a different crate.
+///
+/// # Examples
+///
+/// The `PlaneMatrices` wrapper stores an array of matrix layouts. This trait allows accessing them
+/// by a `usize` index, conveniently interacting with the `ImageRef` and `ImageMut` types.
+///
+/// ```
+/// use image_texel::image::Image;
+/// use image_texel::layout::{PlaneMatrices, Matrix};
+/// use image_texel::texels::U8;
+///
+/// // Imagine a JPEG with progressive DCT coefficient planes.
+/// let rough = Matrix::from_width_height(U8, 8, 8).unwrap();
+/// let dense = Matrix::from_width_height(U8, 64, 64).unwrap();
+///
+/// // The assembled layout can be used to access the disjoint planes.
+/// let matrices = PlaneMatrices::new(U8, [rough, dense]);
+///
+/// let buffer = Image::new(&matrices);
+/// let [p0, p1] = buffer.as_ref().into_planes([0, 1]).unwrap();
+///
+/// let rough_coeffs = p0.into_bytes();
+/// let dense_coeffs = p1.into_bytes();
+///
+/// assert_eq!(rough_coeffs.len(), 8 * 8);
+/// assert_eq!(dense_coeffs.len(), 64 * 64);
+/// ```
+pub trait PlaneOf<L: ?Sized> {
+    type Plane: Layout;
+
+    /// Get the layout describing the plane.
+    fn get_plane(self, layout: &L) -> Option<Self::Plane>;
+}
+
+/// A layout that supports being moved in memory.
+///
+/// Such a layout only occupies a smaller but contiguous range of its full buffer length. One can
+/// query that offset and modify it. Note that a relocatable layout should still report its
+/// [`Layout::byte_len`] as the past-the-end of its last relevant byte.
+pub trait Relocate: Layout {
+    /// The offset of the first relevant byte of this layout.
+    ///
+    /// This should be smaller or equal to the length.
+    fn byte_offset(&self) -> usize;
+
+    /// Move the layout to another aligned offset.
+    ///
+    /// The length of the layout should implicitly be modified by this operation, that is the range
+    /// between the start offset and its apparent length should remain the same.
+    ///
+    /// Moving to an aligned offset must work.
+    ///
+    /// # Panics
+    ///
+    /// Implementations are encouraged to panic if the newly chosen offset would make the total
+    /// length overflow `isize::MAX`, i.e. possible allocation size.
+    fn relocate(&mut self, offset: AlignedOffset);
+
+    /// Attempt to relocate the offset to another start offset, in bytes.
+    ///
+    /// This method should return `false` if the new offset is not suitable for the layout. The
+    /// default implementation requires an aligned offset. Implementations may work for additional
+    /// offsets.
+    fn relocate_to_byte(&mut self, offset: usize) -> bool {
+        if let Some(aligned_offset) = AlignedOffset::new(offset) {
+            self.relocate(aligned_offset);
+            true
+        } else {
+            false
+        }
+    }
+
+    /// Retrieve the contiguous byte range occupied by this layout.
+    fn byte_range(&self) -> core::ops::Range<usize> {
+        let start = self.byte_offset();
+        let end = self.byte_len();
+
+        debug_assert!(
+            start <= end,
+            "The length calculation of this layout is buggy"
+        );
+
+        start..end.min(start)
+    }
+
+    /// Get an index addressing all samples covered by the range of this relocated layout.
+    fn texel_range(&self) -> TexelRange<Self::Sample>
+    where
+        Self: SliceLayout + Sized,
+    {
+        TexelRange::from_byte_range(self.sample(), self.byte_offset()..self.byte_len())
+            .expect("A layout should fit into memory")
+    }
+}
+
+impl dyn Relocate {}
+
+/// An unsigned offset that is maximally aligned.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, PartialOrd, Ord)]
+pub struct AlignedOffset(usize);
+
+impl AlignedOffset {
+    const ALIGN: usize = core::mem::align_of::<MaxAligned>();
+
+    /// Try to construct an aligned offset.
+    pub fn new(offset: usize) -> Option<Self> {
+        if offset % Self::ALIGN == 0 && offset <= isize::MAX as usize {
+            Some(AlignedOffset(offset))
+        } else {
+            None
+        }
+    }
+
+    /// Get the wrapped offset as a `usize`.
+    pub fn get(self) -> usize {
+        self.0
+    }
+
+    /// Get the next valid offset after adding `bytes` to this.
+    ///
+    /// ```
+    /// use image_texel::layout::AlignedOffset;
+    ///
+    /// let zero = AlignedOffset::default();
+    ///
+    /// assert_eq!(zero.next_up(0), Some(zero));
+    /// assert_eq!(zero.next_up(1), zero.next_up(2));
+    ///
+    /// assert!(zero.next_up(usize::MAX).is_none());
+    /// assert!(zero.next_up(isize::MAX as usize).is_none());
+    /// ```
+    #[must_use]
+    pub fn next_up(self, bytes: usize) -> Option<Self> {
+        let range_start = self.0.checked_add(bytes)?;
+        let new_offset = range_start.checked_next_multiple_of(Self::ALIGN)?;
+
+        if new_offset > isize::MAX as usize {
+            return None;
+        }
+
+        AlignedOffset::new(new_offset)
+    }
+}
+
 /// A dynamic descriptor of an image's layout.
 ///
 /// FIXME: figure out if this is 'right' to expose in this crate.
@@ -255,46 +435,6 @@ pub(crate) struct DynLayout {
 pub(crate) enum LayoutRepr {
     Matrix(MatrixBytes),
     Yuv420p(Yuv420p),
-}
-
-/// A matrix of packed texels (channel groups).
-///
-/// This is a simple layout of exactly width·height homogeneous pixels.
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
-pub struct MatrixBytes {
-    pub(crate) element: TexelLayout,
-    pub(crate) first_dim: usize,
-    pub(crate) second_dim: usize,
-}
-
-/// A matrix of packed texels (channel groups).
-///
-/// The underlying buffer may have more data allocated than this region and cause the overhead to
-/// be reused when resizing the image. All ways to construct this already check that all pixels
-/// within the resulting image can be addressed via an index.
-pub struct Matrix<P> {
-    pub(crate) width: usize,
-    pub(crate) height: usize,
-    pub(crate) pixel: Texel<P>,
-}
-
-/// A layout that's a matrix of elements.
-pub trait MatrixLayout: Layout {
-    /// The valid matrix specification of this layout.
-    ///
-    /// This call should not fail, or panic. Otherwise, prefer an optional getter for the
-    /// [`StridedBytes`] and have the caller decay their own buffer.
-    fn matrix(&self) -> MatrixBytes;
-}
-
-/// Planar chroma 2×2 block-wise sub-sampled image.
-///
-/// FIXME: figure out if this is 'right' to expose in this crate.
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
-pub(crate) struct Yuv420p {
-    channel: TexelLayout,
-    width: u32,
-    height: u32,
 }
 
 /// An error indicating that mending failed due to mismatching pixel attributes.
@@ -402,92 +542,22 @@ impl TexelLayout {
     }
 }
 
+/// Convert a pixel to an element, discarding the exact type information.
+impl<T> From<Texel<T>> for TexelLayout {
+    fn from(texel: Texel<T>) -> Self {
+        TexelLayout {
+            size: texel.size(),
+            align: texel.align(),
+        }
+    }
+}
+
 impl DynLayout {
     pub fn byte_len(&self) -> usize {
         match self.repr {
             LayoutRepr::Matrix(matrix) => matrix.byte_len(),
             LayoutRepr::Yuv420p(matrix) => matrix.byte_len(),
         }
-    }
-}
-
-impl MatrixBytes {
-    pub fn empty(element: TexelLayout) -> Self {
-        MatrixBytes {
-            element,
-            first_dim: 0,
-            second_dim: 0,
-        }
-    }
-
-    pub fn from_width_height(
-        element: TexelLayout,
-        first_dim: usize,
-        second_dim: usize,
-    ) -> Option<Self> {
-        let max_index = first_dim.checked_mul(second_dim)?;
-        let _ = max_index.checked_mul(element.size)?;
-
-        Some(MatrixBytes {
-            element,
-            first_dim,
-            second_dim,
-        })
-    }
-
-    /// Get the element type of this matrix.
-    pub const fn element(&self) -> TexelLayout {
-        self.element
-    }
-
-    /// Get the width of this matrix.
-    pub const fn width(&self) -> usize {
-        self.first_dim
-    }
-
-    /// Get the height of this matrix.
-    pub const fn height(&self) -> usize {
-        self.second_dim
-    }
-
-    /// Get the required bytes for this layout.
-    pub const fn byte_len(self) -> usize {
-        // Exactly this does not overflow due to construction.
-        self.element.size * self.len()
-    }
-
-    /// The number of pixels in this layout
-    pub const fn len(self) -> usize {
-        self.first_dim * self.second_dim
-    }
-}
-
-impl Yuv420p {
-    pub fn from_width_height(channel: TexelLayout, width: u32, height: u32) -> Option<Self> {
-        use core::convert::TryFrom;
-        if width % 2 != 0 || height % 2 != 0 {
-            return None;
-        }
-
-        let mwidth = usize::try_from(width).ok()?;
-        let mheight = usize::try_from(height).ok()?;
-
-        let y_count = mwidth.checked_mul(mheight)?;
-        let uv_count = y_count / 2;
-
-        let count = y_count.checked_add(uv_count)?;
-        let _ = count.checked_mul(channel.size)?;
-
-        Some(Yuv420p {
-            channel,
-            width,
-            height,
-        })
-    }
-
-    pub const fn byte_len(self) -> usize {
-        let ylen = (self.width as usize) * (self.height as usize) * self.channel.size;
-        ylen + ylen / 2
     }
 }
 
@@ -521,41 +591,6 @@ impl Layout for DynLayout {
     }
 }
 
-impl Layout for MatrixBytes {
-    fn byte_len(&self) -> usize {
-        MatrixBytes::byte_len(*self)
-    }
-}
-
-impl Take for MatrixBytes {
-    fn take(&mut self) -> Self {
-        core::mem::replace(self, MatrixBytes::empty(self.element))
-    }
-}
-
-impl<P> MatrixLayout for Matrix<P> {
-    fn matrix(&self) -> MatrixBytes {
-        self.into_matrix_bytes()
-    }
-}
-
-/// Remove the strong typing for dynamic channel type information.
-impl<L: MatrixLayout> Decay<L> for MatrixBytes {
-    fn decay(from: L) -> MatrixBytes {
-        from.matrix()
-    }
-}
-
-/// Try to use the matrix with a specific pixel type.
-impl<P> TryMend<MatrixBytes> for Texel<P> {
-    type Into = Matrix<P>;
-    type Err = MismatchedPixelError;
-
-    fn try_mend(self, matrix: &MatrixBytes) -> Result<Matrix<P>, Self::Err> {
-        Matrix::with_matrix(self, *matrix).ok_or_else(MismatchedPixelError::default)
-    }
-}
-
 impl<T> SliceLayout for &'_ T
 where
     T: SliceLayout,
@@ -575,16 +610,6 @@ where
 
     fn sample(&self) -> Texel<Self::Sample> {
         (**self).sample()
-    }
-}
-
-/// Convert a pixel to an element, discarding the exact type information.
-impl<P> From<Texel<P>> for TexelLayout {
-    fn from(pix: Texel<P>) -> Self {
-        TexelLayout {
-            size: pix.size(),
-            align: pix.align(),
-        }
     }
 }
 
@@ -673,43 +698,24 @@ impl From<Yuv420p> for DynLayout {
     }
 }
 
-impl<P> From<Matrix<P>> for MatrixBytes {
-    fn from(mat: Matrix<P>) -> Self {
-        MatrixBytes {
-            element: mat.pixel().into(),
-            first_dim: mat.width(),
-            second_dim: mat.height(),
-        }
+impl<P, L> PlaneOf<&'_ L> for P
+where
+    P: PlaneOf<L>,
+{
+    type Plane = <P as PlaneOf<L>>::Plane;
+
+    fn get_plane(self, layout: &&L) -> Option<Self::Plane> {
+        <P as PlaneOf<L>>::get_plane(self, *layout)
     }
 }
 
-/// Note: on 64-bit targets only the first `u32::MAX` dimensions appear accessible.
-impl<P> Raster<P> for Matrix<P> {
-    fn dimensions(&self) -> Coord {
-        use core::convert::TryFrom;
-        let width = u32::try_from(self.width()).unwrap_or(u32::MAX);
-        let height = u32::try_from(self.height()).unwrap_or(u32::MAX);
-        Coord(width, height)
-    }
+impl<P, L> PlaneOf<&'_ mut L> for P
+where
+    P: PlaneOf<L>,
+{
+    type Plane = <P as PlaneOf<L>>::Plane;
 
-    fn get(from: ImageRef<&Self>, Coord(x, y): Coord) -> Option<P> {
-        if from.layout().in_bounds(x as usize, y as usize) {
-            let index = from.layout().index_of(x as usize, y as usize);
-            let texel = from.layout().sample();
-            from.as_slice().get(index).map(|v| texel.copy_val(v))
-        } else {
-            None
-        }
-    }
-}
-
-impl<P> RasterMut<P> for Matrix<P> {
-    fn put(into: ImageMut<&mut Self>, Coord(x, y): Coord, val: P) {
-        if into.layout().in_bounds(x as usize, y as usize) {
-            let index = into.layout().index_of(x as usize, y as usize);
-            if let Some(dst) = into.into_mut_slice().get_mut(index) {
-                *dst = val;
-            }
-        }
+    fn get_plane(self, layout: &&mut L) -> Option<Self::Plane> {
+        <P as PlaneOf<L>>::get_plane(self, *layout)
     }
 }
