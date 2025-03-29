@@ -119,11 +119,7 @@ pub struct Matrix<P> {
 }
 
 impl<P> Matrix<P> {
-    pub fn from_width_height(
-        pixel: Texel<P>,
-        width: usize,
-        height: usize,
-    ) -> Option<Self> {
+    pub fn from_width_height(pixel: Texel<P>, width: usize, height: usize) -> Option<Self> {
         let max_index = Self::max_index(width, height)?;
         let _ = max_index.checked_mul(pixel.size())?;
 
@@ -216,7 +212,6 @@ impl<P> Matrix<P> {
     pub fn map_to<Q>(self, pixel: Texel<Q>) -> Option<Matrix<Q>> {
         Matrix::from_width_height(pixel, self.width, self.height)
     }
-
 }
 
 impl<P> MatrixLayout for Matrix<P> {

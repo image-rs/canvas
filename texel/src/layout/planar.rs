@@ -306,6 +306,11 @@ impl<T, const N: usize> PlaneMatrices<T, N> {
             .expect("input matrices have this texel")
     }
 
+    pub fn from_repeated(matrix: Matrix<T>) -> Self {
+        let texel = matrix.pixel();
+        Self::new(texel, [matrix; N])
+    }
+
     /// Return a reference to one relocated matrix layout.
     pub fn plane_ref(&self, idx: usize) -> Option<&Relocated<Matrix<T>>> {
         self.planes.inner.get(idx)

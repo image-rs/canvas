@@ -298,10 +298,10 @@ pub trait RasterMut<Pixel>: Raster<Pixel> {
 /// let matrices = PlaneMatrices::new(U8, [rough, dense]);
 ///
 /// let buffer = Image::new(&matrices);
-/// let [p0, p1] = buffer.as_ref().into_planes([0, 1]);
+/// let [p0, p1] = buffer.as_ref().into_planes([0, 1]).unwrap();
 ///
-/// let rough_coeffs = p0.unwrap().into_bytes();
-/// let dense_coeffs = p1.unwrap().into_bytes();
+/// let rough_coeffs = p0.into_bytes();
+/// let dense_coeffs = p1.into_bytes();
 ///
 /// assert_eq!(rough_coeffs.len(), 8 * 8);
 /// assert_eq!(dense_coeffs.len(), 64 * 64);

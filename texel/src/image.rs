@@ -29,16 +29,17 @@ pub use crate::stride::{StridedBufferMut, StridedBufferRef};
 /// lead to a diverging size of the memory buffer and the layout. Hence, access to the image pixels
 /// should not lead to panic unless an incorrectly implemented layout is used.
 ///
-/// It possible to convert the layout to a less strictly typed one without reallocating the buffer.
-/// For example, all standard layouts such as `Matrix` can be weakened to `DynLayout`. The reverse
-/// can not be done unchecked but is possible with fallible conversions.
+/// It possible to convert the layout to a less strictly typed one without reallocating the buffer,
+/// by re-interpreting the bytes. For example, all standard layouts such as
+/// [`Matrix`](`crate::layout::Matrix`) can be weakened to [`Bytes`]. The reverse can not be done
+/// unchecked but is possible with fallible conversions.
 ///
-/// Indeed, the image can _arbitrarily_ change its own layout—different `ImageRef` and
-/// `ImageMut` may even chose _conflicting layouts—and thus overwrite the content with completely
+/// Indeed, the image can _arbitrarily_ change its own layout—different [`ImageRef`] and
+/// [`ImageMut`] may even chose _conflicting layouts—and thus overwrite the content with completely
 /// different types and layouts. This is intended to maximize the flexibility for users. In
 /// complicated cases it could be hard for the type system to reflect the compatibility of a custom
 /// pixel layout and a standard one. It is solely the user's responsibility to use the interface
-/// sensibly. The _soundness_ of standard channel types (e.g. `u8` or `u32`) is not impacted by
+/// sensibly. The _soundness_ of standard channel types (e.g. [`u8`] or [`u32`]) is not impacted by
 /// this as any byte content is valid for them.
 ///
 /// ## Examples
@@ -85,16 +86,25 @@ pub struct Image<Layout = Bytes> {
 /// A read-only view of an image.
 ///
 /// Note that this requires its underlying buffer to be highly aligned! For that reason it is not
-/// possible to take a reference at an arbitrary number of bytes.
+/// possible to take a reference at an arbitrary byte slice for its initialization.
 #[derive(Clone, PartialEq, Eq)]
 pub struct ImageRef<'buf, Layout = &'buf Bytes> {
     inner: RawImage<&'buf buf, Layout>,
 }
 
 /// A writeable reference to an image buffer.
+///
+/// Note that this requires its underlying buffer to be highly aligned! For that reason it is not
+/// possible to take a reference at an arbitrary byte slice for its initialization.
 #[derive(PartialEq, Eq)]
 pub struct ImageMut<'buf, Layout = &'buf mut Bytes> {
     inner: RawImage<&'buf mut buf, Layout>,
+}
+
+/// Returned when failing to split an image into planes.
+#[allow(dead_code)]
+pub struct IntoPlanesError {
+    index_errors: core::num::NonZeroUsize,
 }
 
 /// Describes an image coordinate.
@@ -102,18 +112,22 @@ pub struct ImageMut<'buf, Layout = &'buf mut Bytes> {
 pub struct Coord(pub u32, pub u32);
 
 impl Coord {
+    /// The coordinate across the width of the image (horizontal direction).
     pub fn x(self) -> u32 {
         self.0
     }
 
+    /// The coordinate across the height of the image (horizontal direction).
     pub fn y(self) -> u32 {
         self.1
     }
 
+    /// Access both coordinates as a tuple.
     pub fn yx(self) -> (u32, u32) {
         (self.1, self.0)
     }
 
+    /// Access both coordinates as a tuple.
     pub fn xy(self) -> (u32, u32) {
         (self.0, self.1)
     }
@@ -593,16 +607,36 @@ impl<'data, L> ImageRef<'data, L> {
 
     /// Split this reference into independent planes.
     ///
-    /// Planes that fail their indexing operation or that would not be aligned to the required
-    /// alignment are not returned. All other planes are returned in `Some`.
+    /// If any plane fails their indexing operation or would not be aligned to the required
+    /// alignment or any plane layouts would overlap, an error is returned. The planes are returned
+    /// in the order of the descriptors.
     ///
     /// FIXME: the layout type is not what we want. For instance, with `PlaneMatrices` we get a
     /// plane type of `Relocated<Matrix<_>>` but when we relocate that to `0` then we would really
     /// prefer having a simple `Matrix<_>` as the layout type.
+    ///
+    /// # Examples
+    ///
+    /// A layout describing a matrix array can be split:
+    ///
+    /// ```
+    /// use image_texel::image::{Image, ImageRef};
+    /// use image_texel::layout::{PlaneMatrices, Matrix};
+    /// use image_texel::texels::U8;
+    ///
+    /// let mat = Matrix::from_width_height(U8, 8, 8).unwrap();
+    /// let buffer = Image::new(PlaneMatrices::<_, 2>::from_repeated(mat));
+    /// let image: ImageRef<'_, _> = buffer.as_ref();
+    ///
+    /// let [p0, p1] = buffer.as_ref().into_planes([0, 1]).unwrap();
+    /// ```
+    ///
+    /// You may select the same plane twice:
+    ///
     pub fn into_planes<const N: usize, D>(
         self,
         descriptors: [D; N],
-    ) -> [Option<ImageRef<'data, D::Plane>>; N]
+    ) -> Result<[ImageRef<'data, D::Plane>; N], IntoPlanesError>
     where
         D: PlaneOf<L>,
         D::Plane: Relocate,
@@ -623,6 +657,7 @@ impl<'data, L> ImageRef<'data, L> {
 
             let skip_by = layout.byte_offset();
 
+            // FIXME: do we want failure reasons?
             if skip_by % MAX_ALIGN != 0 {
                 plane.0 = None;
                 continue;
@@ -650,9 +685,8 @@ impl<'data, L> ImageRef<'data, L> {
             buffer = tail;
         }
 
-        planes.map(|(layout, buffer)| -> Option<_> {
-            Some(RawImage::from_buffer(layout?, buffer).into())
-        })
+        let planes = IntoPlanesError::from_array(planes)?;
+        Ok(planes.map(|(layout, buffer)| RawImage::from_buffer(layout, buffer).into()))
     }
 }
 
@@ -870,13 +904,44 @@ impl<'data, L> ImageMut<'data, L> {
 
     /// Split this mutable reference into independent planes.
     ///
-    /// This method ignores any of the requested planes which overlap, including if the same plane
-    /// is requested multiple times. Only the first requested plane is returned. Planes that would
-    /// not be aligned to the required alignment are also ignored.
+    /// If any plane fails their indexing operation or would not be aligned to the required
+    /// alignment or the same index is used twice or any plane layouts would overlap for other
+    /// reasons, an error is returned. The planes are returned in the order of the descriptors.
+    ///
+    /// # Examples
+    ///
+    /// A layout describing a matrix array can be split:
+    ///
+    /// ```
+    /// use image_texel::image::{Image, ImageMut};
+    /// use image_texel::layout::{PlaneMatrices, Matrix};
+    /// use image_texel::texels::U8;
+    ///
+    /// let mat = Matrix::from_width_height(U8, 8, 8).unwrap();
+    /// let mut buffer = Image::new(PlaneMatrices::<_, 2>::from_repeated(mat));
+    /// let image: ImageMut<'_, _> = buffer.as_mut();
+    ///
+    /// let [p0, p1] = image.into_planes([0, 1]).unwrap();
+    /// ```
+    ///
+    /// Contrary to a shared buffer, it is not possible to select the same plane twice or for
+    /// planes to overlap:
+    ///
+    /// ```
+    /// use image_texel::image::{Image, ImageMut};
+    /// use image_texel::layout::{PlaneMatrices, Matrix};
+    /// use image_texel::texels::U8;
+    ///
+    /// let mat = Matrix::from_width_height(U8, 8, 8).unwrap();
+    /// let mut buffer = Image::new(PlaneMatrices::<_, 2>::from_repeated(mat));
+    /// let image: ImageMut<'_, _> = buffer.as_mut();
+    ///
+    /// assert!(image.into_planes([0, 0]).is_err(), "cannot have the same mutable references");
+    /// ```
     pub fn into_planes<const N: usize, D>(
         self,
         descriptors: [D; N],
-    ) -> [Option<ImageMut<'data, D::Plane>>; N]
+    ) -> Result<[ImageMut<'data, D::Plane>; N], IntoPlanesError>
     where
         D: PlaneOf<L>,
         D::Plane: Relocate,
@@ -941,9 +1006,29 @@ impl<'data, L> ImageMut<'data, L> {
             buffer = tail;
         }
 
-        planes.map(|(layout, buffer)| -> Option<_> {
-            Some(RawImage::from_buffer(layout?, buffer).into())
-        })
+        let planes = IntoPlanesError::from_array(planes)?;
+        Ok(planes.map(|(layout, buffer)| RawImage::from_buffer(layout, buffer).into()))
+    }
+}
+
+impl IntoPlanesError {
+    pub(crate) fn from_array<L, Buffer, const N: usize>(
+        items: [(Option<L>, Buffer); N],
+    ) -> Result<[(L, Buffer); N], Self> {
+        if let Some(index_errors) = {
+            let count = items.iter().filter(|(l, _)| l.is_none()).count();
+            core::num::NonZeroUsize::new(count)
+        } {
+            return Err(IntoPlanesError { index_errors });
+        }
+
+        Ok(items.map(|(l, b)| (l.unwrap(), b)))
+    }
+}
+
+impl core::fmt::Debug for IntoPlanesError {
+    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+        f.debug_struct("IntoPlanesError").finish()
     }
 }
 
