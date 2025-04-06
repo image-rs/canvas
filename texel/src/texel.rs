@@ -425,6 +425,16 @@ impl atomic_buf {
         unsafe { &*(atomics as *const Self) }
     }
 
+    pub(crate) fn from_slice_mut(values: &mut [MaxAtomic]) -> &mut Self {
+        debug_assert_eq!(values.as_ptr() as usize % Self::ALIGNMENT, 0);
+        let ptr = values.as_ptr() as *const AtomicPart;
+        let count = values.len() * ATOMIC_PARTS;
+        // Safety: as `from_slice`.
+        let atomics = core::ptr::slice_from_raw_parts::<AtomicPart>(ptr, count);
+        // Safety: `atomic_buf` has the same layout as a `[MaxAtomic]` and wraps it transparently.
+        unsafe { &mut *(atomics as *mut Self) }
+    }
+
     /// Wrap a sub-slice of bytes from an atomic buffer into a new `atomic_buf`.
     ///
     /// The bytes need to be aligned to `ALIGNMENT`. Returns `None` if these checks fail and return
@@ -447,21 +457,30 @@ impl atomic_buf {
     /// The bytes need to be aligned to `ALIGNMENT`. Additionally the length must be a multiple of
     /// the `MaxAtomic` size's units. Returns `None` if these checks fail and return the newly
     /// wrapped buffer in `Some` otherwise.
-    pub fn from_bytes_mut(bytes: &mut [u8]) -> Option<&Self> {
+    pub fn from_bytes_mut(bytes: &mut [u8]) -> Option<&mut Self> {
         if bytes.as_ptr() as usize % Self::ALIGNMENT != 0 {
             None
         } else if bytes.len() % core::mem::size_of::<MaxAtomic>() != 0 {
             None
         } else {
-            let len = bytes.len() / core::mem::size_of::<MaxAtomic>();
-            let ptr = bytes.as_mut_ptr() as *mut MaxAtomic;
+            let len = bytes.len() / core::mem::size_of::<AtomicPart>();
+            let ptr = bytes.as_mut_ptr() as *mut AtomicPart;
             // SAFETY: We fulfill the alignment and length requirements for this cast, i.e. there
             // are enough bytes available in this slice. Additionally, we still guarantee that this
             // is at least aligned to `MAX_ALIGN`. We also have the shared read-write provenance on
             // our pointer that a shared reference to atomic requires.
-            let slice = unsafe { &*ptr::slice_from_raw_parts(ptr, len) };
-            Some(atomic_buf::from_slice(slice))
+            let atomics = ptr::slice_from_raw_parts_mut(ptr, len);
+            Some(unsafe { &mut *(atomics as *mut Self) })
         }
+    }
+
+    /// Wrapper around the unstable `<Atomic*>::get_mut_slice`.
+    pub(crate) fn part_mut_slice(slice: &mut [AtomicPart]) -> &mut [u8] {
+        let len = core::mem::size_of_val(slice);
+        let ptr = slice.as_mut_ptr() as *mut u8;
+        // SAFETY: this is an almost trivial cast of unsized references. Additionally, we still
+        // guarantee that this is at least aligned to `MAX_ALIGN`.
+        unsafe { slice::from_raw_parts_mut(ptr, len) }
     }
 }
 

@@ -136,6 +136,22 @@ impl<B: BufferLike, L> RawImage<B, L> {
         &mut self.buffer
     }
 
+    /// Get a reference to the full allocated underlying atomic buffer.
+    pub(crate) fn as_capacity_atomic_buf(&self) -> &atomic_buf
+    where
+        B: ops::Deref<Target = atomic_buf>,
+    {
+        &self.buffer
+    }
+
+    /// Get a reference to the full allocated underlying cell buffer.
+    pub(crate) fn as_capacity_cell_buf(&self) -> &cell_buf
+    where
+        B: ops::Deref<Target = cell_buf>,
+    {
+        &self.buffer
+    }
+
     /// Take ownership of the image's bytes.
     ///
     /// # Panics
@@ -302,9 +318,9 @@ impl<B, L> RawImage<B, L> {
     }
 
     /// Borrow the buffer with the same layout.
-    pub(crate) fn as_borrow(&self) -> RawImage<&'_ buf, &'_ L>
+    pub(crate) fn as_deref(&self) -> RawImage<&'_ B::Target, &'_ L>
     where
-        B: ops::Deref<Target = buf>,
+        B: ops::Deref,
     {
         RawImage {
             buffer: &self.buffer,
@@ -313,9 +329,9 @@ impl<B, L> RawImage<B, L> {
     }
 
     /// Borrow the buffer mutably with the same layout.
-    pub(crate) fn as_borrow_mut(&mut self) -> RawImage<&'_ mut buf, &'_ mut L>
+    pub(crate) fn as_deref_mut(&mut self) -> RawImage<&'_ mut B::Target, &'_ mut L>
     where
-        B: ops::DerefMut<Target = buf>,
+        B: ops::DerefMut,
     {
         RawImage {
             buffer: &mut self.buffer,
@@ -326,9 +342,9 @@ impl<B, L> RawImage<B, L> {
     /// Check if the buffer is enough for another layout.
     pub(crate) fn fits(&self, other: &impl Layout) -> bool
     where
-        B: ops::Deref<Target = buf>,
+        B: BufferLike,
     {
-        <dyn Layout>::fits_buf(other, &self.buffer)
+        <dyn Layout>::fits_buffer(other, &self.buffer)
     }
 
     /// Convert the inner layout.
@@ -337,11 +353,11 @@ impl<B, L> RawImage<B, L> {
     /// It's recommended you call this only on reference-type buffers.
     pub(crate) fn checked_decay<Other>(self) -> Option<RawImage<B, Other>>
     where
-        B: ops::Deref<Target = buf>,
+        B: BufferLike,
         Other: Decay<L>,
     {
         let layout = Other::decay(self.layout);
-        if <dyn Layout>::fits_buf(&layout, &self.buffer) {
+        if <dyn Layout>::fits_buffer(&layout, &self.buffer) {
             Some(RawImage {
                 buffer: self.buffer,
                 layout,
@@ -369,10 +385,10 @@ impl<B, L> RawImage<B, L> {
     /// This method fails if the layout requires more bytes than are currently allocated.
     pub(crate) fn try_reinterpret<Other>(self, layout: Other) -> Result<RawImage<B, Other>, Self>
     where
-        B: ops::Deref<Target = buf>,
+        B: BufferLike,
         Other: Layout,
     {
-        if self.buffer.len() < layout.byte_len() {
+        if self.buffer.byte_len() < layout.byte_len() {
             Err(self)
         } else {
             Ok(RawImage {

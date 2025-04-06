@@ -23,7 +23,7 @@ use crate::texel::MAX_ALIGN;
 use crate::{Texel, TexelBuffer};
 
 pub use crate::stride::{StridedBufferMut, StridedBufferRef};
-pub use atomic::AtomicImage;
+pub use atomic::{AtomicImage, AtomicImageRef};
 pub use cell::CellImage;
 
 /// A container of allocated bytes, parameterized over the layout.
@@ -371,7 +371,7 @@ impl<L> Image<L> {
 
     /// Get a view of this image.
     pub fn as_ref(&self) -> ImageRef<'_, &'_ L> {
-        self.inner.as_borrow().into()
+        self.inner.as_deref().into()
     }
 
     /// Get a view of this image, if the alternate layout fits.
@@ -381,7 +381,7 @@ impl<L> Image<L> {
 
     /// Get a mutable view of this image.
     pub fn as_mut(&mut self) -> ImageMut<'_, &'_ mut L> {
-        self.inner.as_borrow_mut().into()
+        self.inner.as_deref_mut().into()
     }
 
     /// Get a mutable view under an alternate layout.
@@ -476,7 +476,7 @@ impl<'data, L> ImageRef<'data, L> {
 
     /// Get a view of this image.
     pub fn as_ref(&self) -> ImageRef<'_, &'_ L> {
-        self.inner.as_borrow().into()
+        self.inner.as_deref().into()
     }
 
     /// Check if a call to [`ImageRef::with_layout`] would succeed.
@@ -717,12 +717,12 @@ impl<'data, L> ImageMut<'data, L> {
 
     /// Get a view of this image.
     pub fn as_ref(&self) -> ImageRef<'_, &'_ L> {
-        self.inner.as_borrow().into()
+        self.inner.as_deref().into()
     }
 
     /// Get a mutable view of this image.
     pub fn as_mut(&mut self) -> ImageMut<'_, &'_ mut L> {
-        self.inner.as_borrow_mut().into()
+        self.inner.as_deref_mut().into()
     }
 
     /// Convert to a view of this image.

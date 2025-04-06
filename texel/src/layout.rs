@@ -65,6 +65,16 @@ impl dyn Layout + '_ {
     pub fn fits_buf(&self, bytes: &crate::buf::buf) -> bool {
         self.byte_len() <= bytes.as_bytes().len()
     }
+
+    #[inline]
+    pub fn fits_atomic_buf(&self, bytes: &crate::buf::atomic_buf) -> bool {
+        self.byte_len() <= bytes.len()
+    }
+
+    #[inline]
+    pub fn fits_cell_buf(&self, bytes: &crate::buf::cell_buf) -> bool {
+        self.byte_len() <= bytes.len()
+    }
 }
 
 /// Convert one layout to a less strict one.

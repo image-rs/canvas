@@ -298,6 +298,45 @@ impl AtomicBuffer {
         core::mem::size_of_val(&*self.inner)
     }
 
+    /// Get this buffer if there are now copies.
+    ///
+    /// ```
+    /// use image_texel::texels::{AtomicBuffer, U8};
+    ///
+    /// let mut buffer = AtomicBuffer::new(4);
+    /// assert!(buffer.get_mut().is_some());
+    /// let alias = buffer.clone();
+    /// assert!(buffer.get_mut().is_none());
+    /// ```
+    pub fn get_mut(&mut self) -> Option<&mut atomic_buf> {
+        Arc::get_mut(&mut self.inner).map(atomic_buf::from_slice_mut)
+    }
+
+    /// Ensure this buffer is its own copy.
+    ///
+    /// ```
+    /// use image_texel::texels::{AtomicBuffer, U8};
+    ///
+    /// let mut buffer = AtomicBuffer::new(4);
+    /// let mut alias = buffer.clone();
+    ///
+    /// U8.store_atomic(buffer.as_texels(U8).index_one(0), 1);
+    /// let unshared = buffer.make_mut().as_buf_mut();
+    /// let alias = alias.get_mut().expect("Just unaliased");
+    ///
+    /// unshared.as_mut_texels(U8)[0] = 2;
+    /// assert_eq!(alias.as_buf_mut().as_mut_texels(U8)[0], 1);
+    /// ```
+    pub fn make_mut(&mut self) -> &mut atomic_buf {
+        if Arc::get_mut(&mut self.inner).is_none() {
+            *self = self.to_owned().into();
+        }
+
+        Arc::get_mut(&mut self.inner)
+            .map(atomic_buf::from_slice_mut)
+            .expect("we just made a mutable copy")
+    }
+
     /// Copy the data into an owned buffer.
     ///
     /// The load will always be relaxed. If more guarantees are required, insert your owned memory
@@ -687,6 +726,13 @@ impl From<&'_ [u8]> for AtomicBuffer {
     }
 }
 
+impl From<Buffer> for AtomicBuffer {
+    fn from(values: Buffer) -> Self {
+        // TODO: can this be optimized to avoid the byte-for-byte allocation-copy?
+        Self::from(values.as_bytes())
+    }
+}
+
 impl From<&'_ [u8]> for CellBuffer {
     fn from(values: &'_ [u8]) -> Self {
         let chunks = values.chunks_exact(MAX_ALIGN);
@@ -710,6 +756,13 @@ impl From<&'_ [u8]> for CellBuffer {
         CellBuffer {
             inner: buffer.into(),
         }
+    }
+}
+
+impl From<Buffer> for CellBuffer {
+    fn from(values: Buffer) -> Self {
+        // TODO: can this be optimized to avoid the byte-for-byte allocation-copy?
+        Self::from(values.as_bytes())
     }
 }
 
@@ -988,6 +1041,10 @@ impl atomic_buf {
         core::mem::size_of_val(self)
     }
 
+    pub fn as_buf_mut(&mut self) -> &mut buf {
+        buf::from_bytes_mut(atomic_buf::part_mut_slice(&mut self.0)).unwrap()
+    }
+
     /// Split into two aligned buffers.
     ///
     /// # Panics
@@ -1161,7 +1218,7 @@ impl<'lt, P> AtomicSliceRef<'lt, P> {
     /// trait anyways. Also we do not implement the assertion outside of debug for now, it is also
     /// not used for unsafe code.
     #[track_caller]
-    pub(crate) fn index_one(self, idx: usize) -> AtomicRef<'lt, P> {
+    pub fn index_one(self, idx: usize) -> AtomicRef<'lt, P> {
         assert!(idx < self.len());
 
         AtomicRef {
@@ -1242,6 +1299,17 @@ impl<'lt, P> AtomicSliceRef<'lt, P> {
         let left = self.index(..at);
         let right = self.index(at..);
         (left, right)
+    }
+
+    /// Reduce the number of bytes covered by this slice.
+    #[must_use = "Does not mutate self"]
+    #[track_caller]
+    pub fn truncate_bytes(self, at: usize) -> Self {
+        let len = (self.end - self.start).min(at);
+        AtomicSliceRef {
+            end: self.start + len,
+            ..self
+        }
     }
 
     /// Equivalent of [`core::slice::from_ref`] but we have no mutable analogue.
