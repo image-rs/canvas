@@ -1,6 +1,6 @@
 use core::ops;
 
-use crate::buf::{buf, Buffer};
+use crate::buf::{atomic_buf, buf, cell_buf, AtomicBuffer, Buffer, CellBuffer};
 use crate::layout::{Decay, DynLayout, Layout, SliceLayout, Take};
 use crate::{BufferReuseError, TexelBuffer};
 
@@ -110,32 +110,6 @@ impl<B: Growable, L> RawImage<B, L> {
 
 /// Layout oblivious methods, these also never allocate or panic.
 impl<B: BufferLike, L> RawImage<B, L> {
-    /// Get a mutable reference to the unstructured bytes of the image.
-    ///
-    /// Note that this may return more bytes than required for the specific layout for various
-    /// reasons. See also [`as_layout_bytes_mut`].
-    ///
-    /// [`as_layout_bytes_mut`]: #method.as_layout_bytes_mut
-    pub(crate) fn as_capacity_bytes_mut(&mut self) -> &mut [u8]
-    where
-        B: BufferMut,
-    {
-        self.buffer.as_bytes_mut()
-    }
-
-    /// Get a mutable reference to the unstructured bytes of the image.
-    ///
-    /// Note that this may return more bytes than required for the specific layout for various
-    /// reasons. See also [`as_layout_bytes_mut`].
-    ///
-    /// [`as_layout_bytes_mut`]: #method.as_layout_bytes_mut
-    pub(crate) fn as_capacity_buf_mut(&mut self) -> &mut buf
-    where
-        B: BufferMut,
-    {
-        &mut self.buffer
-    }
-
     /// Take ownership of the image's bytes.
     ///
     /// # Panics
@@ -259,6 +233,48 @@ impl<B, L> RawImage<B, L> {
         &self.buffer
     }
 
+    /// Get a mutable reference to the unstructured bytes of the image.
+    ///
+    /// Note that this may return more bytes than required for the specific layout for various
+    /// reasons. See also [`as_layout_bytes_mut`].
+    ///
+    /// [`as_layout_bytes_mut`]: #method.as_layout_bytes_mut
+    pub(crate) fn as_capacity_bytes_mut(&mut self) -> &mut [u8]
+    where
+        B: ops::DerefMut<Target = buf>,
+    {
+        self.buffer.as_bytes_mut()
+    }
+
+    /// Get a mutable reference to the unstructured bytes of the image.
+    ///
+    /// Note that this may return more bytes than required for the specific layout for various
+    /// reasons. See also [`as_layout_bytes_mut`].
+    ///
+    /// [`as_layout_bytes_mut`]: #method.as_layout_bytes_mut
+    pub(crate) fn as_capacity_buf_mut(&mut self) -> &mut buf
+    where
+        B: ops::DerefMut<Target = buf>,
+    {
+        &mut self.buffer
+    }
+
+    /// Get a reference to the full allocated underlying atomic buffer.
+    pub(crate) fn as_capacity_atomic_buf(&self) -> &atomic_buf
+    where
+        B: ops::Deref<Target = atomic_buf>,
+    {
+        &self.buffer
+    }
+
+    /// Get a reference to the full allocated underlying cell buffer.
+    pub(crate) fn as_capacity_cell_buf(&self) -> &cell_buf
+    where
+        B: ops::Deref<Target = cell_buf>,
+    {
+        &self.buffer
+    }
+
     /// Get a reference to those bytes used by the layout.
     pub(crate) fn as_bytes(&self) -> &[u8]
     where
@@ -286,6 +302,15 @@ impl<B, L> RawImage<B, L> {
         self.buffer.truncate_mut(byte_len)
     }
 
+    pub fn as_cell_buf(&self) -> &cell_buf
+    where
+        B: ops::Deref<Target = cell_buf>,
+        L: Layout,
+    {
+        let byte_len = self.layout.byte_len();
+        self.as_capacity_cell_buf().truncate(byte_len)
+    }
+
     pub(crate) fn as_slice(&self) -> &[L::Sample]
     where
         B: ops::Deref<Target = buf>,
@@ -302,9 +327,9 @@ impl<B, L> RawImage<B, L> {
     }
 
     /// Borrow the buffer with the same layout.
-    pub(crate) fn as_borrow(&self) -> RawImage<&'_ buf, &'_ L>
+    pub(crate) fn as_deref(&self) -> RawImage<&'_ B::Target, &'_ L>
     where
-        B: ops::Deref<Target = buf>,
+        B: ops::Deref,
     {
         RawImage {
             buffer: &self.buffer,
@@ -313,9 +338,9 @@ impl<B, L> RawImage<B, L> {
     }
 
     /// Borrow the buffer mutably with the same layout.
-    pub(crate) fn as_borrow_mut(&mut self) -> RawImage<&'_ mut buf, &'_ mut L>
+    pub(crate) fn as_deref_mut(&mut self) -> RawImage<&'_ mut B::Target, &'_ mut L>
     where
-        B: ops::DerefMut<Target = buf>,
+        B: ops::DerefMut,
     {
         RawImage {
             buffer: &mut self.buffer,
@@ -326,9 +351,9 @@ impl<B, L> RawImage<B, L> {
     /// Check if the buffer is enough for another layout.
     pub(crate) fn fits(&self, other: &impl Layout) -> bool
     where
-        B: ops::Deref<Target = buf>,
+        B: BufferLike,
     {
-        <dyn Layout>::fits_buf(other, &self.buffer)
+        <dyn Layout>::fits_buffer(other, &self.buffer)
     }
 
     /// Convert the inner layout.
@@ -337,11 +362,11 @@ impl<B, L> RawImage<B, L> {
     /// It's recommended you call this only on reference-type buffers.
     pub(crate) fn checked_decay<Other>(self) -> Option<RawImage<B, Other>>
     where
-        B: ops::Deref<Target = buf>,
+        B: BufferLike,
         Other: Decay<L>,
     {
         let layout = Other::decay(self.layout);
-        if <dyn Layout>::fits_buf(&layout, &self.buffer) {
+        if <dyn Layout>::fits_buffer(&layout, &self.buffer) {
             Some(RawImage {
                 buffer: self.buffer,
                 layout,
@@ -369,10 +394,10 @@ impl<B, L> RawImage<B, L> {
     /// This method fails if the layout requires more bytes than are currently allocated.
     pub(crate) fn try_reinterpret<Other>(self, layout: Other) -> Result<RawImage<B, Other>, Self>
     where
-        B: ops::Deref<Target = buf>,
+        B: BufferLike,
         Other: Layout,
     {
-        if self.buffer.len() < layout.byte_len() {
+        if self.buffer.byte_len() < layout.byte_len() {
             Err(self)
         } else {
             Ok(RawImage {
@@ -495,13 +520,27 @@ impl BufferLike for Buffer {
     }
 }
 
-impl BufferLike for &'_ mut buf {
+impl BufferLike for CellBuffer {
     fn byte_len(&self) -> usize {
-        self.as_bytes().len()
+        core::mem::size_of_val(&**self)
     }
 
     fn into_owned(self) -> Buffer {
-        Buffer::from(self.as_bytes())
+        self.to_owned()
+    }
+
+    fn take(&mut self) -> Self {
+        core::mem::take(self)
+    }
+}
+
+impl BufferLike for AtomicBuffer {
+    fn byte_len(&self) -> usize {
+        core::mem::size_of_val(&**self)
+    }
+
+    fn into_owned(self) -> Buffer {
+        self.to_owned()
     }
 
     fn take(&mut self) -> Self {
@@ -516,6 +555,54 @@ impl BufferLike for &'_ buf {
 
     fn into_owned(self) -> Buffer {
         Buffer::from(self.as_bytes())
+    }
+
+    fn take(&mut self) -> Self {
+        core::mem::take(self)
+    }
+}
+
+impl BufferLike for &'_ mut buf {
+    fn byte_len(&self) -> usize {
+        self.as_bytes().len()
+    }
+
+    fn into_owned(self) -> Buffer {
+        Buffer::from(self.as_bytes())
+    }
+
+    fn take(&mut self) -> Self {
+        core::mem::take(self)
+    }
+}
+
+impl BufferLike for &'_ cell_buf {
+    fn byte_len(&self) -> usize {
+        self.as_texels(crate::texels::U8).as_slice_of_cells().len()
+    }
+
+    fn into_owned(self) -> Buffer {
+        let mut target = Buffer::new(self.byte_len());
+        let texels = self.as_texels(crate::texels::U8).as_slice_of_cells();
+        crate::texels::U8.load_cell_slice(texels, target.as_bytes_mut());
+        target
+    }
+
+    fn take(&mut self) -> Self {
+        core::mem::take(self)
+    }
+}
+
+impl BufferLike for &'_ atomic_buf {
+    fn byte_len(&self) -> usize {
+        self.as_texels(crate::texels::U8).len()
+    }
+
+    fn into_owned(self) -> Buffer {
+        let source = self.as_texels(crate::texels::U8);
+        let mut target = Buffer::new(source.len());
+        source.write_to_slice(target.as_bytes_mut());
+        target
     }
 
     fn take(&mut self) -> Self {

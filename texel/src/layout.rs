@@ -65,6 +65,16 @@ impl dyn Layout + '_ {
     pub fn fits_buf(&self, bytes: &crate::buf::buf) -> bool {
         self.byte_len() <= bytes.as_bytes().len()
     }
+
+    #[inline]
+    pub fn fits_atomic_buf(&self, bytes: &crate::buf::atomic_buf) -> bool {
+        self.byte_len() <= bytes.len()
+    }
+
+    #[inline]
+    pub fn fits_cell_buf(&self, bytes: &crate::buf::cell_buf) -> bool {
+        self.byte_len() <= bytes.len()
+    }
 }
 
 /// Convert one layout to a less strict one.
@@ -138,7 +148,7 @@ impl<T: Layout> Decay<T> for Bytes {
 /// the receiver then this would restrict third-parties from using it to its full potential. In
 /// particular, since `Mend` is a foreign trait the coherence rules make it impossible to specify:
 ///
-/// TODO Terminology: https://rust-lang.github.io/rfcs/2451-re-rebalancing-coherence.html
+/// TODO Terminology: <https://rust-lang.github.io/rfcs/2451-re-rebalancing-coherence.html>
 ///
 /// ```ignore
 /// impl<T> Mend<LocalType> for T {}

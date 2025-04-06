@@ -148,6 +148,9 @@ impl<P> Matrix<P> {
     /// This panics when the layout described by `width` and `height` can not be allocated, for
     /// example due to it being an invalid layout. If you want to handle the layout being invalid,
     /// consider using `Layout::from_width_and_height` and `Matrix::with_layout`.
+    ///
+    /// FIXME: on the layout this is named `width_and_height` and is fallible. We should align the
+    /// naming here and this isn't even a `with`-type builder. And do we need this?
     pub fn with_width_and_height(width: usize, height: usize) -> Self
     where
         P: AsTexel,
