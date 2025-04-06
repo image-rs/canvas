@@ -22,7 +22,7 @@ pub trait MatrixLayout: Layout {
     /// The valid matrix specification of this layout.
     ///
     /// This call should not fail, or panic. Otherwise, prefer an optional getter for the
-    /// [`StridedBytes`] and have the caller decay their own buffer.
+    /// [`StridedBytes`][`crate::layout::StridedBytes`] and have the caller decay their own buffer.
     fn matrix(&self) -> MatrixBytes;
 }
 

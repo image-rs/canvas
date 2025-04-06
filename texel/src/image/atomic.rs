@@ -2,10 +2,8 @@
 //!
 //! Re-exported at its super `image` module.
 use crate::buf::{atomic_buf, AtomicBuffer, AtomicSliceRef};
-use crate::image::{raw::RawImage, Coord, IntoPlanesError};
-use crate::layout::{
-    Bytes, Decay, Layout, Mend, PlaneOf, Raster, RasterMut, Relocate, SliceLayout, Take, TryMend,
-};
+use crate::image::{raw::RawImage, IntoPlanesError};
+use crate::layout::{Bytes, Decay, Layout, Mend, PlaneOf, Relocate, SliceLayout, Take, TryMend};
 use crate::texel::{constants::U8, MAX_ALIGN};
 use crate::{Texel, TexelBuffer};
 
@@ -84,7 +82,8 @@ impl<L: Layout> AtomicImage<L> {
     /// assert_eq!(as_bytes.layout().height(), 400);
     /// ```
     ///
-    /// See also [`Image::mend`] and [`Image::try_mend`] for operations that reverse the effects.
+    /// See also [`AtomicImage::mend`] and [`AtomicImage::try_mend`] for operations that reverse
+    /// the effects.
     ///
     /// Can also be used to forget specifics of the layout, turning the image into a more general
     /// container type. For example, to use a uniform type as an allocated buffer waiting on reuse.
@@ -160,21 +159,51 @@ impl<L> AtomicImage<L> {
     /// Get a reference to the aligned unstructured bytes of the image.
     ///
     /// Note that this may return more bytes than required for the specific layout for various
-    /// reasons. See also [`Self::as_capacity_bytes`].
+    /// reasons. See also [`Self::make_mut`].
     pub fn as_capacity_atomic_buf(&self) -> &atomic_buf {
         self.inner.as_capacity_atomic_buf()
     }
 
-    /// Ensure this image does not alias any other.
+    /// Get a mutable reference to all allocated bytes if this image does not alias any other.
+    ///
+    /// # Example
     ///
     /// ```
-    /// use image_texel::{image::AtomicImage, layout::Matrix, layout::Bytes};
+    /// use image_texel::{image::AtomicImage, layout::Matrix};
+    ///
+    /// let layout = Matrix::<[u8; 4]>::width_and_height(10, 10).unwrap();
+    /// let mut image = AtomicImage::new(layout);
+    /// assert!(image.get_mut().is_some());
+    ///
+    /// let mut clone_of = image.clone();
+    /// assert!(image.get_mut().is_none());
+    /// ```
+    pub fn get_mut(&mut self) -> Option<&mut atomic_buf> {
+        self.inner.get_mut().get_mut()
+    }
+
+    /// Ensure this image does not alias any other.
+    ///
+    /// Then returns a mutable reference to all the bytes allocated in the buffer.
+    ///
+    /// # Example
+    ///
+    /// ```
+    /// use image_texel::{image::AtomicImage, layout::Matrix, texels::U8};
+    /// let texel = U8.array::<4>();
     ///
     /// let layout = Matrix::<[u8; 4]>::width_and_height(10, 10).unwrap();
     /// let image = AtomicImage::new(layout);
-    /// let mut clone_of = image.clone();
     ///
-    /// let buf = clone_of.make_mut();
+    /// let mut clone_of = image.clone();
+    /// let atomic_mut_buf = clone_of.make_mut();
+    ///
+    /// // Now these are independent buffers.
+    /// atomic_mut_buf.as_buf_mut().as_mut_texels(texel)[0] = [0xff; 4];
+    /// assert_ne!(texel.load_atomic(image.as_slice().index_one(0)), [0xff; 4]);
+    ///
+    /// // With mutable reference we initialized the new buffer.
+    /// assert_eq!(texel.load_atomic(clone_of.as_slice().index_one(0)), [0xff; 4]);
     /// ```
     pub fn make_mut(&mut self) -> &mut atomic_buf {
         self.inner.get_mut().make_mut()
@@ -308,7 +337,7 @@ impl<'data, L> AtomicImageRef<'data, L> {
 
     /// Decay into a image with less specific layout.
     ///
-    /// See [`Image::decay`].
+    /// See [`AtomicImage::checked_decay`].
     pub fn checked_decay<M>(self) -> Option<AtomicImageRef<'data, M>>
     where
         M: Decay<L>,
