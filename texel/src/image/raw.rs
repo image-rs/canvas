@@ -110,48 +110,6 @@ impl<B: Growable, L> RawImage<B, L> {
 
 /// Layout oblivious methods, these also never allocate or panic.
 impl<B: BufferLike, L> RawImage<B, L> {
-    /// Get a mutable reference to the unstructured bytes of the image.
-    ///
-    /// Note that this may return more bytes than required for the specific layout for various
-    /// reasons. See also [`as_layout_bytes_mut`].
-    ///
-    /// [`as_layout_bytes_mut`]: #method.as_layout_bytes_mut
-    pub(crate) fn as_capacity_bytes_mut(&mut self) -> &mut [u8]
-    where
-        B: BufferMut,
-    {
-        self.buffer.as_bytes_mut()
-    }
-
-    /// Get a mutable reference to the unstructured bytes of the image.
-    ///
-    /// Note that this may return more bytes than required for the specific layout for various
-    /// reasons. See also [`as_layout_bytes_mut`].
-    ///
-    /// [`as_layout_bytes_mut`]: #method.as_layout_bytes_mut
-    pub(crate) fn as_capacity_buf_mut(&mut self) -> &mut buf
-    where
-        B: BufferMut,
-    {
-        &mut self.buffer
-    }
-
-    /// Get a reference to the full allocated underlying atomic buffer.
-    pub(crate) fn as_capacity_atomic_buf(&self) -> &atomic_buf
-    where
-        B: ops::Deref<Target = atomic_buf>,
-    {
-        &self.buffer
-    }
-
-    /// Get a reference to the full allocated underlying cell buffer.
-    pub(crate) fn as_capacity_cell_buf(&self) -> &cell_buf
-    where
-        B: ops::Deref<Target = cell_buf>,
-    {
-        &self.buffer
-    }
-
     /// Take ownership of the image's bytes.
     ///
     /// # Panics
@@ -275,6 +233,48 @@ impl<B, L> RawImage<B, L> {
         &self.buffer
     }
 
+    /// Get a mutable reference to the unstructured bytes of the image.
+    ///
+    /// Note that this may return more bytes than required for the specific layout for various
+    /// reasons. See also [`as_layout_bytes_mut`].
+    ///
+    /// [`as_layout_bytes_mut`]: #method.as_layout_bytes_mut
+    pub(crate) fn as_capacity_bytes_mut(&mut self) -> &mut [u8]
+    where
+        B: ops::DerefMut<Target = buf>,
+    {
+        self.buffer.as_bytes_mut()
+    }
+
+    /// Get a mutable reference to the unstructured bytes of the image.
+    ///
+    /// Note that this may return more bytes than required for the specific layout for various
+    /// reasons. See also [`as_layout_bytes_mut`].
+    ///
+    /// [`as_layout_bytes_mut`]: #method.as_layout_bytes_mut
+    pub(crate) fn as_capacity_buf_mut(&mut self) -> &mut buf
+    where
+        B: ops::DerefMut<Target = buf>,
+    {
+        &mut self.buffer
+    }
+
+    /// Get a reference to the full allocated underlying atomic buffer.
+    pub(crate) fn as_capacity_atomic_buf(&self) -> &atomic_buf
+    where
+        B: ops::Deref<Target = atomic_buf>,
+    {
+        &self.buffer
+    }
+
+    /// Get a reference to the full allocated underlying cell buffer.
+    pub(crate) fn as_capacity_cell_buf(&self) -> &cell_buf
+    where
+        B: ops::Deref<Target = cell_buf>,
+    {
+        &self.buffer
+    }
+
     /// Get a reference to those bytes used by the layout.
     pub(crate) fn as_bytes(&self) -> &[u8]
     where
@@ -300,6 +300,15 @@ impl<B, L> RawImage<B, L> {
     {
         let byte_len = self.layout.byte_len();
         self.buffer.truncate_mut(byte_len)
+    }
+
+    pub fn as_cell_buf(&self) -> &cell_buf
+    where
+        B: ops::Deref<Target = cell_buf>,
+        L: Layout,
+    {
+        let byte_len = self.layout.byte_len();
+        self.as_capacity_cell_buf().truncate(byte_len)
     }
 
     pub(crate) fn as_slice(&self) -> &[L::Sample]

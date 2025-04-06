@@ -246,6 +246,45 @@ impl CellBuffer {
         core::mem::size_of_val(&*self.inner)
     }
 
+    /// Get this buffer if there are now copies.
+    ///
+    /// ```
+    /// use image_texel::texels::{AtomicBuffer, U8};
+    ///
+    /// let mut buffer = AtomicBuffer::new(4);
+    /// assert!(buffer.get_mut().is_some());
+    /// let alias = buffer.clone();
+    /// assert!(buffer.get_mut().is_none());
+    /// ```
+    pub fn get_mut(&mut self) -> Option<&mut cell_buf> {
+        Rc::get_mut(&mut self.inner).map(cell_buf::from_slice_mut)
+    }
+
+    /// Ensure this buffer is its own copy.
+    ///
+    /// ```
+    /// use image_texel::texels::{AtomicBuffer, U8};
+    ///
+    /// let mut buffer = AtomicBuffer::new(4);
+    /// let mut alias = buffer.clone();
+    ///
+    /// U8.store_atomic(buffer.as_texels(U8).index_one(0), 1);
+    /// let unshared = buffer.make_mut().as_buf_mut();
+    /// let alias = alias.get_mut().expect("Just unaliased");
+    ///
+    /// unshared.as_mut_texels(U8)[0] = 2;
+    /// assert_eq!(alias.as_buf_mut().as_mut_texels(U8)[0], 1);
+    /// ```
+    pub fn make_mut(&mut self) -> &mut cell_buf {
+        if Rc::get_mut(&mut self.inner).is_none() {
+            *self = self.to_owned().into();
+        }
+
+        Rc::get_mut(&mut self.inner)
+            .map(cell_buf::from_slice_mut)
+            .expect("we just made a mutable copy")
+    }
+
     /// Copy the data into an owned buffer.
     pub fn to_owned(&self) -> Buffer {
         let inner = self.inner.iter().map(|cell| cell.get()).collect();

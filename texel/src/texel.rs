@@ -427,10 +427,11 @@ impl atomic_buf {
 
     pub(crate) fn from_slice_mut(values: &mut [MaxAtomic]) -> &mut Self {
         debug_assert_eq!(values.as_ptr() as usize % Self::ALIGNMENT, 0);
-        let ptr = values.as_ptr() as *const AtomicPart;
+        let ptr = values.as_mut_ptr() as *mut AtomicPart;
         let count = values.len() * ATOMIC_PARTS;
-        // Safety: as `from_slice`.
-        let atomics = core::ptr::slice_from_raw_parts::<AtomicPart>(ptr, count);
+        // Safety: as `from_slice`. We converted the input pointer from a mutable pointer itself,
+        // fulfilling the extra uniqueness and ownership requirement.
+        let atomics = core::ptr::slice_from_raw_parts_mut::<AtomicPart>(ptr, count);
         // Safety: `atomic_buf` has the same layout as a `[MaxAtomic]` and wraps it transparently.
         unsafe { &mut *(atomics as *mut Self) }
     }
@@ -501,6 +502,17 @@ impl cell_buf {
         // This case relaxes the alignment requirements from `MaxAtomic` to that of the underlying
         // atomic, which allows us to go beyond the public interface.
         unsafe { &*(memory as *const Self) }
+    }
+
+    pub(crate) fn from_slice_mut(values: &mut [MaxCell]) -> &mut Self {
+        debug_assert_eq!(values.as_ptr() as usize % Self::ALIGNMENT, 0);
+        let ptr = values.as_mut_ptr() as *mut Cell<u8>;
+        let count = core::mem::size_of_val(values);
+        // Safety: as `from_slice`. We converted the input pointer from a mutable pointer itself,
+        // fulfilling the extra uniqueness and ownership requirement.
+        let memory = core::ptr::slice_from_raw_parts_mut::<Cell<u8>>(ptr, count);
+        // Safety: `cell_buf` has the same layout as a `[Cell<u8>]` and wraps it transparently.
+        unsafe { &mut *(memory as *mut Self) }
     }
 
     /// Interpret a slice of bytes in an unsynchronized shared `cell_buf`.
@@ -953,6 +965,19 @@ impl<P> Texel<P> {
             end: texel.end,
             texel: constants::U8,
         }
+    }
+
+    #[track_caller]
+    pub(crate) fn cell_memory_copy(self, a: &[Cell<P>], b: &[Cell<P>]) {
+        assert_eq!(a.len(), b.len());
+        // SAFETY:
+        // - the source is readable for `len` units
+        // - the target is writable for `len` items
+        // - the Texel certifies that this copy creates valid values
+        //
+        // We could not do this as `b_to_slice.copy_from_slice(a_to_slice)` since that would assert
+        // a non-overlap between the two that need no hold in general.
+        unsafe { ptr::copy::<P>(a.as_ptr() as *const P, b.as_ptr() as *mut P, a.len()) };
     }
 
     /// Compare two cell slices by memory, not by any content equality.
