@@ -332,6 +332,11 @@ impl AtomicBuffer {
         }
     }
 
+    /// Query if two buffers share the same memory region.
+    pub fn ptr_eq(&self, other: &Self) -> bool {
+        Arc::ptr_eq(&self.inner, &other.inner)
+    }
+
     /// Retrieve the byte capacity of the allocated storage.
     pub fn capacity(&self) -> usize {
         core::mem::size_of_val(&*self.inner)
@@ -1014,6 +1019,14 @@ impl cmp::PartialEq<[u8]> for cell_buf {
 
 impl cmp::Eq for cell_buf {}
 
+impl cmp::PartialEq for CellBuffer {
+    fn eq(&self, other: &Self) -> bool {
+        **self == **other
+    }
+}
+
+impl cmp::Eq for CellBuffer {}
+
 impl TexelMappingBuffer for &'_ cell_buf {
     /// Internally mapping function when the mapping can be done forwards.
     fn map_forward<P, Q>(
@@ -1196,6 +1209,14 @@ impl cmp::PartialEq<[u8]> for atomic_buf {
 }
 
 impl cmp::Eq for atomic_buf {}
+
+impl cmp::PartialEq for AtomicBuffer {
+    fn eq(&self, other: &Self) -> bool {
+        **self == **other
+    }
+}
+
+impl cmp::Eq for AtomicBuffer {}
 
 impl TexelMappingBuffer for &'_ atomic_buf {
     /// Internally mapping function when the mapping can be done forwards.

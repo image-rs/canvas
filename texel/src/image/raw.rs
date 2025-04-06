@@ -320,6 +320,11 @@ impl<B, L> RawImage<B, L> {
         texel.cast_buf(self.as_buf())
     }
 
+    /// Get mutable reference to the buffer.
+    pub(crate) fn get(&self) -> &B {
+        &self.buffer
+    }
+
     /// Get a mutable reference to the buffer. It is inadvisible to modify the buffer in a way that
     /// it can no longer hold the layout.
     pub(crate) fn get_mut(&mut self) -> &mut B {
