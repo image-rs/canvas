@@ -9,7 +9,20 @@ use crate::{Texel, TexelBuffer};
 
 /// A container of allocated bytes, parameterized over the layout.
 ///
+/// This is a synchronized, shared equivalent to [`Image`][`crate::image::Image`]. That is the
+/// buffer of bytes of this container is shared between clones of this value and potentially
+/// between threads. In particular the same buffer may be owned and viewed with different layouts
+/// and modified concurrently. The guarantee, however, is merely that concurrent modification is
+/// free of undefined data races. There is no locking, implied synchronization, or ordering
+/// guarantees between edits except when you can modify disjoint parts of the buffer.
+///
 /// ## Differences to owned Image
+///
+/// Comparing values of this type is possible, but requires calling the method [`Self::compare`] to
+/// create a comparator. This is because comparing is inherently racing against modifications made
+/// on other threads. While the implementation prevents any unsound *data races* there is no
+/// specific meaning to any of its outcomes unless the caller ensure synchronization in some other
+/// manner.
 #[derive(Clone)]
 pub struct AtomicImage<Layout = Bytes> {
     inner: RawImage<AtomicBuffer, Layout>,
@@ -18,7 +31,8 @@ pub struct AtomicImage<Layout = Bytes> {
 /// A partial view of an atomic image.
 ///
 /// Note that this requires its underlying buffer to be highly aligned! For that reason it is not
-/// possible to take a reference at an arbitrary number of bytes.
+/// possible to take a reference at an arbitrary number of bytes. Values of this type are created
+/// by calling [`AtomicImage::as_ref`] or [`AtomicImage::checked_to_ref`].
 #[derive(Clone, PartialEq, Eq)]
 pub struct AtomicImageRef<'buf, Layout = &'buf Bytes> {
     inner: RawImage<&'buf atomic_buf, Layout>,
@@ -154,6 +168,26 @@ impl<L> AtomicImage<L> {
     /// Check if the buffer could accommodate another layout without reallocating.
     pub fn fits(&self, layout: &impl Layout) -> bool {
         self.inner.fits(layout)
+    }
+
+    /// Check if two images refer to the same buffer.
+    pub fn ptr_eq(&self, other: &Self) -> bool {
+        AtomicBuffer::ptr_eq(self.inner.get(), other.inner.get())
+    }
+
+    /// Create a comparator to another image.
+    ///
+    /// Note that comparing is inherently racing against modifications made on other threads. While
+    /// the implementation prevents any unsound *data races* there is no specific meaning to any of
+    /// its outcomes unless the caller ensure synchronization in some other manner.
+    ///
+    /// You can also compare the allocation with [`Self::ptr_eq`] or ignore the layout and compare
+    /// buffer contents with [`Self::as_capacity_atomic_buf`].
+    pub fn compare(&self) -> impl core::cmp::Eq + core::cmp::PartialEq + '_
+    where
+        L: core::cmp::Eq,
+    {
+        (self.inner.layout(), self.inner.get())
     }
 
     /// Get a reference to the aligned unstructured bytes of the image.

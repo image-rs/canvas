@@ -1,3 +1,14 @@
+# v0.4.0
+
+- Add `AtomicImage`, `CellImage` and several supporting types and interfaces.
+  These replicate large parts of the `Image` and `ImageMut` types but allow for
+  operations on a shared buffer, wrapping `Arc` and `Rc` respectively.
+- Added `PlaneOf` trait, a relationship between a layout, and index, and a
+  subcomponent of the layout. All image reference types implement a form of
+  `into_planes` that splits them apart by those components.
+- Added a `Relocate` trait for layouts that can be move to another location
+  in a buffer.
+
 ## v0.3.1
 
 - Fix compilation on non-explicit targets, where the maximum alignment will

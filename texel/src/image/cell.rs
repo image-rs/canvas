@@ -10,11 +10,10 @@ use core::cell::Cell;
 
 /// A container of allocated bytes, parameterized over the layout.
 ///
-/// ## Differences to owned Image
-///
-/// The implementations for [`PartialEq`] and [`Eq`] are not provided. In many containers and
-/// contexts these two traits are required to rule out absence of interior mutability.
-#[derive(Clone)]
+/// This is a unsynchronized, shared equivalent to [`Image`][`crate::image::Image`]. That is the
+/// buffer of bytes of this container is shared between clones of this value but can not be sent
+/// between threads. In particular the same buffer may be owned and viewed with different layouts.
+#[derive(Clone, PartialEq, Eq)]
 pub struct CellImage<Layout = Bytes> {
     inner: RawImage<CellBuffer, Layout>,
 }
@@ -22,7 +21,8 @@ pub struct CellImage<Layout = Bytes> {
 /// A partial view of an atomic image.
 ///
 /// Note that this requires its underlying buffer to be highly aligned! For that reason it is not
-/// possible to take a reference at an arbitrary number of bytes.
+/// possible to take a reference at an arbitrary number of bytes. Values of this type are created
+/// by calling [`CellImage::as_ref`] or [`CellImage::checked_to_ref`].
 #[derive(Clone, PartialEq, Eq)]
 pub struct CellImageRef<'buf, Layout = &'buf Bytes> {
     inner: RawImage<&'buf cell_buf, Layout>,
@@ -158,6 +158,11 @@ impl<L> CellImage<L> {
     /// Check if the buffer could accommodate another layout without reallocating.
     pub fn fits(&self, layout: &impl Layout) -> bool {
         self.inner.fits(layout)
+    }
+
+    /// Check if two images refer to the same buffer.
+    pub fn ptr_eq(&self, other: &Self) -> bool {
+        CellBuffer::ptr_eq(self.inner.get(), other.inner.get())
     }
 
     /// Get a reference to the aligned unstructured bytes of the image.
