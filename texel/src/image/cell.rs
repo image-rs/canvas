@@ -203,11 +203,11 @@ impl<L> CellImage<L> {
     /// let atomic_mut_buf = clone_of.make_mut();
     ///
     /// // Now these are independent buffers.
-    /// atomic_mut_buf.as_buf_mut().as_mut_texels(texel)[0] = [0xff; 4];
-    /// assert_ne!(texel.load_atomic(image.as_slice().index_one(0)), [0xff; 4]);
+    /// atomic_mut_buf.as_texels(texel).as_slice_of_cells()[0].set([0xff; 4]);
+    /// assert_ne!(image.as_slice().as_slice_of_cells()[0].get(), [0xff; 4]);
     ///
     /// // With mutable reference we initialized the new buffer.
-    /// assert_eq!(texel.load_atomic(clone_of.as_slice().index_one(0)), [0xff; 4]);
+    /// assert_eq!(clone_of.as_slice().as_slice_of_cells()[0].get(), [0xff; 4]);
     /// ```
     pub fn make_mut(&mut self) -> &mut cell_buf {
         self.inner.get_mut().make_mut()

@@ -24,7 +24,7 @@ use crate::{Texel, TexelBuffer};
 
 pub use crate::stride::{StridedBufferMut, StridedBufferRef};
 pub use atomic::{AtomicImage, AtomicImageRef};
-pub use cell::CellImage;
+pub use cell::{CellImage, CellImageRef};
 
 /// A container of allocated bytes, parameterized over the layout.
 ///
