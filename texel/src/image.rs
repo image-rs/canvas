@@ -50,7 +50,8 @@ pub use cell::{CellImage, CellImageRef};
 ///
 /// Initialize a matrix as computed `[u8; 4]` rga pixels:
 ///
-/// ```
+#[cfg_attr(not(miri), doc = "```")]
+#[cfg_attr(miri, doc = "```no_run")] // too expensive and pointless
 /// # fn test() -> Option<()> {
 /// use image_texel::{Image, Matrix};
 ///

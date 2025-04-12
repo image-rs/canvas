@@ -2,6 +2,7 @@ use image_texel::texels::{AtomicBuffer, U32};
 use std::{mem, thread};
 
 #[test]
+#[cfg(not(miri))]
 fn mapping_atomics_parallel() {
     const LEN: usize = 128;
     let buffer = AtomicBuffer::new(LEN * mem::size_of::<u32>());

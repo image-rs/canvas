@@ -970,7 +970,7 @@ impl<P> Texel<P> {
     #[track_caller]
     pub(crate) fn cell_memory_copy(self, a: &[Cell<P>], b: &[Cell<P>]) {
         assert_eq!(a.len(), b.len());
-        // SAFETY:
+        // Safety:
         // - the source is readable for `len` units
         // - the target is writable for `len` items
         // - the Texel certifies that this copy creates valid values
@@ -990,7 +990,7 @@ impl<P> Texel<P> {
             return false;
         }
 
-        // SAFETY: the same reasoning applies for both.
+        // Safety: the same reasoning applies for both.
         // - this covers the exact memory range as the underlying slice of cells.
         // - the Texel certifies it is initialized memory.
         // - the lifetime is the same.
@@ -1016,7 +1016,7 @@ impl<P> Texel<P> {
             return false;
         }
 
-        // SAFETY: see `cell_memory_eq`.
+        // Safety: see `cell_memory_eq`.
         let lhs: &'a [u8] = unsafe { slice::from_raw_parts(a.as_ptr() as *const u8, len) };
 
         // Really these two should not be overlapping! If the compiler knew, maybe a better memory
