@@ -191,6 +191,31 @@ def_max_align! {
 unsafe impl bytemuck::Zeroable for MaxAligned {}
 unsafe impl bytemuck::Pod for MaxAligned {}
 
+/// Wraps a type by value but removes its alignment requirement.
+#[repr(packed(1))]
+// Deriving Clone works by Copy, which is why it works at all.
+#[derive(Clone, Copy)]
+pub struct Unaligned<T>(pub T);
+
+unsafe impl<T: bytemuck::Zeroable> bytemuck::Zeroable for Unaligned<T> {}
+unsafe impl<T: bytemuck::Pod> bytemuck::Pod for Unaligned<T> {}
+
+impl<T> From<T> for Unaligned<T> {
+    fn from(value: T) -> Self {
+        Unaligned(value)
+    }
+}
+
+impl<T> Unaligned<T> {
+    /// Unwrap the inner value.
+    ///
+    /// This is the same as accessing the public field, but the function type makes for better type
+    /// inference and allows using that access with [`Option::map`] etc.
+    pub fn into_inner(self) -> T {
+        self.0
+    }
+}
+
 macro_rules! builtin_texel {
     ( $name:ty ) => {
         impl AsTexel for $name {
@@ -607,6 +632,14 @@ impl<P> Texel<P> {
         unsafe { Texel::new_unchecked() }
     }
 
+    /// Construct a texel for unaligned data of the contained type.
+    pub const fn unaligned(self) -> Texel<Unaligned<P>> {
+        // Safety:
+        // * has no validity/safety invariants
+        // * has alignment 1 which is not larger than MaxAligned
+        unsafe { Texel::new_unchecked() }
+    }
+
     /// Construct a texel by wrapping into a transparent wrapper.
     ///
     /// TODO: a constructor for `Texel<O>` based on proof of transmutation from &mut P to &mut O,
@@ -876,6 +909,47 @@ impl<P> Texel<P> {
         }
     }
 
+    /// Interpret a byte slice as unaligned values of another type.
+    ///
+    /// This is essentially a call to [`Texel::to_slice`] however the specific output type
+    /// selection ensures that it always succeeds.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use image_texel::texels::{U8, U64};
+    ///
+    /// // This buffer is not guaranteed to be aligned!
+    /// let raw_buffer = [0u16, 1, 2, 3].map(u16::to_be_bytes);
+    /// let raw_bytes = U8.array().to_bytes(&raw_buffer);
+    ///
+    /// let unaligned = U64.to_unaligned_slice(raw_bytes);
+    /// // Forces a copy. `texel.unaligned().copy` would work, too.
+    /// assert_eq!(u64::from_be(unaligned[0].0), 0x0000_0001_0002_0003);
+    /// ```
+    pub fn to_unaligned_slice<'buf>(self, bytes: &'buf [u8]) -> &'buf [Unaligned<P>] {
+        self.unaligned().try_to_slice(bytes).unwrap()
+    }
+
+    /// Interpret a mutable byte slice as unaligned values of another type.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use image_texel::texels::{U16, U64};
+    ///
+    /// // This buffer is not guaranteed to be aligned!
+    /// let mut raw_buffer = [0u16; 4];
+    /// let raw_bytes = U16.to_mut_bytes(&mut raw_buffer);
+    ///
+    /// let unaligned = U64.to_unaligned_slice_mut(raw_bytes);
+    /// unaligned[0].0 = u64::from_be(0x0000_0001_0002_0003);
+    /// assert_eq!(raw_buffer.map(u16::from_be), [0, 1, 2, 3]);
+    /// ```
+    pub fn to_unaligned_slice_mut<'buf>(self, bytes: &'buf mut [u8]) -> &'buf mut [Unaligned<P>] {
+        self.unaligned().try_to_slice_mut(bytes).unwrap()
+    }
+
     /// Reinterpret a shared slice as a some particular type.
     ///
     /// Note that the size (in bytes) of the slice will be shortened if the size of `P` is not a
@@ -903,6 +977,29 @@ impl<P> Texel<P> {
         }
     }
 
+    /// Interpret a slice of cells as unaligned cells of another type.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use core::cell::Cell;
+    /// use image_texel::texels::{U16, U64};
+    ///
+    /// // This buffer is not guaranteed to be aligned to u64!
+    /// let mut raw_buffer = [0u16; 4].map(Cell::new);
+    /// let raw_bytes = U16.cell_bytes(&raw_buffer).as_slice_of_cells();
+    ///
+    /// // Write a u64 value anyways.
+    /// let unaligned = U64.to_unaligned_cell(raw_bytes).as_slice_of_cells();
+    /// unaligned[0].set(u64::from_be(0x0000_0001_0002_0003).into());
+    ///
+    /// let raw_buffer = raw_buffer.map(Cell::into_inner);
+    /// assert_eq!(raw_buffer.map(u16::from_be), [0, 1, 2, 3]);
+    /// ```
+    pub fn to_unaligned_cell<'buf>(self, bytes: &'buf [Cell<u8>]) -> &'buf Cell<[Unaligned<P>]> {
+        self.unaligned().try_to_cell(bytes).unwrap()
+    }
+
     /// Reinterpret a slice of atomically access memory with a type annotation.
     pub fn try_to_atomic<'buf>(
         self,
@@ -919,6 +1016,46 @@ impl<P> Texel<P> {
         } else {
             None
         }
+    }
+
+    /// Interpret a slice of cells as unaligned atomic values of another type.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use image_texel::texels::atomic_buf;
+    /// use image_texel::texels::{MaxAtomic, U16, U64};
+    ///
+    /// let underlying = [MaxAtomic::zero(); 1];
+    /// let raw_buffer = atomic_buf::new(&underlying[..]);
+    ///
+    /// // Get a partial slice of it, that is is not aligned to u64.
+    /// let u16_slice = raw_buffer.index(U16.to_range(1..5).unwrap());
+    /// let raw_bytes = U16.atomic_bytes(u16_slice);
+    ///
+    /// // Re-Interpret that as an unaligned slice of u64 values.
+    /// let unaligned = U64.to_unaligned_atomic(raw_bytes);
+    ///
+    /// std::thread::scope(|scope| {
+    ///     scope.spawn(|| {
+    ///         // Write a u64 value.
+    ///         U64.unaligned().store_atomic(
+    ///             unaligned.index_one(0),
+    ///             u64::from_be(0x0000_0001_0002_0003).into()
+    ///         )
+    ///    });
+    /// });
+    ///
+    /// // Load from the buffer we've written to atomically.
+    /// let mut values = [0; 4];
+    /// U16.load_atomic_slice(u16_slice, &mut values[..]);
+    /// assert_eq!(values.map(u16::from_be), [0u16, 1, 2, 3]);
+    /// ```
+    pub fn to_unaligned_atomic<'buf>(
+        self,
+        bytes: AtomicSliceRef<'buf, u8>,
+    ) -> AtomicSliceRef<'buf, Unaligned<P>> {
+        self.unaligned().try_to_atomic(bytes).unwrap()
     }
 
     /// Reinterpret a slice of texel as memory.
@@ -1085,6 +1222,13 @@ impl<P> Texel<P> {
     /// ```
     pub fn to_range(self, range: ops::Range<usize>) -> Option<TexelRange<P>> {
         TexelRange::new(self, range)
+    }
+
+    /// Construct a range indexing to a slice of this texel by bytes.
+    ///
+    /// See [`TexelRange::from_byte_range`] as this is just a proxy.
+    pub fn to_byte_range(self, range: ops::Range<usize>) -> Option<TexelRange<P>> {
+        TexelRange::from_byte_range(self, range)
     }
 }
 

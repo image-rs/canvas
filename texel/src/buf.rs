@@ -1136,6 +1136,22 @@ impl atomic_buf {
             .expect("An atomic_buf is always aligned")
     }
 
+    /// Index into this buffer at a generalized, potentially skewed, typed index.
+    ///
+    /// # Panics
+    ///
+    /// This method panics if the index is out-of-range.
+    pub fn index<T>(&self, index: TexelRange<T>) -> AtomicSliceRef<'_, T> {
+        let scale = index.texel.align();
+
+        AtomicSliceRef {
+            buf: self,
+            start: scale * index.start_per_align,
+            end: scale * index.end_per_align,
+            texel: index.texel,
+        }
+    }
+
     /// Apply a mapping function to some elements.
     ///
     /// The indices `src` and `dest` are indices as if the slice were interpreted as `[P]` or `[Q]`
@@ -1443,11 +1459,36 @@ impl<T> TexelRange<T> {
         })
     }
 
+    /// Construct from a range of bytes.
+    ///
+    /// The range must be aligned to the type `T` and the length of the range must be a multiple of
+    /// the size. However, in contrast to [`Self::new`] it may be skewed with regards to the size
+    /// of the type. For instance, a slice `[u8; 3]` may begin one byte into the underlying buffer.
+    ///
+    /// Note that a range with its end before the start is interpreted as an empty range and only
+    /// has to fulfill the alignment requirement for its start byte.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use image_texel::texels::{U16, TexelRange};
+    ///
+    /// assert!(TexelRange::from_byte_range(U16, 0..4).is_some());
+    /// // Misaligned.
+    /// assert!(TexelRange::from_byte_range(U16, 1..5).is_none());
+    /// // Okay.
+    /// assert!(TexelRange::from_byte_range(U16.array::<4>(), 2..10).is_some());
+    /// // Okay but empty.
+    /// assert!(TexelRange::from_byte_range(U16.array::<4>(), 2..0).is_some());
+    /// ```
     pub fn from_byte_range(texel: Texel<T>, range: ops::Range<usize>) -> Option<Self> {
         let start_byte = range.start;
-        let end_byte = range.end;
+        let end_byte = range.end.max(start_byte);
 
-        if start_byte % texel.align() != 0 || end_byte % texel.align() != 0 {
+        if start_byte % texel.align() != 0
+            || end_byte % texel.align() != 0
+            || (end_byte - start_byte) % texel.size() != 0
+        {
             return None;
         }
 
