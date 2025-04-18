@@ -75,6 +75,11 @@ impl dyn Layout + '_ {
     pub fn fits_cell_buf(&self, bytes: &crate::buf::cell_buf) -> bool {
         self.byte_len() <= bytes.len()
     }
+
+    #[inline]
+    pub fn fits_data(&self, len: &impl ?Sized) -> bool {
+        self.byte_len() <= core::mem::size_of_val(len)
+    }
 }
 
 /// Convert one layout to a less strict one.

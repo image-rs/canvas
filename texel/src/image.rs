@@ -11,6 +11,7 @@
 mod atomic;
 mod cell;
 mod raw;
+mod unaligned;
 
 use core::{fmt, ops};
 
@@ -25,6 +26,7 @@ use crate::{Texel, TexelBuffer};
 pub use crate::stride::{StridedBufferMut, StridedBufferRef};
 pub use atomic::{AtomicImage, AtomicImageRef};
 pub use cell::{CellImage, CellImageRef};
+pub use unaligned::{DataCells, DataMut, DataRef};
 
 /// A container of allocated bytes, parameterized over the layout.
 ///
@@ -362,6 +364,18 @@ impl<L> Image<L> {
         self.inner.layout()
     }
 
+    /// Change the layout, growing the buffer in the process.
+    ///
+    /// Note that there is no equivalent method on any of the other buffer types since this is the
+    /// only one that can reallocate the buffer when necessary.
+    pub fn set_layout(&mut self, layout: L)
+    where
+        L: Layout,
+    {
+        *self.layout_mut_unguarded() = layout;
+        self.ensure_layout();
+    }
+
     /// Get a mutable reference to the layout.
     ///
     /// Be mindful not to modify the layout to exceed the allocated size. This does not cause any
@@ -386,6 +400,9 @@ impl<L> Image<L> {
     }
 
     /// Get a mutable view under an alternate layout.
+    ///
+    /// Reallocates the buffer when necessary, adding new bytes to the end. The layout of this
+    /// image itself is not modified.
     pub fn to_mut<M: Layout>(&mut self, layout: M) -> ImageMut<'_, M> {
         self.inner.as_reinterpreted(layout).into()
     }
@@ -469,6 +486,19 @@ impl<'data, L> ImageRef<'data, L> {
         L: Layout,
     {
         self.inner.as_bytes()
+    }
+
+    /// Get a reference to the underlying buffer.
+    pub fn as_buf(&self) -> &buf
+    where
+        L: Layout,
+    {
+        self.inner.as_buf()
+    }
+
+    /// Get a reference to the complete underlying buffer, ignoring the layout.
+    pub fn as_capacity_buf(&self) -> &buf {
+        self.inner.get()
     }
 
     pub fn layout(&self) -> &L {
@@ -710,6 +740,32 @@ impl<'data, L> ImageMut<'data, L> {
         L: Layout,
     {
         self.inner.as_bytes_mut()
+    }
+
+    /// Get a reference to the underlying buffer.
+    pub fn as_buf(&self) -> &buf
+    where
+        L: Layout,
+    {
+        self.inner.as_buf()
+    }
+
+    /// Get a mutable reference to the underlying buffer.
+    pub fn as_mut_buf(&mut self) -> &mut buf
+    where
+        L: Layout,
+    {
+        self.inner.as_mut_buf()
+    }
+
+    /// Get a reference to the complete underlying buffer, ignoring the layout.
+    pub fn as_capacity_buf(&self) -> &buf {
+        self.inner.get()
+    }
+
+    /// Get a mutable reference to the underlying buffer, ignoring the layout.
+    pub fn as_capacity_buf_mut(&mut self) -> &mut buf {
+        self.inner.get_mut()
     }
 
     pub fn layout(&self) -> &L {
