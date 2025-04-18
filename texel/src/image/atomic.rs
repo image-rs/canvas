@@ -322,6 +322,11 @@ impl<L> AtomicImage<L> {
 }
 
 impl<'data, L> AtomicImageRef<'data, L> {
+    /// Get a reference to the complete underlying buffer, ignoring the layout.
+    pub fn as_capacity_atomic_buf(&self) -> &atomic_buf {
+        self.inner.get()
+    }
+
     pub fn layout(&self) -> &L {
         self.inner.layout()
     }

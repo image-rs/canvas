@@ -297,6 +297,19 @@ impl<L> CellImage<L> {
 }
 
 impl<'data, L> CellImageRef<'data, L> {
+    /// Get a reference to the underlying buffer.
+    pub fn as_cell_buf(&self) -> &cell_buf
+    where
+        L: Layout,
+    {
+        self.inner.as_cell_buf()
+    }
+
+    /// Get a reference to the complete underlying buffer, ignoring the layout.
+    pub fn as_capacity_cell_buf(&self) -> &cell_buf {
+        self.inner.get()
+    }
+
     pub fn layout(&self) -> &L {
         self.inner.layout()
     }
