@@ -1712,7 +1712,6 @@ mod tests {
         let buffer = AtomicBuffer::with_buffer(initial_state);
         // And receive all the results in this shared copy of our buffer.
         let output_tap = buffer.clone();
-        // assert!(buffer.ptr_eq(&output_tap));
 
         // Map those numbers in-place.
         buffer.map_within(..LEN, 0, |n: u32| n as u8, U32, U8);

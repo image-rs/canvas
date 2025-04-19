@@ -682,6 +682,14 @@ impl<T, const N: usize> Texel<[T; N]> {
     }
 }
 
+/// Protocol for [`Texel::store_atomic_slice_unchecked`] argument. Implementation detail.
+trait DataSource {
+    fn init(&mut self, init: usize);
+    fn load_head(&mut self, val: &mut [u8; MaxAtomic::PART_SIZE]);
+    fn load(&mut self, val: &mut [u8; MaxAtomic::PART_SIZE]);
+    fn load_tail(&mut self, val: &mut [u8; MaxAtomic::PART_SIZE]);
+}
+
 /// Operations that can be performed based on the evidence of Texel.
 impl<P> Texel<P> {
     /// Copy a texel.
@@ -839,7 +847,7 @@ impl<P> Texel<P> {
     /// bytes *not* covered by this particular representation will not inherently block progress.
     pub fn store_atomic(self, val: AtomicRef<P>, value: P) {
         let slice = AtomicSliceRef::from_ref(val);
-        self.store_atomic_slice_unchecked(slice, core::slice::from_ref(&value));
+        self.store_atomic_slice(slice, core::slice::from_ref(&value));
     }
 
     /// Store values to an atomic slice.
@@ -857,7 +865,53 @@ impl<P> Texel<P> {
     /// This method panics if the slice and the source buffer do not have the same logical length.
     #[track_caller]
     pub fn store_atomic_slice(self, val: AtomicSliceRef<P>, source: &[P]) {
+        struct SliceSource<'lt> {
+            skip: usize,
+            head: &'lt [u8],
+            chunks: core::slice::ChunksExact<'lt, u8>,
+            tail: &'lt [u8],
+        }
+
+        impl DataSource for SliceSource<'_> {
+            fn init(&mut self, init: usize) {
+                let len = self.head.len().min(init);
+                let (head, body) = self.head.split_at(len);
+                self.head = head;
+                self.skip = MaxAtomic::PART_SIZE - init;
+
+                let chunks = body.chunks_exact(MaxAtomic::PART_SIZE);
+                self.tail = chunks.remainder();
+                self.chunks = chunks;
+            }
+
+            fn load_head(&mut self, val: &mut [u8; MaxAtomic::PART_SIZE]) {
+                let target = &mut val[self.skip..][..self.head.len()];
+                target.copy_from_slice(self.head);
+            }
+
+            fn load(&mut self, val: &mut [u8; core::mem::size_of::<AtomicPart>()]) {
+                if let Some(next) = self.chunks.next() {
+                    val.copy_from_slice(next);
+                } else {
+                    debug_assert!(false);
+                }
+            }
+
+            fn load_tail(&mut self, val: &mut [u8; MaxAtomic::PART_SIZE]) {
+                let target = &mut val[..self.tail.len()];
+                target.copy_from_slice(self.tail);
+            }
+        }
+
         assert_eq!(val.len(), source.len());
+
+        let source = SliceSource {
+            head: self.to_bytes(source),
+            skip: 0,
+            chunks: [].chunks_exact(MaxAtomic::PART_SIZE),
+            tail: &[],
+        };
+
         self.store_atomic_slice_unchecked(val, source);
     }
 
@@ -875,6 +929,44 @@ impl<P> Texel<P> {
     ///
     /// This method panics if the slice and the source buffer do not have the same logical length.
     pub fn store_atomic_from_cells(self, val: AtomicSliceRef<P>, source: &[Cell<P>]) {
+        struct CellSource<'lt> {
+            skip: usize,
+            head: &'lt [Cell<u8>],
+            chunks: core::slice::ChunksExact<'lt, Cell<u8>>,
+            tail: &'lt [Cell<u8>],
+        }
+
+        impl DataSource for CellSource<'_> {
+            fn init(&mut self, init: usize) {
+                let len = self.head.len().min(init);
+                let (head, body) = self.head.split_at(len);
+                self.head = head;
+                self.skip = MaxAtomic::PART_SIZE - init;
+
+                let chunks = body.chunks_exact(MaxAtomic::PART_SIZE);
+                self.tail = chunks.remainder();
+                self.chunks = chunks;
+            }
+
+            fn load_head(&mut self, val: &mut [u8; MaxAtomic::PART_SIZE]) {
+                let target = &mut val[self.skip..][..self.head.len()];
+                constants::U8.load_cell_slice(self.head, target);
+            }
+
+            fn load(&mut self, val: &mut [u8; core::mem::size_of::<AtomicPart>()]) {
+                if let Some(next) = self.chunks.next() {
+                    constants::U8.load_cell_slice(next, val);
+                } else {
+                    debug_assert!(false);
+                }
+            }
+
+            fn load_tail(&mut self, val: &mut [u8; MaxAtomic::PART_SIZE]) {
+                let target = &mut val[..self.tail.len()];
+                constants::U8.load_cell_slice(self.tail, target);
+            }
+        }
+
         assert_eq!(val.len(), source.len());
 
         assert!(
@@ -888,46 +980,63 @@ impl<P> Texel<P> {
             these values across non-local API boundaries"
         );
 
-        // SAFETY
-        // - this covers the exact memory range as the underlying slice of cells.
-        // - the Texel certifies it is initialized memory.
-        // - the lifetime is the same.
-        // - the memory in the slice is not mutated. `Cell` is not `Sync` so this thread is the
-        //   only that could modify those contents. But also in this thread this function _is
-        //   currently running_ and so it suffices that it does not to modify the contents. Only
-        //   the memory at `val` is modified in the later call. We checked aliasing above.
-        // - the total size is at most `isize::MAX` since it was already a reference to it.
-        let source: &[P] =
-            unsafe { slice::from_raw_parts(source.as_ptr() as *const P, source.len()) };
+        let source = CellSource {
+            head: self.cell_bytes(source).as_slice_of_cells(),
+            skip: 0,
+            chunks: [].chunks_exact(MaxAtomic::PART_SIZE),
+            tail: &[],
+        };
+
         self.store_atomic_slice_unchecked(val, source);
     }
 
-    fn store_atomic_slice_unchecked(self, val: AtomicSliceRef<P>, from: &[P]) {
-        let offset = val.start / core::mem::size_of::<AtomicPart>();
-        let mut initial_skip = val.start % core::mem::size_of::<AtomicPart>();
-
-        let mut source = self.to_bytes(from);
-        let mut buffer = val.buf.0[offset..].iter();
-
-        loop {
-            let into = buffer.next().unwrap();
-            let original = into.load(atomic::Ordering::Relaxed);
+    // Store a data source to a slice, assuming they cover the same number of bytes.
+    fn store_atomic_slice_unchecked(self, val: AtomicSliceRef<P>, mut from: impl DataSource) {
+        // Modify only some bits of an atomic value.
+        fn modify_parts_with(
+            part: &AtomicPart,
+            with: impl FnOnce(&mut [u8; MaxAtomic::PART_SIZE]),
+        ) {
+            let original = part.load(atomic::Ordering::Relaxed);
             let mut value = original;
 
-            let target = &mut bytemuck::bytes_of_mut(&mut value)[initial_skip..];
-            let copy_len = target.len().min(source.len());
-            target[..copy_len].copy_from_slice(&source[..copy_len]);
-            source = &source[copy_len..];
+            let buffer = bytemuck::bytes_of_mut(&mut value);
+            with(buffer.try_into().unwrap());
 
             // Any bits we did not modify, including those outside our own range, will not get
             // modified by this instruction. This provides the basic conflict guarantee.
-            into.fetch_xor(original ^ value, atomic::Ordering::Relaxed);
+            part.fetch_xor(original ^ value, atomic::Ordering::Relaxed);
+        }
 
-            if source.is_empty() {
-                break;
-            }
+        let offset = val.start / MaxAtomic::PART_SIZE;
+        let mut buffer = val.buf.0[offset..].iter();
 
-            initial_skip = 0;
+        // How many bytes from the start to first atomic boundary?
+        let head_len = val.start.next_multiple_of(MaxAtomic::PART_SIZE) - val.start;
+        from.init(head_len);
+
+        let after_head = (val.end - val.start).saturating_sub(head_len);
+        // How many bytes is the end from its previous atomic boundary?
+        let tail_skip = after_head % MaxAtomic::PART_SIZE;
+        let body_count = after_head / MaxAtomic::PART_SIZE;
+
+        if head_len > 0 {
+            let into = buffer.next().unwrap();
+            modify_parts_with(into, |buffer| from.load_head(buffer));
+        }
+
+        let body = buffer.as_slice();
+        for part in &body[..body_count] {
+            // Here we modify all bytes so just store..
+            let mut value = Default::default();
+            let buffer = bytemuck::bytes_of_mut(&mut value);
+            from.load(buffer.try_into().unwrap());
+            part.store(value, atomic::Ordering::Relaxed);
+        }
+
+        if tail_skip > 0 {
+            let into = &body[body_count];
+            modify_parts_with(into, |buffer| from.load_tail(buffer));
         }
     }
 
@@ -1313,6 +1422,8 @@ const _: () = {
 };
 
 impl MaxAtomic {
+    pub(crate) const PART_SIZE: usize = core::mem::size_of::<AtomicPart>();
+
     /// Create a vector of atomic zero-bytes.
     pub const fn zero() -> Self {
         const Z: AtomicPart = AtomicPart::new(0);
