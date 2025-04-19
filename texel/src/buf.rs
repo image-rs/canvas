@@ -1388,6 +1388,12 @@ impl<'lt, P> AtomicSliceRef<'lt, P> {
         }
     }
 
+    pub(crate) fn as_ptr_range(self) -> core::ops::Range<*mut P> {
+        let base = self.buf.0.as_ptr_range();
+        ((base.start as *mut u8).wrapping_add(self.start) as *mut P)
+            ..((base.start as *mut u8).wrapping_add(self.end) as *mut P)
+    }
+
     /// Equivalent of [`core::slice::from_ref`] but we have no mutable analogue.
     pub(crate) fn from_ref(value: AtomicRef<'lt, P>) -> Self {
         AtomicSliceRef {
@@ -2002,6 +2008,78 @@ mod tests {
 
             assert_eq!(data, check);
             assert_eq!(data, cells.map(|x| x.into_inner()));
+        }
+    }
+
+    #[test]
+    fn atomic_from_cells() {
+        for offset in 0..4 {
+            let data = [const { MaxAtomic::zero() }; 1];
+            let lhs = atomic_buf::new(&data[0..1]);
+
+            let data = [const { MaxCell::zero() }; 1];
+            let rhs = cell_buf::new(&data[0..1]);
+
+            // Create a value that checks we write to the correct bytes.
+            let source = rhs.as_texels(U8).as_slice_of_cells();
+            U8.store_cell_slice(&source[4..8], &[0x84; 4]);
+            U8.store_cell_slice(&source[2..4], &[1, 2]);
+            let source = &source[..8 - offset];
+            // Initialize the first 8 bytes of the atomic.
+            U8.store_atomic_from_cells(lhs.as_texels(U8).index(offset..8), source);
+
+            let mut buffer = [0x42; mem::size_of::<MaxCell>()];
+            U8.load_atomic_slice(lhs.as_texels(U8), &mut buffer);
+
+            assert!(
+                buffer[..offset].iter().all(|&x| x == 0),
+                "Must still be unset",
+            );
+
+            assert!(
+                buffer[offset..][..4] == [0, 0, 1, 2],
+                "Must contain the data",
+            );
+
+            assert!(
+                buffer[offset..8][4..].iter().all(|&x| x == 0x84),
+                "Must be initialized by tail {:?}",
+                &buffer[offset..][4..],
+            );
+        }
+    }
+
+    #[test]
+    fn atomic_to_cells() {
+        for offset in 0..4 {
+            let data = [const { MaxAtomic::zero() }; 1];
+            let lhs = atomic_buf::new(&data[0..1]);
+
+            let data = [const { MaxCell::zero() }; 1];
+            let rhs = cell_buf::new(&data[0..1]);
+
+            U8.store_atomic_slice(lhs.as_texels(U8).index(4..8), &[0x84; 4]);
+            U8.store_atomic_slice(lhs.as_texels(U8).index(offset..).index(..4), &[0, 0, 1, 2]);
+
+            // Create a value that checks we write to the correct bytes.
+            let target = rhs.as_texels(U8).as_slice_of_cells();
+            // Initialize the first 8 bytes of the atomic.
+            U8.load_atomic_to_cells(lhs.as_texels(U8).index(offset..8), &target[..8 - offset]);
+
+            let mut buffer = [0x42; mem::size_of::<MaxCell>()];
+            U8.load_cell_slice(target, &mut buffer);
+
+            assert!(
+                buffer[..4] == [0, 0, 1, 2],
+                "Must contain the data {:?}",
+                &buffer[..4],
+            );
+
+            assert!(
+                buffer[..8 - offset][4..].iter().all(|&x| x == 0x84),
+                "Must be initialized by tail {:?}",
+                &buffer[..8 - offset][4..],
+            );
         }
     }
 }

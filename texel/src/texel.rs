@@ -699,6 +699,15 @@ impl<P> Texel<P> {
         unsafe { ptr::read(val) }.into_inner()
     }
 
+    /// Undo a [`Cell::as_slice_of_cells`] call.
+    pub fn cell_as_slice(self, val: &[Cell<P>]) -> &Cell<[P]> {
+        let new_slice = self
+            .try_to_cell(self.cell_bytes(val).as_slice_of_cells())
+            .expect("alignment held previously");
+        debug_assert_eq!(new_slice.as_slice_of_cells().len(), val.len());
+        new_slice
+    }
+
     /// Efficiently store a slice of shared read values to cells.
     ///
     /// We choose an outer slice for the parameter only since the standard library offers the
@@ -755,7 +764,8 @@ impl<P> Texel<P> {
         // SAFETY: by `Texel` being a POD this is a valid representation.
         let mut value = unsafe { core::mem::zeroed::<P>() };
         let slice = AtomicSliceRef::from_ref(val);
-        self.load_atomic_slice_unchecked(slice, core::slice::from_mut(&mut value));
+        let into = core::slice::from_ref(Cell::from_mut(&mut value));
+        self.load_atomic_slice_unchecked(slice, into);
         value
     }
 
@@ -773,13 +783,31 @@ impl<P> Texel<P> {
     #[track_caller]
     pub fn load_atomic_slice(self, val: AtomicSliceRef<P>, into: &mut [P]) {
         assert_eq!(val.len(), into.len());
+        self.load_atomic_slice_unchecked(val, Cell::from_mut(into).as_slice_of_cells());
+    }
+
+    /// Load values from an atomic slice to a slice of cells.
+    ///
+    /// The results is only correct if no concurrent modification occurs. The library promises
+    /// *basic soundness* but no particular defined behaviour under parallel modifications to the
+    /// memory bytes which describe the value to be loaded.
+    ///
+    /// Each atomic unit is read at most once.
+    ///
+    /// # Panics
+    ///
+    /// This method panics if the slice and the target buffer do not have the same length.
+    #[track_caller]
+    pub fn load_atomic_to_cells(self, val: AtomicSliceRef<P>, into: &[Cell<P>]) {
+        assert_eq!(val.len(), into.len());
+        // Always works, just undoing the `as_slice_of_cells` of the argument.
         self.load_atomic_slice_unchecked(val, into);
     }
 
-    fn load_atomic_slice_unchecked(self, val: AtomicSliceRef<P>, into: &mut [P]) {
+    fn load_atomic_slice_unchecked(self, val: AtomicSliceRef<P>, into: &[Cell<P>]) {
         let offset = val.start / core::mem::size_of::<AtomicPart>();
         let mut initial_skip = val.start % core::mem::size_of::<AtomicPart>();
-        let mut target = self.to_mut_bytes(into);
+        let mut target = self.cell_bytes(into).as_slice_of_cells();
 
         let mut buffer = val.buf.0[offset..].iter();
         // By the invariants of `AtomicRef`, that number of bytes is in-bounds.
@@ -788,8 +816,8 @@ impl<P> Texel<P> {
         loop {
             let input = &bytemuck::bytes_of(&load)[initial_skip..];
             let copy_len = input.len().min(target.len());
-            target[..copy_len].copy_from_slice(&input[..copy_len]);
-            target = &mut target[copy_len..];
+            constants::U8.store_cell_slice(&target[..copy_len], &input[..copy_len]);
+            target = &target[copy_len..];
 
             if target.is_empty() {
                 break;
@@ -830,6 +858,47 @@ impl<P> Texel<P> {
     #[track_caller]
     pub fn store_atomic_slice(self, val: AtomicSliceRef<P>, source: &[P]) {
         assert_eq!(val.len(), source.len());
+        self.store_atomic_slice_unchecked(val, source);
+    }
+
+    /// Store values from cells to an atomic slice.
+    ///
+    /// The results is only correct if no concurrent modification occurs. The library promises
+    /// *basic soundness* but no particular defined behaviour under parallel modifications to the
+    /// memory bytes which describe the value to be store.
+    ///
+    /// Provides the same wait-freeness as the underlying platform for `fetch_*` instructions, that
+    /// is this does not use `compare_exchange_weak`. This implies that concurrent modifications to
+    /// bytes *not* covered by this particular representation will not inherently block progress.
+    ///
+    /// # Panics
+    ///
+    /// This method panics if the slice and the source buffer do not have the same logical length.
+    pub fn store_atomic_from_cells(self, val: AtomicSliceRef<P>, source: &[Cell<P>]) {
+        assert_eq!(val.len(), source.len());
+
+        assert!(
+            {
+                let lhs = val.as_ptr_range();
+                let rhs = source.as_ptr_range();
+                lhs.end.addr() <= rhs.start.addr() || rhs.end.addr() <= lhs.start.addr()
+            },
+            "Your atomic slice aliases a slice of cells. While this may be permissible if you're \
+            very very careful about these values, you are violating safety invariants by using \
+            these values across non-local API boundaries"
+        );
+
+        // SAFETY
+        // - this covers the exact memory range as the underlying slice of cells.
+        // - the Texel certifies it is initialized memory.
+        // - the lifetime is the same.
+        // - the memory in the slice is not mutated. `Cell` is not `Sync` so this thread is the
+        //   only that could modify those contents. But also in this thread this function _is
+        //   currently running_ and so it suffices that it does not to modify the contents. Only
+        //   the memory at `val` is modified in the later call. We checked aliasing above.
+        // - the total size is at most `isize::MAX` since it was already a reference to it.
+        let source: &[P] =
+            unsafe { slice::from_raw_parts(source.as_ptr() as *const P, source.len()) };
         self.store_atomic_slice_unchecked(val, source);
     }
 
