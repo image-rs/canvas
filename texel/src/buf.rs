@@ -1328,8 +1328,8 @@ impl<'lt, P> AtomicSliceRef<'lt, P> {
         } else {
             Some(AtomicSliceRef {
                 buf: self.buf,
-                start: start * self.texel.size(),
-                end: end * self.texel.size(),
+                start: self.start + start * self.texel.size(),
+                end: self.start + end * self.texel.size(),
                 texel: self.texel,
             })
         }
@@ -1940,5 +1940,68 @@ mod tests {
 
         U8.load_atomic_slice(lhs.as_texels(U8), &mut buffer);
         assert!(*lhs == buffer[..], "Must be equal with its data");
+    }
+
+    #[test]
+    fn atomic_with_u8() {
+        // Check that writing and reading works at different offsets.
+        for offset in 0..MAX_ALIGN {
+            let slice = [const { MaxAtomic::zero() }; 4];
+            let atomic = atomic_buf::new(&slice[..]);
+
+            let mut iota = 0;
+            let data = [(); 3 * MAX_ALIGN].map(move |_| {
+                let n = iota;
+                iota += 1;
+                n
+            });
+
+            let target = atomic.as_texels(U8).index(offset..).index(..3 * MAX_ALIGN);
+            U8.store_atomic_slice(target, &data[..]);
+
+            let mut check = [0; 3 * MAX_ALIGN];
+            U8.load_atomic_slice(target, &mut check[..]);
+
+            let cells = [const { core::cell::Cell::new(0) }; 3 * MAX_ALIGN];
+            U8.load_atomic_to_cells(target, &cells[..]);
+
+            assert_eq!(data, check);
+            assert_eq!(data, cells.map(|x| x.into_inner()));
+
+            let mut check = [0; 4 * MAX_ALIGN];
+            U8.load_atomic_slice(atomic.as_texels(U8), &mut check[..]);
+
+            assert_eq!(data, check[offset..][..3 * MAX_ALIGN], "offset {offset}");
+        }
+    }
+
+    #[test]
+    fn atomic_with_u16() {
+        use crate::texels::U16;
+
+        // Check that writing and reading works at different offsets.
+        for offset in 0..MAX_ALIGN / 2 {
+            let slice = [const { MaxAtomic::zero() }; 4];
+            let atomic = atomic_buf::new(&slice[..]);
+
+            let mut iota = 0;
+            let data = [(); 3 * MAX_ALIGN / 2].map(move |_| {
+                let n = iota;
+                iota += 1;
+                n
+            });
+
+            let target = atomic.as_texels(U16).index(offset..).index(..3 * MAX_ALIGN / 2);
+            U16.store_atomic_slice(target, &data[..]);
+
+            let mut check = [0; 3 * MAX_ALIGN / 2];
+            U16.load_atomic_slice(target, &mut check[..]);
+
+            let cells = [const { core::cell::Cell::new(0) }; 3 * MAX_ALIGN / 2];
+            U16.load_atomic_to_cells(target, &cells[..]);
+
+            assert_eq!(data, check);
+            assert_eq!(data, cells.map(|x| x.into_inner()));
+        }
     }
 }
