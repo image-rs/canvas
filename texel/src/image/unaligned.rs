@@ -18,20 +18,66 @@ mod sealed {
     }
 
     pub trait Loadable {
-        fn load_from_buf(&mut self, buffer: &buf, what: Range<usize>, into: usize);
-        fn load_from_cell(&mut self, buffer: &cell_buf, what: Range<usize>, into: usize);
-        fn load_from_atomic(&mut self, buffer: &atomic_buf, what: Range<usize>, into: usize);
+        fn load_from_buf(&mut self, buffer: &buf, what: Range<usize>, at: usize);
+        fn load_from_cell(&mut self, buffer: &cell_buf, what: Range<usize>, at: usize);
+        fn load_from_atomic(&mut self, buffer: &atomic_buf, what: Range<usize>, at: usize);
     }
 
     pub trait Storable {
-        fn store_to_buf(&self, buffer: &mut buf, what: Range<usize>, into: usize);
-        fn store_to_cell(&self, buffer: &cell_buf, what: Range<usize>, into: usize);
-        fn store_to_atomic(&self, buffer: &atomic_buf, what: Range<usize>, into: usize);
+        fn store_to_buf(&self, buffer: &mut buf, what: Range<usize>, at: usize);
+        fn store_to_cell(&self, buffer: &cell_buf, what: Range<usize>, at: usize);
+        fn store_to_atomic(&self, buffer: &atomic_buf, what: Range<usize>, at: usize);
+    }
+
+    /// So we can abstract over the invocations of `Loadable::load_from_{buf,cell,atomic}`.
+    pub(crate) trait LoadSource {
+        fn load(&mut self, into: &mut dyn Loadable, what: Range<usize>, at: usize);
+    }
+
+    /// So we can abstract over the invocations of `Storable::store_to_{buf,cell,atomic}`.
+    pub(crate) trait StoreTarget {
+        fn store(&mut self, into: &dyn Storable, what: Range<usize>, at: usize);
+    }
+
+    impl LoadSource for &'_ buf {
+        fn load(&mut self, into: &mut dyn Loadable, what: Range<usize>, at: usize) {
+            into.load_from_buf(self, what, at)
+        }
+    }
+
+    impl LoadSource for &'_ cell_buf {
+        fn load(&mut self, into: &mut dyn Loadable, what: Range<usize>, at: usize) {
+            into.load_from_cell(self, what, at)
+        }
+    }
+
+    impl LoadSource for &'_ atomic_buf {
+        fn load(&mut self, into: &mut dyn Loadable, what: Range<usize>, at: usize) {
+            into.load_from_atomic(self, what, at)
+        }
+    }
+
+    impl StoreTarget for &'_ mut buf {
+        fn store(&mut self, into: &dyn Storable, what: Range<usize>, at: usize) {
+            into.store_to_buf(self, what, at)
+        }
+    }
+
+    impl StoreTarget for &'_ cell_buf {
+        fn store(&mut self, into: &dyn Storable, what: Range<usize>, at: usize) {
+            into.store_to_cell(self, what, at)
+        }
+    }
+
+    impl StoreTarget for &'_ atomic_buf {
+        fn store(&mut self, into: &dyn Storable, what: Range<usize>, at: usize) {
+            into.store_to_atomic(self, what, at)
+        }
     }
 }
 
 use core::{cell::Cell, ops::Range};
-use sealed::{LayoutEngineCore, Loadable, Storable};
+use sealed::{Loadable, Storable};
 
 use crate::buf::{atomic_buf, buf, cell_buf};
 use crate::image::{
@@ -40,18 +86,21 @@ use crate::image::{
 use crate::layout::{Bytes, Layout};
 use crate::texels;
 
+/// A buffer with layout, not aligned to any particular boundary.
 pub struct DataRef<'lt, Layout = Bytes> {
     data: &'lt [u8],
     layout: Layout,
     offset: usize,
 }
 
+/// A mutable buffer with layout, not aligned to any particular boundary.
 pub struct DataMut<'lt, Layout = Bytes> {
     data: &'lt mut [u8],
     layout: Layout,
     offset: usize,
 }
 
+/// A cell buffer with layout, not aligned to any particular boundary.
 pub struct DataCells<'lt, Layout = Bytes> {
     data: &'lt [Cell<u8>],
     layout: Layout,
@@ -145,6 +194,22 @@ impl<'lt, L> DataRef<'lt, L> {
         let len = buffer.len().min(core::mem::size_of_val(self.data));
         buffer[..len].copy_from_slice(self.data);
     }
+
+    /// An adapter reading from the data as one contiguous chunk.
+    ///
+    /// See [`WholeLayout`] for more explanations.
+    pub fn as_source(&self) -> AsCopySource<'_, WholeLayout<'_, L>>
+    where
+        L: Layout,
+    {
+        AsCopySource {
+            inner: &self.data,
+            engine: WholeLayout {
+                inner: &self.layout,
+                offset: self.offset,
+            },
+        }
+    }
 }
 
 impl Storable for &'_ [u8] {
@@ -198,6 +263,38 @@ impl<'lt, L> DataMut<'lt, L> {
     pub fn read_from_buf(&mut self, buffer: &buf) {
         let len = buffer.len().min(core::mem::size_of_val(self.data));
         self.data[..len].copy_from_slice(buffer);
+    }
+
+    /// An adapter reading from the data as one contiguous chunk.
+    ///
+    /// See [`WholeLayout`] for more explanations.
+    pub fn as_source(&self) -> AsCopySource<'_, WholeLayout<'_, L>>
+    where
+        L: Layout,
+    {
+        AsCopySource {
+            inner: &self.data,
+            engine: WholeLayout {
+                inner: &self.layout,
+                offset: self.offset,
+            },
+        }
+    }
+
+    /// An adapter writing to this buffer in one contiguous chunk.
+    ///
+    /// See [`WholeLayout`] for more explanations.
+    pub fn as_target(&mut self) -> AsCopyTarget<'_, WholeLayout<'_, L>>
+    where
+        L: Layout,
+    {
+        AsCopyTarget {
+            inner: &mut self.data,
+            engine: WholeLayout {
+                inner: &self.layout,
+                offset: self.offset,
+            },
+        }
     }
 }
 
@@ -279,7 +376,9 @@ impl<'lt, L> DataCells<'lt, L> {
         self.data.load_from_buf(buffer, 0..len, 0);
     }
 
-    /// Copy all bytes contained in this layout.
+    /// An adapter reading from the data as one contiguous chunk.
+    ///
+    /// See [`WholeLayout`] for more explanations.
     pub fn as_source(&self) -> AsCopySource<'_, WholeLayout<'_, L>>
     where
         L: Layout,
@@ -293,7 +392,9 @@ impl<'lt, L> DataCells<'lt, L> {
         }
     }
 
-    /// Copy all bytes contained in this layout.
+    /// An adapter writing to this buffer in one contiguous chunk.
+    ///
+    /// See [`WholeLayout`] for more explanations.
     pub fn as_target(&mut self) -> AsCopyTarget<'_, WholeLayout<'_, L>>
     where
         L: Layout,
@@ -327,7 +428,10 @@ impl Storable for &'_ [Cell<u8>] {
 
     #[track_caller]
     fn store_to_atomic(&self, buffer: &atomic_buf, what: Range<usize>, into: usize) {
-        todo!()
+        let len = what.len();
+        let target = buffer.index(texels::U8.to_range(into..into + len).unwrap());
+        let source = &self[what.start..what.end];
+        texels::U8.store_atomic_from_cells(target, source);
     }
 }
 
@@ -350,59 +454,25 @@ impl Loadable for &'_ [Cell<u8>] {
     fn load_from_atomic(&mut self, buffer: &atomic_buf, what: Range<usize>, into: usize) {
         let len = what.len();
         let source = buffer.index(texels::U8.to_range(into..into + len).unwrap());
-        todo!()
+        let target = &self[what.start..what.end];
+        texels::U8.load_atomic_to_cells(source, target);
     }
 }
 
 impl<E: LayoutEngine> AsCopySource<'_, E> {
-    fn engine_to_buf_at(&self, buffer: &mut buf, offset: usize) {
-        // Make sure we compile this once per iterator type. Then for instance there is only one
-        // such instance for all LayoutEngine types instead of one per different layout
+    fn engine_to_buf_at(&self, buffer: impl sealed::StoreTarget, offset: usize) {
+        // Make sure we compile this once per iterator type and buffer type combination. Then for
+        // instance there is only one such instance for all LayoutEngine types instead of one per
+        // different layout.
         #[inline(never)]
         fn ranges_to_buf_at(
             ranges: impl Iterator<Item = Range<usize>>,
             store: &dyn Storable,
-            buffer: &mut buf,
+            mut buffer: impl sealed::StoreTarget,
             offset: usize,
         ) {
             for range in ranges {
-                store.store_to_buf(buffer, range, offset)
-            }
-        }
-
-        ranges_to_buf_at(self.engine.ranges(), self.inner, buffer, offset);
-    }
-
-    fn engine_to_cell_buf_at(&self, buffer: &cell_buf, offset: usize) {
-        // Make sure we compile this once per iterator type. Then for instance there is only one
-        // such instance for all LayoutEngine types instead of one per different layout
-        #[inline(never)]
-        fn ranges_to_buf_at(
-            ranges: impl Iterator<Item = Range<usize>>,
-            store: &dyn Storable,
-            buffer: &cell_buf,
-            offset: usize,
-        ) {
-            for range in ranges {
-                store.store_to_cell(buffer, range, offset)
-            }
-        }
-
-        ranges_to_buf_at(self.engine.ranges(), self.inner, buffer, offset);
-    }
-
-    fn engine_to_atomic_buf_at(&self, buffer: &atomic_buf, offset: usize) {
-        // Make sure we compile this once per iterator type. Then for instance there is only one
-        // such instance for all LayoutEngine types instead of one per different layout
-        #[inline(never)]
-        fn ranges_to_buf_at(
-            ranges: impl Iterator<Item = Range<usize>>,
-            store: &dyn Storable,
-            buffer: &atomic_buf,
-            offset: usize,
-        ) {
-            for range in ranges {
-                store.store_to_atomic(buffer, range, offset)
+                buffer.store(store, range, offset)
             }
         }
 
@@ -458,6 +528,21 @@ impl<E: LayoutEngine> AsCopySource<'_, E> {
         Some(buffer)
     }
 
+    /// Write to an image, changing the layout in the process.
+    ///
+    /// Fails when allocated buffer does not fits the new data's layout.
+    pub fn write_to_cell_image(
+        &self,
+        buffer: CellImage<impl Layout>,
+    ) -> Option<CellImage<E::Layout>>
+    where
+        E::Layout: Clone + Layout,
+    {
+        let buffer = buffer.try_with_layout(self.engine.layout().clone()).ok()?;
+        self.engine_to_buf_at(buffer.as_capacity_cell_buf(), 0);
+        Some(buffer)
+    }
+
     /// Write to a locally shared buffer with layout.
     ///
     /// First verifies that the data will fit into the target. Then returns `Some` with a new
@@ -470,7 +555,22 @@ impl<E: LayoutEngine> AsCopySource<'_, E> {
         E::Layout: Clone + Layout,
     {
         let buffer = buffer.checked_with_layout(self.engine.layout().clone())?;
-        self.engine_to_cell_buf_at(buffer.as_cell_buf(), 0);
+        self.engine_to_buf_at(buffer.as_cell_buf(), 0);
+        Some(buffer)
+    }
+
+    /// Write to an image, changing the layout in the process.
+    ///
+    /// Fails when allocated buffer does not fits the new data's layout.
+    pub fn write_to_atomic_image(
+        &self,
+        buffer: AtomicImage<impl Layout>,
+    ) -> Option<AtomicImage<E::Layout>>
+    where
+        E::Layout: Clone + Layout,
+    {
+        let buffer = buffer.try_with_layout(self.engine.layout().clone()).ok()?;
+        self.engine_to_buf_at(buffer.as_capacity_atomic_buf(), 0);
         Some(buffer)
     }
 
@@ -486,24 +586,25 @@ impl<E: LayoutEngine> AsCopySource<'_, E> {
         E::Layout: Clone + Layout,
     {
         let buffer = buffer.checked_with_layout(self.engine.layout().clone())?;
-        self.engine_to_atomic_buf_at(buffer.as_capacity_atomic_buf(), 0);
+        self.engine_to_buf_at(buffer.as_capacity_atomic_buf(), 0);
         Some(buffer)
     }
 }
 
 impl<E: LayoutEngine> AsCopyTarget<'_, E> {
-    fn engine_from_buf_at(&mut self, buffer: &buf, offset: usize) {
-        // Make sure we compile this once per iterator type. Then for instance there is only one
-        // such instance for all LayoutEngine types instead of one per different layout
+    fn engine_from_buf_at(&mut self, buffer: impl sealed::LoadSource, offset: usize) {
+        // Make sure we compile this once per iterator type and buffer type combination. Then for
+        // instance there is only one such instance for all LayoutEngine types instead of one per
+        // different layout.
         #[inline(never)]
         fn ranges_from_buf_at(
             ranges: impl Iterator<Item = Range<usize>>,
             store: &mut dyn Loadable,
-            buffer: &buf,
+            mut buffer: impl sealed::LoadSource,
             offset: usize,
         ) {
             for range in ranges {
-                store.load_from_buf(buffer, range, offset)
+                buffer.load(store, range, offset)
             }
         }
 
@@ -516,5 +617,21 @@ impl<E: LayoutEngine> AsCopyTarget<'_, E> {
     /// the argument buffer.
     pub fn read_from_ref(&mut self, buffer: ImageRef<'_, impl Layout>) {
         self.engine_from_buf_at(buffer.as_buf(), 0);
+    }
+
+    /// Read out data from a borrowed buffer.
+    ///
+    /// This reads data up to our layout. It does not interpret the data with the layout of
+    /// the argument buffer.
+    pub fn read_from_cell_ref(&mut self, buffer: CellImageRef<'_, impl Layout>) {
+        self.engine_from_buf_at(buffer.as_cell_buf(), 0);
+    }
+
+    /// Read out data from a borrowed buffer.
+    ///
+    /// This reads data up to our layout. It does not interpret the data with the layout of
+    /// the argument buffer.
+    pub fn read_from_atomic_ref(&mut self, buffer: CellImageRef<'_, impl Layout>) {
+        self.engine_from_buf_at(buffer.as_cell_buf(), 0);
     }
 }
