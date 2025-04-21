@@ -30,7 +30,7 @@ fn planar_io() {
     let target = Image::new(layout.clone());
 
     let data = DataRef::with_layout_at(input.data, input.layout, 0).unwrap();
-    let reinterpreted = data.as_source().write_to_image(target);
+    let reinterpreted = data.as_source().write_to_image(target.decay());
 
     // Layout must match, as must the bytes within the layout.
     assert_eq!(*reinterpreted.layout(), input.layout);
@@ -45,11 +45,11 @@ fn planar_io() {
     assert_ne!(small.as_buf().as_bytes(), input.data);
     assert_ne!(post.as_buf().as_bytes(), input.data);
 
-    assert!(data.as_source().write_to_mut(small).is_none());
+    assert!(data.as_source().write_to_mut(small.decay()).is_none());
 
     let post = data
         .as_source()
-        .write_to_mut(post)
+        .write_to_mut(post.decay())
         .expect("that plane was large enough");
     // Modify that other independent plane for good measure.
     pre.as_mut_buf().fill(0);

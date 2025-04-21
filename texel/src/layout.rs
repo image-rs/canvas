@@ -92,7 +92,9 @@ impl dyn Layout + '_ {
 ///
 /// In general, a layout `L` should implement `Decay<T>` if any image with layouts of type `T` is
 /// also valid for some layout of type `L`. A common example would be if a crate strictly adds more
-/// information to a predefined layout, then it should also decay to that layout.
+/// information to a predefined layout, then it should also decay to that layout. It is invalid to
+/// decay to a layout that somehow expands outside the initial layout, you must weaken the buffer
+/// required.
 ///
 /// Also note that this trait is not reflexive, in contrast to `From` and `Into` which are. This
 /// avoids collisions in impls. In particular, it allows adding blanket impls of the form

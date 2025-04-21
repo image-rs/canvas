@@ -112,6 +112,19 @@ impl<L: Layout> AtomicImage<L> {
     /// ```
     ///
     /// [`Decay`]: ../layout/trait.Decay.html
+    pub fn decay<M>(self) -> AtomicImage<M>
+    where
+        M: Decay<L>,
+        M: Layout,
+    {
+        self.inner
+            .checked_decay()
+            .unwrap_or_else(super::decay_failed)
+            .into()
+    }
+
+    /// Like [`Self::decay`]` but returns `None` rather than panicking. While this is strictly
+    /// speaking a violation of the trait contract, you may want to handle this yourself.
     pub fn checked_decay<M>(self) -> Option<AtomicImage<M>>
     where
         M: Decay<L>,
@@ -372,6 +385,20 @@ impl<'data, L> AtomicImageRef<'data, L> {
         M: Layout,
     {
         Some(self.inner.try_reinterpret(layout).ok()?.into())
+    }
+
+    /// Decay into a image with less specific layout.
+    ///
+    /// See [`AtomicImage::decay`].
+    pub fn decay<M>(self) -> AtomicImageRef<'data, M>
+    where
+        M: Decay<L>,
+        M: Layout,
+    {
+        self.inner
+            .checked_decay()
+            .unwrap_or_else(super::decay_failed)
+            .into()
     }
 
     /// Decay into a image with less specific layout.

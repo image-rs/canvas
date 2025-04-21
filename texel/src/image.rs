@@ -247,6 +247,16 @@ impl<L: Layout> Image<L> {
         self.inner.decay().into()
     }
 
+    /// Like [`Self::decay`]` but returns `None` rather than panicking. While this is strictly
+    /// speaking a violation of the trait contract, you may want to handle this yourself.
+    pub fn checked_decay<M>(self) -> Option<Image<M>>
+    where
+        M: Decay<L>,
+        M: Layout,
+    {
+        Some(self.inner.checked_decay()?.into())
+    }
+
     /// Move the buffer into a new image.
     pub fn take(&mut self) -> Image<L>
     where
@@ -550,7 +560,20 @@ impl<'data, L> ImageRef<'data, L> {
     /// Decay into a image with less specific layout.
     ///
     /// See [`Image::decay`].
-    pub fn decay<M>(self) -> Option<ImageRef<'data, M>>
+    pub fn decay<M>(self) -> ImageRef<'data, M>
+    where
+        M: Decay<L>,
+        M: Layout,
+    {
+        self.inner
+            .checked_decay()
+            .unwrap_or_else(decay_failed)
+            .into()
+    }
+
+    /// Like [`Self::decay`]` but returns `None` rather than panicking. While this is strictly
+    /// speaking a violation of the trait contract, you may want to handle this yourself.
+    pub fn checked_decay<M>(self) -> Option<ImageRef<'data, M>>
     where
         M: Decay<L>,
         M: Layout,
@@ -828,7 +851,20 @@ impl<'data, L> ImageMut<'data, L> {
     /// Decay into a image with less specific layout.
     ///
     /// See [`Image::decay`].
-    pub fn decay<M>(self) -> Option<ImageMut<'data, M>>
+    pub fn decay<M>(self) -> ImageMut<'data, M>
+    where
+        M: Decay<L>,
+        M: Layout,
+    {
+        self.inner
+            .checked_decay()
+            .unwrap_or_else(decay_failed)
+            .into()
+    }
+
+    /// Like [`Self::decay`]` but returns `None` rather than panicking. While this is strictly
+    /// speaking a violation of the trait contract, you may want to handle this yourself.
+    pub fn checked_decay<M>(self) -> Option<ImageMut<'data, M>>
     where
         M: Decay<L>,
         M: Layout,
@@ -1070,6 +1106,15 @@ impl<'data, L> ImageMut<'data, L> {
         let planes = IntoPlanesError::from_array(planes)?;
         Ok(planes.map(|(layout, buffer)| RawImage::from_buffer(layout, buffer).into()))
     }
+}
+
+fn decay_failed<T>() -> T {
+    #[cold]
+    fn decay_failed_inner() -> ! {
+        panic!("decayed layout is incompatible with the original layout");
+    }
+
+    decay_failed_inner()
 }
 
 impl IntoPlanesError {

@@ -8,7 +8,9 @@
 //! Design issues:
 //! - Many methods completely disregard some of the layouts. When we write into an `Image` for
 //!   instance, we treat it just as a container for bytes under the _input_ layout. We do not
-//!   interact with the target's layout at all.
+//!   interact with the target's layout at all. In these cases we request a `Bytes` layout as an
+//!   explicit opt-in. You can [`decay`][`Image::decay`] all buffer types to conveniently do so at
+//!   the call site.
 //! - Atomic inputs are probably valuable but we can not command users to use our own atomic type.
 //!   Since atomic sizes must not mix, these kinds of buffers require different copy methods for
 //!   each single kind of underlying atomic! Not providing these however risks users doing unsound
@@ -21,7 +23,6 @@
 //!   `Image` by interpreting it as `Image<Relocated<Plane>>`. This however is still wrong. When we
 //!   write of course the aliasing of other planes is not considered. And we never read the
 //!   relocation offset, again just disregarding any existing layout data. This is a big trap.
-//!
 //! - To expand, of course it is also improper to expect that the input buffer contains enough data
 //!   for the whole image, instead it is probably just that single plane. This messes with the
 //!   expectations and types involved in the 'copy engine' implementation detail. What is missing
@@ -32,7 +33,6 @@
 //! - Do we stack strategies, and how? In particular when copying an array of planes each of which
 //!   are matrices we want to copy everything row-by-row but right now this would require a
 //!   specialized engine for `impl Planar<impl MatrixLayout>` instead of being able to compose.
-//!
 //! - Think of blitting. When we write multiple planes, the input data can contain them completely
 //!   unaligned but this can not be expressed with properly planar layouts. We not a 'packed
 //!   planes' type or so that does not implement `PlaneOf` in terms of `Relocated<T>`.
@@ -507,7 +507,7 @@ impl<E: LayoutEngine> AsCopySource<'_, E> {
     ///
     /// Reallocates the image buffer when necessary to ensure that the allocated buffer fits the
     /// new data's layout.
-    pub fn write_to_image(mut self, buffer: Image<impl Layout>) -> Image<E::Layout> {
+    pub fn write_to_image(mut self, buffer: Image<Bytes>) -> Image<E::Layout> {
         let mut buffer = buffer.with_layout(self.engine.consume_layout());
         self.engine_to_buf_at(buffer.as_capacity_buf_mut());
         buffer
@@ -519,7 +519,7 @@ impl<E: LayoutEngine> AsCopySource<'_, E> {
     /// reference to the target buffer that is using the data's layout. Otherwise, returns `None`.
     pub fn write_to_mut<'data>(
         mut self,
-        buffer: ImageMut<'data, impl Layout>,
+        buffer: ImageMut<'data, Bytes>,
     ) -> Option<ImageMut<'data, E::Layout>> {
         let mut buffer = buffer.with_layout(self.engine.consume_layout())?;
         self.engine_to_buf_at(buffer.as_mut_buf());
@@ -531,7 +531,7 @@ impl<E: LayoutEngine> AsCopySource<'_, E> {
     /// Fails when allocated buffer does not fits the new data's layout.
     pub fn write_to_cell_image(
         mut self,
-        buffer: CellImage<impl Layout>,
+        buffer: CellImage<Bytes>,
     ) -> Option<CellImage<E::Layout>>
     where
         E::Layout: Clone + Layout,
@@ -547,7 +547,7 @@ impl<E: LayoutEngine> AsCopySource<'_, E> {
     /// reference to the target buffer that is using the data's layout. Otherwise, returns `None`.
     pub fn write_to_cell_ref<'data>(
         mut self,
-        buffer: CellImageRef<'data, impl Layout>,
+        buffer: CellImageRef<'data, Bytes>,
     ) -> Option<CellImageRef<'data, E::Layout>> {
         let buffer = buffer.checked_with_layout(self.engine.consume_layout())?;
         self.engine_to_buf_at(buffer.as_cell_buf());
@@ -559,7 +559,7 @@ impl<E: LayoutEngine> AsCopySource<'_, E> {
     /// Fails when allocated buffer does not fits the new data's layout.
     pub fn write_to_atomic_image(
         mut self,
-        buffer: AtomicImage<impl Layout>,
+        buffer: AtomicImage<Bytes>,
     ) -> Option<AtomicImage<E::Layout>>
     where
         E::Layout: Clone + Layout,
@@ -575,7 +575,7 @@ impl<E: LayoutEngine> AsCopySource<'_, E> {
     /// reference to the target buffer that is using the data's layout. Otherwise, returns `None`.
     pub fn write_to_atomic_ref<'data>(
         mut self,
-        buffer: AtomicImageRef<'data, impl Layout>,
+        buffer: AtomicImageRef<'data, Bytes>,
     ) -> Option<AtomicImageRef<'data, E::Layout>>
     where
         E::Layout: Clone + Layout,
@@ -615,7 +615,7 @@ impl<E: LayoutEngine> AsCopyTarget<'_, E> {
     ///
     /// This reads data up to our layout. It does not interpret the data with the layout of
     /// the argument buffer.
-    pub fn read_from_ref(&mut self, buffer: ImageRef<'_, impl Layout>) {
+    pub fn read_from_ref(&mut self, buffer: ImageRef<'_, Bytes>) {
         self.engine_from_buf_at(buffer.as_buf());
     }
 
@@ -623,7 +623,7 @@ impl<E: LayoutEngine> AsCopyTarget<'_, E> {
     ///
     /// This reads data up to our layout. It does not interpret the data with the layout of
     /// the argument buffer.
-    pub fn read_from_cell_ref(&mut self, buffer: CellImageRef<'_, impl Layout>) {
+    pub fn read_from_cell_ref(&mut self, buffer: CellImageRef<'_, Bytes>) {
         self.engine_from_buf_at(buffer.as_cell_buf());
     }
 
@@ -631,7 +631,7 @@ impl<E: LayoutEngine> AsCopyTarget<'_, E> {
     ///
     /// This reads data up to our layout. It does not interpret the data with the layout of
     /// the argument buffer.
-    pub fn read_from_atomic_ref(&mut self, buffer: CellImageRef<'_, impl Layout>) {
+    pub fn read_from_atomic_ref(&mut self, buffer: CellImageRef<'_, Bytes>) {
         self.engine_from_buf_at(buffer.as_cell_buf());
     }
 }
