@@ -4,6 +4,39 @@
 //! interactions with these buffers. However, these buffers support more generalized layouts with
 //! the goal of admitting a description of arbitrary external resources. In consequence, these
 //! buffers interact by references only.
+//!
+//! Design issues:
+//! - Many methods completely disregard some of the layouts. When we write into an `Image` for
+//!   instance, we treat it just as a container for bytes under the _input_ layout. We do not
+//!   interact with the target's layout at all.
+//! - Atomic inputs are probably valuable but we can not command users to use our own atomic type.
+//!   Since atomic sizes must not mix, these kinds of buffers require different copy methods for
+//!   each single kind of underlying atomic! Not providing these however risks users doing unsound
+//!   things, such as improperly casting any of their atomic buffers to `[u8]` or `Cell` or
+//!   something.
+//! - Writing the plane of an allocated image is common, but rather not straightforward. Firstly,
+//!   when the input data has different layout we must modify the containing layout's definition of
+//!   this plane, which may fail of course and is not a generic operation at all. (It also entails
+//!   relocating some other planes). The API suggest, in terms of types, mutating the layout of the
+//!   `Image` by interpreting it as `Image<Relocated<Plane>>`. This however is still wrong. When we
+//!   write of course the aliasing of other planes is not considered. And we never read the
+//!   relocation offset, again just disregarding any existing layout data. This is a big trap.
+//!
+//! - To expand, of course it is also improper to expect that the input buffer contains enough data
+//!   for the whole image, instead it is probably just that single plane. This messes with the
+//!   expectations and types involved in the 'copy engine' implementation detail. What is missing
+//!   is a discoverable way that hands the plane index to some engine and then resolves the
+//!   necessary `Relocated::offset` when consuming the target. This should somehow not duplicate
+//!   too many interfaces, and really we want to avoid the confusion of having both available,
+//!   right?
+//! - Do we stack strategies, and how? In particular when copying an array of planes each of which
+//!   are matrices we want to copy everything row-by-row but right now this would require a
+//!   specialized engine for `impl Planar<impl MatrixLayout>` instead of being able to compose.
+//!
+//! - Think of blitting. When we write multiple planes, the input data can contain them completely
+//!   unaligned but this can not be expressed with properly planar layouts. We not a 'packed
+//!   planes' type or so that does not implement `PlaneOf` in terms of `Relocated<T>`.
+//! 
 mod sealed {
     use crate::buf::{atomic_buf, buf, cell_buf};
     use crate::layout::Layout;
@@ -12,9 +45,15 @@ mod sealed {
     pub trait LayoutEngineCore {
         type Layout: Layout;
 
-        fn layout(&self) -> &Self::Layout;
+        fn consume_layout(&mut self) -> Self::Layout;
 
-        fn ranges(&self) -> impl Iterator<Item = Range<usize>>;
+        /// The byte ranges in the data buffer.
+        fn buffer_ranges(&self) -> impl Iterator<Item = Range<usize>>;
+
+        /// The base offset in the image.
+        ///
+        /// This should be such that the final image can be interpreted with [`Self::layout`].
+        fn image_offset(&self) -> usize;
     }
 
     pub trait Loadable {
@@ -83,7 +122,7 @@ use crate::buf::{atomic_buf, buf, cell_buf};
 use crate::image::{
     AtomicImage, AtomicImageRef, CellImage, CellImageRef, Image, ImageMut, ImageRef,
 };
-use crate::layout::{Bytes, Layout};
+use crate::layout::{AlignedOffset, Bytes, Layout, Relocated};
 use crate::texels;
 
 /// A buffer with layout, not aligned to any particular boundary.
@@ -134,27 +173,6 @@ pub struct AsCopyTarget<'lt, E> {
 /// This trait requires a sealed trait, it exists for documentation.
 pub trait LayoutEngine: sealed::LayoutEngineCore {}
 
-/// Copies all bytes within the bounds of this layout.
-pub struct WholeLayout<'lt, L> {
-    inner: &'lt L,
-    offset: usize,
-}
-
-impl<L: Layout> LayoutEngine for WholeLayout<'_, L> {}
-
-impl<L: Layout> sealed::LayoutEngineCore for WholeLayout<'_, L> {
-    type Layout = L;
-
-    fn layout(&self) -> &L {
-        self.inner
-    }
-
-    fn ranges(&self) -> impl Iterator<Item = Range<usize>> {
-        let bytes = self.inner.byte_len();
-        [self.offset..self.offset + bytes].into_iter()
-    }
-}
-
 impl<'lt> DataRef<'lt, Bytes> {
     /// Treat a whole input buffer as image bytes.
     pub fn new(data: &'lt [u8]) -> Self {
@@ -167,16 +185,17 @@ impl<'lt> DataRef<'lt, Bytes> {
 }
 
 impl<'lt, L> DataRef<'lt, L> {
-    /// Verifies the data against the layout before construction.
+    /// Construct from an explicit layout.
     ///
-    /// Note that the type has no hard invariants.
-    pub fn with_layout(data: &'lt [u8], layout: L, at: usize) -> Option<Self>
+    /// This wraps an underlying buffer which has image data of the indicated layout from its
+    /// `start` byte onwards.
+    pub fn with_layout_at(data: &'lt [u8], layout: L, start: usize) -> Option<Self>
     where
         L: Layout,
     {
         Some(data)
             .filter(|data| {
-                if let Some(partial) = data.get(at..) {
+                if let Some(partial) = data.get(start..) {
                     <dyn Layout>::fits_data(&layout, partial)
                 } else {
                     false
@@ -189,25 +208,16 @@ impl<'lt, L> DataRef<'lt, L> {
             })
     }
 
-    /// Copy the data bytes of the layout to the byte buffer.
-    pub fn write_to_buf<'data>(&self, buffer: &mut buf) {
-        let len = buffer.len().min(core::mem::size_of_val(self.data));
-        buffer[..len].copy_from_slice(self.data);
-    }
-
     /// An adapter reading from the data as one contiguous chunk.
     ///
-    /// See [`WholeLayout`] for more explanations.
-    pub fn as_source(&self) -> AsCopySource<'_, WholeLayout<'_, L>>
+    /// See [`RangeEngine`] for more explanations.
+    pub fn as_source(&self) -> AsCopySource<'_, RangeEngine<L>>
     where
-        L: Layout,
+        L: Clone + Layout,
     {
         AsCopySource {
             inner: &self.data,
-            engine: WholeLayout {
-                inner: &self.layout,
-                offset: self.offset,
-            },
+            engine: RangeEngine::new(&self.layout, self.offset),
         }
     }
 }
@@ -237,63 +247,52 @@ impl Storable for &'_ [u8] {
 }
 
 impl<'lt, L> DataMut<'lt, L> {
-    /// Verifies the data against the layout before construction.
+    /// Construct from an explicit layout.
     ///
-    /// Note that the type has no hard invariants.
-    pub fn new(data: &'lt mut [u8], layout: L) -> Option<Self>
+    /// This wraps an underlying mutable buffer which has image data of the indicated layout from
+    /// its `start` byte onwards.
+    pub fn with_layout_at(data: &'lt mut [u8], layout: L, start: usize) -> Option<Self>
     where
         L: Layout,
     {
         Some(data)
-            .filter(|data| <dyn Layout>::fits_data(&layout, data))
+            .filter(|data| {
+                if let Some(partial) = data.get(start..) {
+                    <dyn Layout>::fits_data(&layout, partial)
+                } else {
+                    false
+                }
+            })
             .map(|data| DataMut {
                 data,
                 layout,
-                offset: Default::default(),
+                offset: start,
             })
-    }
-
-    /// Copy the data bytes of the layout to the byte buffer.
-    pub fn write_to_buf(&self, buffer: &mut buf) {
-        let len = buffer.len().min(core::mem::size_of_val(self.data));
-        buffer[..len].copy_from_slice(self.data);
-    }
-
-    /// Copy the data bytes of the layout to the byte buffer.
-    pub fn read_from_buf(&mut self, buffer: &buf) {
-        let len = buffer.len().min(core::mem::size_of_val(self.data));
-        self.data[..len].copy_from_slice(buffer);
     }
 
     /// An adapter reading from the data as one contiguous chunk.
     ///
-    /// See [`WholeLayout`] for more explanations.
-    pub fn as_source(&self) -> AsCopySource<'_, WholeLayout<'_, L>>
+    /// See [`RangeEngine`] for more explanations.
+    pub fn as_source(&self) -> AsCopySource<'_, RangeEngine<L>>
     where
-        L: Layout,
+        L: Clone + Layout,
     {
         AsCopySource {
             inner: &self.data,
-            engine: WholeLayout {
-                inner: &self.layout,
-                offset: self.offset,
-            },
+            engine: RangeEngine::new(&self.layout, self.offset),
         }
     }
 
     /// An adapter writing to this buffer in one contiguous chunk.
     ///
-    /// See [`WholeLayout`] for more explanations.
-    pub fn as_target(&mut self) -> AsCopyTarget<'_, WholeLayout<'_, L>>
+    /// See [`RangeEngine`] for more explanations.
+    pub fn as_target(&mut self) -> AsCopyTarget<'_, RangeEngine<L>>
     where
-        L: Layout,
+        L: Clone + Layout,
     {
         AsCopyTarget {
             inner: &mut self.data,
-            engine: WholeLayout {
-                inner: &self.layout,
-                offset: self.offset,
-            },
+            engine: RangeEngine::new(&self.layout, self.offset),
         }
     }
 }
@@ -350,12 +349,18 @@ impl<'lt, L> DataCells<'lt, L> {
     /// Verifies the data against the layout before construction.
     ///
     /// Note that the type has no hard invariants.
-    pub fn new(data: &'lt [Cell<u8>], layout: L) -> Option<Self>
+    pub fn with_layout_at(data: &'lt [Cell<u8>], layout: L, start: usize) -> Option<Self>
     where
         L: Layout,
     {
         Some(data)
-            .filter(|data| <dyn Layout>::fits_data(&layout, data))
+            .filter(|data| {
+                if let Some(partial) = data.get(start..) {
+                    <dyn Layout>::fits_data(&layout, partial)
+                } else {
+                    false
+                }
+            })
             .map(|data| DataCells {
                 data,
                 layout,
@@ -363,48 +368,29 @@ impl<'lt, L> DataCells<'lt, L> {
             })
     }
 
-    /// Copy the data bytes of the layout to the byte buffer.
-    #[track_caller]
-    pub fn write_to_buf(&self, buffer: &mut buf) {
-        let len = core::mem::size_of_val(self.data);
-        self.data.store_to_buf(buffer, 0..len, 0);
-    }
-
-    /// Copy the data bytes of the layout to the byte buffer.
-    pub fn read_from_buf(&mut self, buffer: &buf) {
-        let len = core::mem::size_of_val(self.data);
-        self.data.load_from_buf(buffer, 0..len, 0);
-    }
-
     /// An adapter reading from the data as one contiguous chunk.
     ///
-    /// See [`WholeLayout`] for more explanations.
-    pub fn as_source(&self) -> AsCopySource<'_, WholeLayout<'_, L>>
+    /// See [`RangeEngine`] for more explanations.
+    pub fn as_source(&self) -> AsCopySource<'_, RangeEngine<L>>
     where
-        L: Layout,
+        L: Clone + Layout,
     {
         AsCopySource {
             inner: &self.data,
-            engine: WholeLayout {
-                inner: &self.layout,
-                offset: self.offset,
-            },
+            engine: RangeEngine::new(&self.layout, self.offset),
         }
     }
 
     /// An adapter writing to this buffer in one contiguous chunk.
     ///
-    /// See [`WholeLayout`] for more explanations.
-    pub fn as_target(&mut self) -> AsCopyTarget<'_, WholeLayout<'_, L>>
+    /// See [`RangeEngine`] for more explanations.
+    pub fn as_target(&mut self) -> AsCopyTarget<'_, RangeEngine<L>>
     where
-        L: Layout,
+        L: Clone + Layout,
     {
         AsCopyTarget {
             inner: &mut self.data,
-            engine: WholeLayout {
-                inner: &self.layout,
-                offset: self.offset,
-            },
+            engine: RangeEngine::new(&self.layout, self.offset),
         }
     }
 }
@@ -459,8 +445,24 @@ impl Loadable for &'_ [Cell<u8>] {
     }
 }
 
+impl<'buf, E: LayoutEngine> AsCopySource<'buf, E> {
+    /// Offset the target location of this copy operation, to anther planar location.
+    pub fn and_relocated(self, offset: AlignedOffset) -> AsCopySource<'buf, RelocateEngine<E>>
+    where
+        E::Layout: Clone,
+    {
+        AsCopySource {
+            inner: self.inner,
+            engine: RelocateEngine {
+                inner: self.engine,
+                offset,
+            },
+        }
+    }
+}
+
 impl<E: LayoutEngine> AsCopySource<'_, E> {
-    fn engine_to_buf_at(&self, buffer: impl sealed::StoreTarget, offset: usize) {
+    fn engine_to_buf_at(&self, buffer: impl sealed::StoreTarget) {
         // Make sure we compile this once per iterator type and buffer type combination. Then for
         // instance there is only one such instance for all LayoutEngine types instead of one per
         // different layout.
@@ -476,7 +478,12 @@ impl<E: LayoutEngine> AsCopySource<'_, E> {
             }
         }
 
-        ranges_to_buf_at(self.engine.ranges(), self.inner, buffer, offset);
+        ranges_to_buf_at(
+            self.engine.buffer_ranges(),
+            self.inner,
+            buffer,
+            self.engine.image_offset(),
+        );
     }
 
     /// Write to an image, changing the layout in the process.
@@ -489,26 +496,20 @@ impl<E: LayoutEngine> AsCopySource<'_, E> {
     ///
     /// Consider [`Self::write_to_buf`] with the [`Image::as_capacity_buf_mut`] when you want to
     /// ignore the layout value of the target buffer.
-    pub fn write_to<L>(&self, buffer: &mut Image<E::Layout>)
-    where
-        E::Layout: Clone + Layout,
-    {
-        let layout = self.engine.layout();
-        buffer.layout_mut_unguarded().clone_from(layout);
+    pub fn write_to(mut self, buffer: &mut Image<E::Layout>) {
+        let layout = self.engine.consume_layout();
+        *buffer.layout_mut_unguarded() = layout;
         buffer.ensure_layout();
-        self.engine_to_buf_at(buffer.as_capacity_buf_mut(), 0);
+        self.engine_to_buf_at(buffer.as_capacity_buf_mut());
     }
 
     /// Write to an image, changing the layout in the process.
     ///
     /// Reallocates the image buffer when necessary to ensure that the allocated buffer fits the
     /// new data's layout.
-    pub fn write_to_image(&self, buffer: Image<impl Layout>) -> Image<E::Layout>
-    where
-        E::Layout: Clone + Layout,
-    {
-        let mut buffer = buffer.with_layout(self.engine.layout().clone());
-        self.engine_to_buf_at(buffer.as_capacity_buf_mut(), 0);
+    pub fn write_to_image(mut self, buffer: Image<impl Layout>) -> Image<E::Layout> {
+        let mut buffer = buffer.with_layout(self.engine.consume_layout());
+        self.engine_to_buf_at(buffer.as_capacity_buf_mut());
         buffer
     }
 
@@ -517,14 +518,11 @@ impl<E: LayoutEngine> AsCopySource<'_, E> {
     /// First verifies that the data will fit into the target. Then returns `Some` with a new
     /// reference to the target buffer that is using the data's layout. Otherwise, returns `None`.
     pub fn write_to_mut<'data>(
-        &self,
+        mut self,
         buffer: ImageMut<'data, impl Layout>,
-    ) -> Option<ImageMut<'data, E::Layout>>
-    where
-        E::Layout: Clone + Layout,
-    {
-        let mut buffer = buffer.with_layout(self.engine.layout().clone())?;
-        self.engine_to_buf_at(buffer.as_mut_buf(), 0);
+    ) -> Option<ImageMut<'data, E::Layout>> {
+        let mut buffer = buffer.with_layout(self.engine.consume_layout())?;
+        self.engine_to_buf_at(buffer.as_mut_buf());
         Some(buffer)
     }
 
@@ -532,14 +530,14 @@ impl<E: LayoutEngine> AsCopySource<'_, E> {
     ///
     /// Fails when allocated buffer does not fits the new data's layout.
     pub fn write_to_cell_image(
-        &self,
+        mut self,
         buffer: CellImage<impl Layout>,
     ) -> Option<CellImage<E::Layout>>
     where
         E::Layout: Clone + Layout,
     {
-        let buffer = buffer.try_with_layout(self.engine.layout().clone()).ok()?;
-        self.engine_to_buf_at(buffer.as_capacity_cell_buf(), 0);
+        let buffer = buffer.try_with_layout(self.engine.consume_layout()).ok()?;
+        self.engine_to_buf_at(buffer.as_capacity_cell_buf());
         Some(buffer)
     }
 
@@ -548,14 +546,11 @@ impl<E: LayoutEngine> AsCopySource<'_, E> {
     /// First verifies that the data will fit into the target. Then returns `Some` with a new
     /// reference to the target buffer that is using the data's layout. Otherwise, returns `None`.
     pub fn write_to_cell_ref<'data>(
-        &self,
+        mut self,
         buffer: CellImageRef<'data, impl Layout>,
-    ) -> Option<CellImageRef<'data, E::Layout>>
-    where
-        E::Layout: Clone + Layout,
-    {
-        let buffer = buffer.checked_with_layout(self.engine.layout().clone())?;
-        self.engine_to_buf_at(buffer.as_cell_buf(), 0);
+    ) -> Option<CellImageRef<'data, E::Layout>> {
+        let buffer = buffer.checked_with_layout(self.engine.consume_layout())?;
+        self.engine_to_buf_at(buffer.as_cell_buf());
         Some(buffer)
     }
 
@@ -563,14 +558,14 @@ impl<E: LayoutEngine> AsCopySource<'_, E> {
     ///
     /// Fails when allocated buffer does not fits the new data's layout.
     pub fn write_to_atomic_image(
-        &self,
+        mut self,
         buffer: AtomicImage<impl Layout>,
     ) -> Option<AtomicImage<E::Layout>>
     where
         E::Layout: Clone + Layout,
     {
-        let buffer = buffer.try_with_layout(self.engine.layout().clone()).ok()?;
-        self.engine_to_buf_at(buffer.as_capacity_atomic_buf(), 0);
+        let buffer = buffer.try_with_layout(self.engine.consume_layout()).ok()?;
+        self.engine_to_buf_at(buffer.as_capacity_atomic_buf());
         Some(buffer)
     }
 
@@ -579,20 +574,20 @@ impl<E: LayoutEngine> AsCopySource<'_, E> {
     /// First verifies that the data will fit into the target. Then returns `Some` with a new
     /// reference to the target buffer that is using the data's layout. Otherwise, returns `None`.
     pub fn write_to_atomic_ref<'data>(
-        &self,
+        mut self,
         buffer: AtomicImageRef<'data, impl Layout>,
     ) -> Option<AtomicImageRef<'data, E::Layout>>
     where
         E::Layout: Clone + Layout,
     {
-        let buffer = buffer.checked_with_layout(self.engine.layout().clone())?;
-        self.engine_to_buf_at(buffer.as_capacity_atomic_buf(), 0);
+        let buffer = buffer.checked_with_layout(self.engine.consume_layout())?;
+        self.engine_to_buf_at(buffer.as_capacity_atomic_buf());
         Some(buffer)
     }
 }
 
 impl<E: LayoutEngine> AsCopyTarget<'_, E> {
-    fn engine_from_buf_at(&mut self, buffer: impl sealed::LoadSource, offset: usize) {
+    fn engine_from_buf_at(&mut self, buffer: impl sealed::LoadSource) {
         // Make sure we compile this once per iterator type and buffer type combination. Then for
         // instance there is only one such instance for all LayoutEngine types instead of one per
         // different layout.
@@ -608,7 +603,12 @@ impl<E: LayoutEngine> AsCopyTarget<'_, E> {
             }
         }
 
-        ranges_from_buf_at(self.engine.ranges(), self.inner, buffer, offset);
+        ranges_from_buf_at(
+            self.engine.buffer_ranges(),
+            self.inner,
+            buffer,
+            self.engine.image_offset(),
+        );
     }
 
     /// Read out data from a borrowed buffer.
@@ -616,7 +616,7 @@ impl<E: LayoutEngine> AsCopyTarget<'_, E> {
     /// This reads data up to our layout. It does not interpret the data with the layout of
     /// the argument buffer.
     pub fn read_from_ref(&mut self, buffer: ImageRef<'_, impl Layout>) {
-        self.engine_from_buf_at(buffer.as_buf(), 0);
+        self.engine_from_buf_at(buffer.as_buf());
     }
 
     /// Read out data from a borrowed buffer.
@@ -624,7 +624,7 @@ impl<E: LayoutEngine> AsCopyTarget<'_, E> {
     /// This reads data up to our layout. It does not interpret the data with the layout of
     /// the argument buffer.
     pub fn read_from_cell_ref(&mut self, buffer: CellImageRef<'_, impl Layout>) {
-        self.engine_from_buf_at(buffer.as_cell_buf(), 0);
+        self.engine_from_buf_at(buffer.as_cell_buf());
     }
 
     /// Read out data from a borrowed buffer.
@@ -632,6 +632,82 @@ impl<E: LayoutEngine> AsCopyTarget<'_, E> {
     /// This reads data up to our layout. It does not interpret the data with the layout of
     /// the argument buffer.
     pub fn read_from_atomic_ref(&mut self, buffer: CellImageRef<'_, impl Layout>) {
-        self.engine_from_buf_at(buffer.as_cell_buf(), 0);
+        self.engine_from_buf_at(buffer.as_cell_buf());
+    }
+}
+
+/// Copies all bytes within the bounds of a layout.
+///
+/// This strategy will do a single copy, of the appropriate type for the targets buffer type, to
+/// transfer all the raw byte data of the image. This is optimal if the layout is supposed to be
+/// the first or only plane and does not contain any other internal padding buffers either.
+pub struct RangeEngine<L> {
+    inner: Option<L>,
+    bytes: [Range<usize>; 1],
+}
+
+/// Applies an interior copy strategy but the bytes in the image are written to another plane.
+pub struct RelocateEngine<Inner: sealed::LayoutEngineCore> {
+    inner: Inner,
+    offset: AlignedOffset,
+}
+
+impl<L: Layout> LayoutEngine for RangeEngine<L> {}
+
+impl<L: Layout> RangeEngine<L> {
+    fn new(layout: &L, offset: usize) -> Self
+    where
+        L: Clone,
+    {
+        let byte_len = layout.byte_len();
+        let bytes = [offset..offset + byte_len];
+
+        RangeEngine {
+            inner: Some(layout.clone()),
+            bytes,
+        }
+    }
+}
+
+impl<L: Layout> sealed::LayoutEngineCore for RangeEngine<L> {
+    type Layout = L;
+
+    fn consume_layout(&mut self) -> L {
+        self.inner
+            .take()
+            .expect("Protocol error, layout polled twice")
+    }
+
+    // Return a `Cloned<slice::Iter>`, not an array iterator. Note we aim to reduce the number of
+    // distinct iterator types between all layout engines, even for distinct layouts etc. This is
+    // compatible as best as possible and misses the loop in copy at most once..
+    #[allow(refining_impl_trait)]
+    fn buffer_ranges(&self) -> core::iter::Cloned<core::slice::Iter<'_, Range<usize>>> {
+        (&self.bytes[..]).iter().cloned()
+    }
+
+    fn image_offset(&self) -> usize {
+        0
+    }
+}
+
+impl<I: sealed::LayoutEngineCore> LayoutEngine for RelocateEngine<I> {}
+
+impl<I: sealed::LayoutEngineCore> sealed::LayoutEngineCore for RelocateEngine<I> {
+    type Layout = Relocated<I::Layout>;
+
+    fn consume_layout(&mut self) -> Self::Layout {
+        Relocated {
+            inner: self.inner.consume_layout(),
+            offset: self.offset,
+        }
+    }
+
+    fn buffer_ranges(&self) -> impl Iterator<Item = Range<usize>> {
+        self.inner.buffer_ranges()
+    }
+
+    fn image_offset(&self) -> usize {
+        self.inner.image_offset() + self.offset.get()
     }
 }

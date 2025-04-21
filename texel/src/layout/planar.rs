@@ -130,6 +130,10 @@ impl<const N: usize> PlaneBytes<N> {
         }
     }
 
+    pub fn from_repeated(matrix: MatrixBytes) -> Self {
+        Self::new([matrix; N])
+    }
+
     /// Return a reference to one relocated matrix layout.
     pub fn plane_ref(&self, idx: usize) -> Option<&Relocated<MatrixBytes>> {
         self.planes.inner.get(idx)

@@ -16,6 +16,7 @@ use crate::image::{Coord, ImageMut, ImageRef};
 pub use crate::stride::{BadStrideError, StrideSpec, StridedBytes, StridedLayout, Strides};
 pub use matrix::{Matrix, MatrixBytes, MatrixLayout};
 pub use planar::{PlaneBytes, PlaneMatrices, Planes};
+pub use relocated::Relocated;
 pub(crate) use upsampling::Yuv420p;
 
 /// A byte layout that only describes the user bytes.
