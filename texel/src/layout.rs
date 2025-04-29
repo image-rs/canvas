@@ -16,6 +16,7 @@ use crate::image::{Coord, ImageMut, ImageRef};
 pub use crate::stride::{BadStrideError, StrideSpec, StridedBytes, StridedLayout, Strides};
 pub use matrix::{Matrix, MatrixBytes, MatrixLayout};
 pub use planar::{PlaneBytes, PlaneMatrices, Planes};
+pub use relocated::Relocated;
 pub(crate) use upsampling::Yuv420p;
 
 /// A byte layout that only describes the user bytes.
@@ -75,6 +76,11 @@ impl dyn Layout + '_ {
     pub fn fits_cell_buf(&self, bytes: &crate::buf::cell_buf) -> bool {
         self.byte_len() <= bytes.len()
     }
+
+    #[inline]
+    pub fn fits_data(&self, len: &impl ?Sized) -> bool {
+        self.byte_len() <= core::mem::size_of_val(len)
+    }
 }
 
 /// Convert one layout to a less strict one.
@@ -86,7 +92,9 @@ impl dyn Layout + '_ {
 ///
 /// In general, a layout `L` should implement `Decay<T>` if any image with layouts of type `T` is
 /// also valid for some layout of type `L`. A common example would be if a crate strictly adds more
-/// information to a predefined layout, then it should also decay to that layout.
+/// information to a predefined layout, then it should also decay to that layout. It is invalid to
+/// decay to a layout that somehow expands outside the initial layout, you must weaken the buffer
+/// required.
 ///
 /// Also note that this trait is not reflexive, in contrast to `From` and `Into` which are. This
 /// avoids collisions in impls. In particular, it allows adding blanket impls of the form

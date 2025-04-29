@@ -1136,6 +1136,22 @@ impl atomic_buf {
             .expect("An atomic_buf is always aligned")
     }
 
+    /// Index into this buffer at a generalized, potentially skewed, typed index.
+    ///
+    /// # Panics
+    ///
+    /// This method panics if the index is out-of-range.
+    pub fn index<T>(&self, index: TexelRange<T>) -> AtomicSliceRef<'_, T> {
+        let scale = index.texel.align();
+
+        AtomicSliceRef {
+            buf: self,
+            start: scale * index.start_per_align,
+            end: scale * index.end_per_align,
+            texel: index.texel,
+        }
+    }
+
     /// Apply a mapping function to some elements.
     ///
     /// The indices `src` and `dest` are indices as if the slice were interpreted as `[P]` or `[Q]`
@@ -1312,8 +1328,8 @@ impl<'lt, P> AtomicSliceRef<'lt, P> {
         } else {
             Some(AtomicSliceRef {
                 buf: self.buf,
-                start: start * self.texel.size(),
-                end: end * self.texel.size(),
+                start: self.start + start * self.texel.size(),
+                end: self.start + end * self.texel.size(),
                 texel: self.texel,
             })
         }
@@ -1370,6 +1386,12 @@ impl<'lt, P> AtomicSliceRef<'lt, P> {
             end: self.start + len,
             ..self
         }
+    }
+
+    pub(crate) fn as_ptr_range(self) -> core::ops::Range<*mut P> {
+        let base = self.buf.0.as_ptr_range();
+        ((base.start as *mut u8).wrapping_add(self.start) as *mut P)
+            ..((base.start as *mut u8).wrapping_add(self.end) as *mut P)
     }
 
     /// Equivalent of [`core::slice::from_ref`] but we have no mutable analogue.
@@ -1443,11 +1465,36 @@ impl<T> TexelRange<T> {
         })
     }
 
+    /// Construct from a range of bytes.
+    ///
+    /// The range must be aligned to the type `T` and the length of the range must be a multiple of
+    /// the size. However, in contrast to [`Self::new`] it may be skewed with regards to the size
+    /// of the type. For instance, a slice `[u8; 3]` may begin one byte into the underlying buffer.
+    ///
+    /// Note that a range with its end before the start is interpreted as an empty range and only
+    /// has to fulfill the alignment requirement for its start byte.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use image_texel::texels::{U16, TexelRange};
+    ///
+    /// assert!(TexelRange::from_byte_range(U16, 0..4).is_some());
+    /// // Misaligned.
+    /// assert!(TexelRange::from_byte_range(U16, 1..5).is_none());
+    /// // Okay.
+    /// assert!(TexelRange::from_byte_range(U16.array::<4>(), 2..10).is_some());
+    /// // Okay but empty.
+    /// assert!(TexelRange::from_byte_range(U16.array::<4>(), 2..0).is_some());
+    /// ```
     pub fn from_byte_range(texel: Texel<T>, range: ops::Range<usize>) -> Option<Self> {
         let start_byte = range.start;
-        let end_byte = range.end;
+        let end_byte = range.end.max(start_byte);
 
-        if start_byte % texel.align() != 0 || end_byte % texel.align() != 0 {
+        if start_byte % texel.align() != 0
+            || end_byte % texel.align() != 0
+            || (end_byte - start_byte) % texel.size() != 0
+        {
             return None;
         }
 
@@ -1665,7 +1712,6 @@ mod tests {
         let buffer = AtomicBuffer::with_buffer(initial_state);
         // And receive all the results in this shared copy of our buffer.
         let output_tap = buffer.clone();
-        // assert!(buffer.ptr_eq(&output_tap));
 
         // Map those numbers in-place.
         buffer.map_within(..LEN, 0, |n: u32| n as u8, U32, U8);
@@ -1899,5 +1945,143 @@ mod tests {
 
         U8.load_atomic_slice(lhs.as_texels(U8), &mut buffer);
         assert!(*lhs == buffer[..], "Must be equal with its data");
+    }
+
+    #[test]
+    fn atomic_with_u8() {
+        // Check that writing and reading works at different offsets.
+        for offset in 0..MAX_ALIGN {
+            let slice = [const { MaxAtomic::zero() }; 4];
+            let atomic = atomic_buf::new(&slice[..]);
+
+            let mut iota = 0;
+            let data = [(); 3 * MAX_ALIGN].map(move |_| {
+                let n = iota;
+                iota += 1;
+                n
+            });
+
+            let target = atomic.as_texels(U8).index(offset..).index(..3 * MAX_ALIGN);
+            U8.store_atomic_slice(target, &data[..]);
+
+            let mut check = [0; 3 * MAX_ALIGN];
+            U8.load_atomic_slice(target, &mut check[..]);
+
+            let cells = [const { core::cell::Cell::new(0) }; 3 * MAX_ALIGN];
+            U8.load_atomic_to_cells(target, &cells[..]);
+
+            assert_eq!(data, check);
+            assert_eq!(data, cells.map(|x| x.into_inner()));
+
+            let mut check = [0; 4 * MAX_ALIGN];
+            U8.load_atomic_slice(atomic.as_texels(U8), &mut check[..]);
+
+            assert_eq!(data, check[offset..][..3 * MAX_ALIGN], "offset {offset}");
+        }
+    }
+
+    #[test]
+    fn atomic_with_u16() {
+        use crate::texels::U16;
+
+        // Check that writing and reading works at different offsets.
+        for offset in 0..MAX_ALIGN / 2 {
+            let slice = [const { MaxAtomic::zero() }; 4];
+            let atomic = atomic_buf::new(&slice[..]);
+
+            let mut iota = 0;
+            let data = [(); 3 * MAX_ALIGN / 2].map(move |_| {
+                let n = iota;
+                iota += 1;
+                n
+            });
+
+            let target = atomic
+                .as_texels(U16)
+                .index(offset..)
+                .index(..3 * MAX_ALIGN / 2);
+            U16.store_atomic_slice(target, &data[..]);
+
+            let mut check = [0; 3 * MAX_ALIGN / 2];
+            U16.load_atomic_slice(target, &mut check[..]);
+
+            let cells = [const { core::cell::Cell::new(0) }; 3 * MAX_ALIGN / 2];
+            U16.load_atomic_to_cells(target, &cells[..]);
+
+            assert_eq!(data, check);
+            assert_eq!(data, cells.map(|x| x.into_inner()));
+        }
+    }
+
+    #[test]
+    fn atomic_from_cells() {
+        for offset in 0..4 {
+            let data = [const { MaxAtomic::zero() }; 1];
+            let lhs = atomic_buf::new(&data[0..1]);
+
+            let data = [const { MaxCell::zero() }; 1];
+            let rhs = cell_buf::new(&data[0..1]);
+
+            // Create a value that checks we write to the correct bytes.
+            let source = rhs.as_texels(U8).as_slice_of_cells();
+            U8.store_cell_slice(&source[4..8], &[0x84; 4]);
+            U8.store_cell_slice(&source[2..4], &[1, 2]);
+            let source = &source[..8 - offset];
+            // Initialize the first 8 bytes of the atomic.
+            U8.store_atomic_from_cells(lhs.as_texels(U8).index(offset..8), source);
+
+            let mut buffer = [0x42; mem::size_of::<MaxCell>()];
+            U8.load_atomic_slice(lhs.as_texels(U8), &mut buffer);
+
+            assert!(
+                buffer[..offset].iter().all(|&x| x == 0),
+                "Must still be unset",
+            );
+
+            assert!(
+                buffer[offset..][..4] == [0, 0, 1, 2],
+                "Must contain the data",
+            );
+
+            assert!(
+                buffer[offset..8][4..].iter().all(|&x| x == 0x84),
+                "Must be initialized by tail {:?}",
+                &buffer[offset..][4..],
+            );
+        }
+    }
+
+    #[test]
+    fn atomic_to_cells() {
+        for offset in 0..4 {
+            let data = [const { MaxAtomic::zero() }; 1];
+            let lhs = atomic_buf::new(&data[0..1]);
+
+            let data = [const { MaxCell::zero() }; 1];
+            let rhs = cell_buf::new(&data[0..1]);
+
+            U8.store_atomic_slice(lhs.as_texels(U8).index(4..8), &[0x84; 4]);
+            U8.store_atomic_slice(lhs.as_texels(U8).index(offset..).index(..4), &[0, 0, 1, 2]);
+
+            // Create a value that checks we write to the correct bytes.
+            let target = rhs.as_texels(U8).as_slice_of_cells();
+            // Initialize the first 8 bytes of the atomic.
+            U8.load_atomic_to_cells(lhs.as_texels(U8).index(offset..8), &target[..8 - offset]);
+
+            let mut buffer = [0x42; mem::size_of::<MaxCell>()];
+            U8.load_cell_slice(target, &mut buffer);
+
+            assert!(
+                buffer[..4] == [0, 0, 1, 2],
+                "Must contain the data {:?}",
+                &buffer[..4],
+            );
+
+            assert!(
+                buffer[..8 - offset][4..].iter().all(|&x| x == 0x84),
+                "Must be initialized by tail {:?}",
+                &buffer[..8 - offset][4..],
+            );
+        }
     }
 }

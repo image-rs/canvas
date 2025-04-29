@@ -10,6 +10,7 @@
 //! advised, probably very common, and the only 'supported' use-case).
 mod atomic;
 mod cell;
+mod data;
 mod raw;
 
 use core::{fmt, ops};
@@ -20,11 +21,12 @@ use crate::layout::{
     Bytes, Decay, Layout, Mend, PlaneOf, Raster, RasterMut, Relocate, SliceLayout, Take, TryMend,
 };
 use crate::texel::MAX_ALIGN;
-use crate::{Texel, TexelBuffer};
+use crate::{BufferReuseError, Texel, TexelBuffer};
 
 pub use crate::stride::{StridedBufferMut, StridedBufferRef};
 pub use atomic::{AtomicImage, AtomicImageRef};
 pub use cell::{CellImage, CellImageRef};
+pub use data::{DataCells, DataMut, DataRef};
 
 /// A container of allocated bytes, parameterized over the layout.
 ///
@@ -50,7 +52,8 @@ pub use cell::{CellImage, CellImageRef};
 ///
 /// Initialize a matrix as computed `[u8; 4]` rga pixels:
 ///
-/// ```
+#[cfg_attr(not(miri), doc = "```")]
+#[cfg_attr(miri, doc = "```no_run")] // too expensive and pointless
 /// # fn test() -> Option<()> {
 /// use image_texel::{Image, Matrix};
 ///
@@ -244,6 +247,16 @@ impl<L: Layout> Image<L> {
         self.inner.decay().into()
     }
 
+    /// Like [`Self::decay`]` but returns `None` rather than panicking. While this is strictly
+    /// speaking a violation of the trait contract, you may want to handle this yourself.
+    pub fn checked_decay<M>(self) -> Option<Image<M>>
+    where
+        M: Decay<L>,
+        M: Layout,
+    {
+        Some(self.inner.checked_decay()?.into())
+    }
+
     /// Move the buffer into a new image.
     pub fn take(&mut self) -> Image<L>
     where
@@ -361,6 +374,18 @@ impl<L> Image<L> {
         self.inner.layout()
     }
 
+    /// Change the layout, growing the buffer in the process.
+    ///
+    /// Note that there is no equivalent method on any of the other buffer types since this is the
+    /// only one that can reallocate the buffer when necessary.
+    pub fn set_layout(&mut self, layout: L)
+    where
+        L: Layout,
+    {
+        *self.layout_mut_unguarded() = layout;
+        self.ensure_layout();
+    }
+
     /// Get a mutable reference to the layout.
     ///
     /// Be mindful not to modify the layout to exceed the allocated size. This does not cause any
@@ -385,6 +410,9 @@ impl<L> Image<L> {
     }
 
     /// Get a mutable view under an alternate layout.
+    ///
+    /// Reallocates the buffer when necessary, adding new bytes to the end. The layout of this
+    /// image itself is not modified.
     pub fn to_mut<M: Layout>(&mut self, layout: M) -> ImageMut<'_, M> {
         self.inner.as_reinterpreted(layout).into()
     }
@@ -470,6 +498,19 @@ impl<'data, L> ImageRef<'data, L> {
         self.inner.as_bytes()
     }
 
+    /// Get a reference to the underlying buffer.
+    pub fn as_buf(&self) -> &buf
+    where
+        L: Layout,
+    {
+        self.inner.as_buf()
+    }
+
+    /// Get a reference to the complete underlying buffer, ignoring the layout.
+    pub fn as_capacity_buf(&self) -> &buf {
+        self.inner.get()
+    }
+
     pub fn layout(&self) -> &L {
         self.inner.layout()
     }
@@ -519,7 +560,20 @@ impl<'data, L> ImageRef<'data, L> {
     /// Decay into a image with less specific layout.
     ///
     /// See [`Image::decay`].
-    pub fn decay<M>(self) -> Option<ImageRef<'data, M>>
+    pub fn decay<M>(self) -> ImageRef<'data, M>
+    where
+        M: Decay<L>,
+        M: Layout,
+    {
+        self.inner
+            .checked_decay()
+            .unwrap_or_else(decay_failed)
+            .into()
+    }
+
+    /// Like [`Self::decay`]` but returns `None` rather than panicking. While this is strictly
+    /// speaking a violation of the trait contract, you may want to handle this yourself.
+    pub fn checked_decay<M>(self) -> Option<ImageRef<'data, M>>
     where
         M: Decay<L>,
         M: Layout,
@@ -711,6 +765,32 @@ impl<'data, L> ImageMut<'data, L> {
         self.inner.as_bytes_mut()
     }
 
+    /// Get a reference to the underlying buffer.
+    pub fn as_buf(&self) -> &buf
+    where
+        L: Layout,
+    {
+        self.inner.as_buf()
+    }
+
+    /// Get a mutable reference to the underlying buffer.
+    pub fn as_mut_buf(&mut self) -> &mut buf
+    where
+        L: Layout,
+    {
+        self.inner.as_mut_buf()
+    }
+
+    /// Get a reference to the complete underlying buffer, ignoring the layout.
+    pub fn as_capacity_buf(&self) -> &buf {
+        self.inner.get()
+    }
+
+    /// Get a mutable reference to the underlying buffer, ignoring the layout.
+    pub fn as_capacity_buf_mut(&mut self) -> &mut buf {
+        self.inner.get_mut()
+    }
+
     pub fn layout(&self) -> &L {
         self.inner.layout()
     }
@@ -768,10 +848,36 @@ impl<'data, L> ImageMut<'data, L> {
         Some(image.into())
     }
 
+    /// Attempt to modify the layout to a new value, without modifying its type.
+    ///
+    /// Returns an `Err` if the layout does not fit the underlying buffer. Otherwise returns `Ok`
+    /// and overwrites the layout accordingly.
+    ///
+    /// TODO: public name and provide a `set_capacity` for `L = Bytes`?
+    pub(crate) fn try_set_layout(&mut self, layout: L) -> Result<(), BufferReuseError>
+    where
+        L: Layout,
+    {
+        self.inner.try_reuse(layout)
+    }
+
     /// Decay into a image with less specific layout.
     ///
     /// See [`Image::decay`].
-    pub fn decay<M>(self) -> Option<ImageMut<'data, M>>
+    pub fn decay<M>(self) -> ImageMut<'data, M>
+    where
+        M: Decay<L>,
+        M: Layout,
+    {
+        self.inner
+            .checked_decay()
+            .unwrap_or_else(decay_failed)
+            .into()
+    }
+
+    /// Like [`Self::decay`]` but returns `None` rather than panicking. While this is strictly
+    /// speaking a violation of the trait contract, you may want to handle this yourself.
+    pub fn checked_decay<M>(self) -> Option<ImageMut<'data, M>>
     where
         M: Decay<L>,
         M: Layout,
@@ -1013,6 +1119,15 @@ impl<'data, L> ImageMut<'data, L> {
         let planes = IntoPlanesError::from_array(planes)?;
         Ok(planes.map(|(layout, buffer)| RawImage::from_buffer(layout, buffer).into()))
     }
+}
+
+fn decay_failed<T>() -> T {
+    #[cold]
+    fn decay_failed_inner() -> ! {
+        panic!("decayed layout is incompatible with the original layout");
+    }
+
+    decay_failed_inner()
 }
 
 impl IntoPlanesError {

@@ -1,6 +1,9 @@
 use crate::layout::{AlignedOffset, Decay, Layout, PlaneOf, Relocate, SliceLayout};
 use crate::texels::TexelRange;
 
+/// Moves a base layout to an aligned offset location.
+///
+/// This effectively allows turning one layout into a plane of another.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct Relocated<T> {
     pub offset: AlignedOffset,
@@ -49,6 +52,15 @@ impl<T: Layout> Relocate for Relocated<T> {
 impl<T: Layout> Decay<T> for Relocated<T> {
     fn decay(inner: T) -> Relocated<T> {
         Relocated::new(inner)
+    }
+}
+
+impl<T: Layout> Decay<Relocated<Relocated<T>>> for Relocated<T> {
+    fn decay(inner: Relocated<Relocated<T>>) -> Relocated<T> {
+        Relocated {
+            offset: AlignedOffset::new(inner.offset.get() + inner.inner.offset.get()).unwrap(),
+            inner: inner.inner.inner,
+        }
     }
 }
 

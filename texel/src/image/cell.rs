@@ -5,7 +5,7 @@ use crate::buf::{cell_buf, CellBuffer};
 use crate::image::{raw::RawImage, IntoPlanesError};
 use crate::layout::{Bytes, Decay, Layout, Mend, PlaneOf, Relocate, SliceLayout, Take, TryMend};
 use crate::texel::{constants::U8, MAX_ALIGN};
-use crate::{Texel, TexelBuffer};
+use crate::{BufferReuseError, Texel, TexelBuffer};
 use core::cell::Cell;
 
 /// A container of allocated bytes, parameterized over the layout.
@@ -67,6 +67,19 @@ impl<L: Layout> CellImage<L> {
             .map_err(Into::into)
     }
 
+    /// Attempt to modify the layout to a new value, without modifying its type.
+    ///
+    /// Returns an `Err` if the layout does not fit the underlying buffer. Otherwise returns `Ok`
+    /// and overwrites the layout accordingly.
+    ///
+    /// TODO: public name and provide a `set_capacity` for `L = Bytes`?
+    pub(crate) fn try_set_layout(&mut self, layout: L) -> Result<(), BufferReuseError>
+    where
+        L: Layout,
+    {
+        self.inner.try_reuse(layout)
+    }
+
     /// Decay into a image with less specific layout.
     ///
     /// See the [`Decay`] trait for an explanation of this operation.
@@ -81,7 +94,7 @@ impl<L: Layout> CellImage<L> {
     /// let image: CellImage<layout::Matrix<u8>> = CellImage::new(matrix);
     ///
     /// // to turn hide the `u8` type but keep width, height, texel layout
-    /// let as_bytes: CellImage<layout::MatrixBytes> = image.clone().checked_decay().unwrap();
+    /// let as_bytes: CellImage<layout::MatrixBytes> = image.clone().decay();
     /// assert_eq!(as_bytes.layout().width(), 400);
     /// assert_eq!(as_bytes.layout().height(), 400);
     /// ```
@@ -97,11 +110,24 @@ impl<L: Layout> CellImage<L> {
     /// let matrix = Matrix::<u8>::width_and_height(400, 400).unwrap();
     ///
     /// // Can always decay to a byte buffer.
-    /// let bytes: CellImage = CellImage::new(matrix).checked_decay().unwrap();
+    /// let bytes: CellImage = CellImage::new(matrix).decay();
     /// let _: &layout::Bytes = bytes.layout();
     /// ```
     ///
     /// [`Decay`]: ../layout/trait.Decay.html
+    pub fn decay<M>(self) -> CellImage<M>
+    where
+        M: Decay<L>,
+        M: Layout,
+    {
+        self.inner
+            .checked_decay()
+            .unwrap_or_else(super::decay_failed)
+            .into()
+    }
+
+    /// Like [`Self::decay`]` but returns `None` rather than panicking. While this is strictly
+    /// speaking a violation of the trait contract, you may want to handle this yourself.
     pub fn checked_decay<M>(self) -> Option<CellImage<M>>
     where
         M: Decay<L>,
@@ -297,6 +323,19 @@ impl<L> CellImage<L> {
 }
 
 impl<'data, L> CellImageRef<'data, L> {
+    /// Get a reference to the underlying buffer.
+    pub fn as_cell_buf(&self) -> &cell_buf
+    where
+        L: Layout,
+    {
+        self.inner.as_cell_buf()
+    }
+
+    /// Get a reference to the complete underlying buffer, ignoring the layout.
+    pub fn as_capacity_cell_buf(&self) -> &cell_buf {
+        self.inner.get()
+    }
+
     pub fn layout(&self) -> &L {
         self.inner.layout()
     }
@@ -342,6 +381,33 @@ impl<'data, L> CellImageRef<'data, L> {
         M: Layout,
     {
         Some(self.inner.try_reinterpret(layout).ok()?.into())
+    }
+
+    /// Attempt to modify the layout to a new value, without modifying its type.
+    ///
+    /// Returns an `Err` if the layout does not fit the underlying buffer. Otherwise returns `Ok`
+    /// and overwrites the layout accordingly.
+    ///
+    /// TODO: public name and provide a `set_capacity` for `L = Bytes`?
+    pub(crate) fn try_set_layout(&mut self, layout: L) -> Result<(), BufferReuseError>
+    where
+        L: Layout,
+    {
+        self.inner.try_reuse(layout)
+    }
+
+    /// Decay into a image with less specific layout.
+    ///
+    /// See [`CellImage::decay`].
+    pub fn decay<M>(self) -> CellImageRef<'data, M>
+    where
+        M: Decay<L>,
+        M: Layout,
+    {
+        self.inner
+            .checked_decay()
+            .unwrap_or_else(super::decay_failed)
+            .into()
     }
 
     /// Decay into a image with less specific layout.
