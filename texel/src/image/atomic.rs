@@ -2,7 +2,7 @@
 //!
 //! Re-exported at its super `image` module.
 use crate::buf::{atomic_buf, AtomicBuffer, AtomicSliceRef};
-use crate::image::{raw::RawImage, IntoPlanesError};
+use crate::image::{raw::RawImage, Image, IntoPlanesError};
 use crate::layout::{Bytes, Decay, Layout, Mend, PlaneOf, Relocate, SliceLayout, Take, TryMend};
 use crate::texel::{constants::U8, MAX_ALIGN};
 use crate::{BufferReuseError, Texel, TexelBuffer};
@@ -144,6 +144,36 @@ impl<L: Layout> AtomicImage<L> {
         M: Layout,
     {
         Some(self.inner.checked_decay()?.into())
+    }
+
+    /// Copy all bytes to a newly allocated image.
+    ///
+    /// Note this will allocate a buffer according to the capacity length of this reference, not
+    /// merely the layout. When this is not the intention, consider calling [`Self::split_layout`]
+    /// or [`Self::truncate_layout`] respectively.
+    ///
+    /// # Examples
+    ///
+    /// Here we make an independent copy of a pixel matrix image.
+    ///
+    /// ```
+    /// use image_texel::image::{AtomicImage, Image};
+    /// use image_texel::layout::{PlaneMatrices, Matrix};
+    /// use image_texel::texels::U8;
+    ///
+    /// let matrix = Matrix::from_width_height(U8, 8, 8).unwrap();
+    /// let buffer = AtomicImage::new(matrix);
+    ///
+    /// // … some code to initialize those planes.
+    /// # let data = buffer.as_texels(U8).index(0..8);
+    /// # U8.store_atomic_slice(data, b"not zero");
+    ///
+    /// let clone_of: Image<_> = buffer.clone().into_owned();
+    ///
+    /// assert!(clone_of.as_bytes() == buffer.as_texels(U8).to_vec());
+    /// ```
+    pub fn into_owned(self) -> Image<L> {
+        self.inner.into_owned().into()
     }
 
     /// Move the bytes into a new image.
@@ -438,6 +468,38 @@ impl<'data, L> AtomicImageRef<'data, L> {
         Some(self.inner.checked_decay()?.into())
     }
 
+    /// Copy all bytes to a newly allocated image.
+    ///
+    /// Note this will allocate a buffer according to the capacity length of this reference, not
+    /// merely the layout. When this is not the intention, consider calling [`Self::split_layout`]
+    /// or [`Self::truncate_layout`] respectively.
+    ///
+    /// # Examples
+    ///
+    /// Here we make an independent copy of a pixel matrix image.
+    ///
+    /// ```
+    /// use image_texel::image::{AtomicImage, Image};
+    /// use image_texel::layout::{PlaneMatrices, Matrix};
+    /// use image_texel::texels::U8;
+    ///
+    /// let matrix = Matrix::from_width_height(U8, 8, 8).unwrap();
+    /// let buffer = AtomicImage::new(PlaneMatrices::<_, 2>::from_repeated(matrix));
+    ///
+    /// // … some code to initialize those planes.
+    /// # let [plane] = buffer.as_ref().into_planes([1]).unwrap();
+    /// # let data = buffer.as_texels(U8).index(0..8);
+    /// # U8.store_atomic_slice(data, b"not zero");
+    ///
+    /// let [plane1] = buffer.as_ref().into_planes([1]).unwrap();
+    /// let clone_of: Image<_> = plane1.clone().into_owned();
+    ///
+    /// assert!(clone_of.as_bytes() == plane1.as_texels(U8).to_vec());
+    /// ```
+    pub fn into_owned(self) -> Image<L> {
+        self.inner.into_owned().into()
+    }
+
     /// Get a slice of the individual samples in the layout.
     pub fn as_slice(&self) -> AtomicSliceRef<'_, L::Sample>
     where
@@ -473,11 +535,7 @@ impl<'data, L> AtomicImageRef<'data, L> {
         let (buffer, layout) = self.inner.into_parts();
         let len = layout.byte_len();
 
-        // FIXME: avoid zero-initializing. Might need a bit more unsafe code that extends a vector
-        // of Texel<P> from that atomic.
-        let mut target = alloc::vec![0; len];
-        U8.load_atomic_slice(buffer.as_texels(U8).truncate_bytes(len), &mut target);
-        target
+        buffer.as_texels(U8).truncate_bytes(len).to_vec()
     }
 
     /// Turn into a slice of the individual samples in the layout.
@@ -546,6 +604,18 @@ impl<'data, L> AtomicImageRef<'data, L> {
         *buffer = initial;
 
         RawImage::from_buffer(Bytes(next.len()), next).into()
+    }
+
+    /// Remove all past-the-layout bytes.
+    ///
+    /// This is a utility to combine with pipelining. It is equivalent to calling
+    /// [`Self::split_layout`] and discarding that result.
+    pub fn truncate_layout(mut self) -> Self
+    where
+        L: Layout,
+    {
+        let _ = self.split_layout();
+        self
     }
 
     /// Split this reference into independent planes.

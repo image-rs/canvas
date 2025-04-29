@@ -692,6 +692,12 @@ trait DataSource {
 
 /// Operations that can be performed based on the evidence of Texel.
 impl<P> Texel<P> {
+    /// Construct a value of `P` from thin air, with zeroed representation.
+    pub fn zeroed(self) -> P {
+        // SAFETY: by `Texel` being a POD this is a valid representation.
+        unsafe { core::mem::zeroed::<P>() }
+    }
+
     /// Copy a texel.
     ///
     /// Note that this does not require `Copy` because that requirement was part of the
@@ -769,8 +775,7 @@ impl<P> Texel<P> {
     ///
     /// Each atomic unit is read at most once.
     pub fn load_atomic(self, val: AtomicRef<P>) -> P {
-        // SAFETY: by `Texel` being a POD this is a valid representation.
-        let mut value = unsafe { core::mem::zeroed::<P>() };
+        let mut value = self.zeroed();
         let slice = AtomicSliceRef::from_ref(val);
         let into = core::slice::from_ref(Cell::from_mut(&mut value));
         self.load_atomic_slice_unchecked(slice, into);

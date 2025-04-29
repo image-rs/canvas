@@ -582,11 +582,37 @@ impl<'data, L> ImageRef<'data, L> {
     }
 
     /// Copy all bytes to a newly allocated image.
-    pub fn to_owned(&self) -> Image<L>
-    where
-        L: Layout + Clone,
-    {
-        Image::with_bytes(self.inner.layout().clone(), self.inner.as_bytes())
+    ///
+    /// Note this will allocate a buffer according to the capacity length of this reference, not
+    /// merely the layout. When this is not the intention, consider calling [`Self::split_layout`]
+    /// or [`Self::truncate_layout`] respectively.
+    ///
+    /// # Examples
+    ///
+    /// Here we make an independent copy of the second plane of a composite image.
+    ///
+    /// ```
+    /// use image_texel::image::{Image, ImageRef};
+    /// use image_texel::layout::{PlaneMatrices, Matrix};
+    /// use image_texel::texels::U8;
+    ///
+    /// let mat = Matrix::from_width_height(U8, 8, 8).unwrap();
+    /// let buffer = Image::new(PlaneMatrices::<_, 2>::from_repeated(mat));
+    ///
+    /// // … some code to initialize those planes.
+    /// # let mut buffer = buffer;
+    /// # buffer.as_mut().into_planes([1]).unwrap()[0]
+    /// #     .as_capacity_buf_mut()[..8].copy_from_slice(b"not zero");
+    /// # let buffer = buffer;
+    ///
+    /// let [p1] = buffer.as_ref().into_planes([1]).unwrap();
+    /// let clone_of: Image<_> = p1.into_owned();
+    ///
+    /// let [p1] = buffer.as_ref().into_planes([1]).unwrap();
+    /// assert_eq!(clone_of.as_bytes(), p1.as_bytes());
+    /// ```
+    pub fn into_owned(self) -> Image<L> {
+        self.inner.into_owned().into()
     }
 
     /// Get a slice of the individual samples in the layout.
@@ -661,6 +687,18 @@ impl<'data, L> ImageRef<'data, L> {
         *buffer = initial;
 
         RawImage::from_buffer(Bytes(next.len()), next).into()
+    }
+
+    /// Remove all past-the-layout bytes.
+    ///
+    /// This is a utility to combine with pipelining. It is equivalent to calling
+    /// [`Self::split_layout`] and discarding that result.
+    pub fn truncate_layout(mut self) -> Self
+    where
+        L: Layout,
+    {
+        let _ = self.split_layout();
+        self
     }
 
     /// Split this reference into independent planes.
@@ -885,14 +923,6 @@ impl<'data, L> ImageMut<'data, L> {
         Some(self.inner.checked_decay()?.into())
     }
 
-    /// Copy the bytes and layout to an owned container.
-    pub fn to_owned(&self) -> Image<L>
-    where
-        L: Layout + Clone,
-    {
-        Image::with_bytes(self.inner.layout().clone(), self.inner.as_bytes())
-    }
-
     /// Get a slice of the individual samples in the layout.
     pub fn as_slice(&self) -> &[L::Sample]
     where
@@ -935,6 +965,38 @@ impl<'data, L> ImageMut<'data, L> {
         L: Layout,
     {
         pixel.cast_mut_buf(self.inner.as_mut_buf())
+    }
+
+    /// Copy all bytes to a newly allocated image.
+    ///
+    /// Note this will allocate a buffer according to the capacity length of this reference, not
+    /// merely the layout. When this is not the intention, consider calling [`Self::split_layout`]
+    /// or [`Self::truncate_layout`] respectively.
+    ///
+    /// # Examples
+    ///
+    /// Here we make an independent copy of the second plane of a composite image.
+    ///
+    /// ```
+    /// use image_texel::image::{Image, ImageRef};
+    /// use image_texel::layout::{PlaneMatrices, Matrix};
+    /// use image_texel::texels::U8;
+    ///
+    /// let mat = Matrix::from_width_height(U8, 8, 8).unwrap();
+    /// let mut buffer = Image::new(PlaneMatrices::<_, 2>::from_repeated(mat));
+    ///
+    /// // … some code to initialize those planes.
+    /// # buffer.as_mut().into_planes([1]).unwrap()[0]
+    /// #     .as_capacity_buf_mut()[..8].copy_from_slice(b"not zero");
+    ///
+    /// let [p1] = buffer.as_mut().into_planes([1]).unwrap();
+    /// let clone_of: Image<_> = p1.into_owned();
+    ///
+    /// let [p1] = buffer.as_ref().into_planes([1]).unwrap();
+    /// assert_eq!(clone_of.as_bytes(), p1.as_bytes());
+    /// ```
+    pub fn into_owned(self) -> Image<L> {
+        self.inner.into_owned().into()
     }
 
     /// Turn into a slice of the individual samples in the layout.
@@ -1010,6 +1072,18 @@ impl<'data, L> ImageMut<'data, L> {
         *buffer = initial;
 
         RawImage::from_buffer(Bytes(next.len()), next).into()
+    }
+
+    /// Remove all past-the-layout bytes.
+    ///
+    /// This is a utility to combine with pipelining. It is equivalent to calling
+    /// [`Self::split_layout`] and discarding that result.
+    pub fn truncate_layout(mut self) -> Self
+    where
+        L: Layout,
+    {
+        let _ = self.split_layout();
+        self
     }
 
     /// Split this mutable reference into independent planes.

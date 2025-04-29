@@ -8,6 +8,7 @@ use alloc::rc::Rc;
 use alloc::sync::Arc;
 use alloc::vec::Vec;
 
+use crate::rec::TexelBuffer;
 use crate::texel::{constants::MAX, AtomicPart, MaxAligned, MaxAtomic, MaxCell, Texel, MAX_ALIGN};
 
 /// Allocates and manages raw bytes.
@@ -1017,6 +1018,12 @@ impl cmp::PartialEq<[u8]> for cell_buf {
     }
 }
 
+impl cmp::PartialEq<cell_buf> for [u8] {
+    fn eq(&self, other: &cell_buf) -> bool {
+        crate::texels::U8.cell_bytes_eq(other.0.as_slice_of_cells(), self)
+    }
+}
+
 impl cmp::Eq for cell_buf {}
 
 impl cmp::PartialEq for CellBuffer {
@@ -1370,6 +1377,24 @@ impl<'lt, P> AtomicSliceRef<'lt, P> {
         self.texel.load_atomic_slice(*self, data);
     }
 
+    /// Read all values into a newly allocated vector.
+    pub fn to_vec(&self) -> Vec<P> {
+        // FIXME: avoid zero-initializing. Might need a bit more unsafe code that extends a vector
+        // of Texel<P> from that atomic.
+        let mut fresh: Vec<P> = (0..self.len()).map(|_| self.texel.zeroed()).collect();
+        self.write_to_slice(&mut fresh);
+        fresh
+    }
+
+    /// Read all values into a newly allocated texel buffer.
+    pub fn to_texel_buffer(&self) -> TexelBuffer<P> {
+        // FIXME: avoid zero-initializing. Might need a bit more unsafe code that extends a vector
+        // of Texel<P> from that atomic.
+        let mut fresh = TexelBuffer::new_for_texel(self.texel, self.len());
+        self.write_to_slice(&mut fresh);
+        fresh
+    }
+
     #[track_caller]
     pub fn split_at(self, at: usize) -> (Self, Self) {
         let left = self.index(..at);
@@ -1430,12 +1455,20 @@ impl<P> Copy for AtomicRef<'_, P> {}
 ///
 /// Note this type also has the invariant that the identified range fits into memory for the given
 /// texel type.
-#[derive(Clone, Copy, Debug)]
+#[derive(Debug)]
 pub struct TexelRange<T> {
     texel: Texel<T>,
     start_per_align: usize,
     end_per_align: usize,
 }
+
+impl<T> Clone for TexelRange<T> {
+    fn clone(&self) -> Self {
+        *self
+    }
+}
+
+impl<T> Copy for TexelRange<T> {}
 
 impl<T> TexelRange<T> {
     /// Create a new range from a texel type and a range (in units of `T`).
@@ -1504,14 +1537,19 @@ impl<T> TexelRange<T> {
             end_per_align: end_byte / texel.align(),
         })
     }
+
+    /// Intrinsically, all ranges represent an aligned range of bytes.
+    fn aligned_byte_range(self) -> ops::Range<usize> {
+        let scale = self.texel.align();
+        scale * self.start_per_align..scale * self.end_per_align
+    }
 }
 
 impl<T> core::ops::Index<TexelRange<T>> for buf {
     type Output = [T];
 
     fn index(&self, index: TexelRange<T>) -> &Self::Output {
-        let scale = index.texel.align();
-        let bytes = &self.0[scale * index.start_per_align..scale * index.end_per_align];
+        let bytes = &self.0[index.aligned_byte_range()];
         let slice = index.texel.try_to_slice(bytes);
         // We just multiplied the indices by the alignment..
         slice.expect("byte indices validly aligned")
@@ -1520,11 +1558,23 @@ impl<T> core::ops::Index<TexelRange<T>> for buf {
 
 impl<T> core::ops::IndexMut<TexelRange<T>> for buf {
     fn index_mut(&mut self, index: TexelRange<T>) -> &mut Self::Output {
-        let scale = index.texel.align();
-        let bytes = &mut self.0[scale * index.start_per_align..scale * index.end_per_align];
+        let bytes = &mut self.0[index.aligned_byte_range()];
         let slice = index.texel.try_to_slice_mut(bytes);
         // We just multiplied the indices by the alignment..
         slice.expect("byte indices validly aligned")
+    }
+}
+
+impl<T> core::ops::Index<TexelRange<T>> for cell_buf {
+    type Output = [cell::Cell<T>];
+
+    fn index(&self, index: TexelRange<T>) -> &Self::Output {
+        let bytes = &self.0.as_slice_of_cells()[index.aligned_byte_range()];
+        let slice = index.texel.try_to_cell(bytes);
+        // We just multiplied the indices by the alignment..
+        slice
+            .expect("byte indices validly aligned")
+            .as_slice_of_cells()
     }
 }
 
