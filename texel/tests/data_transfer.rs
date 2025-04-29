@@ -11,7 +11,7 @@ fn same_layout_io() {
     let mut target = Image::new(initially_empty);
 
     let data = DataRef::with_layout_at(input.data, input.layout, 0).unwrap();
-    data.as_source().write_to(&mut target);
+    target.assign(data.as_source());
 
     // Layout must match, as must the bytes within the layout.
     assert_eq!(*target.layout(), input.layout);

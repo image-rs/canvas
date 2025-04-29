@@ -10,8 +10,8 @@
 //! advised, probably very common, and the only 'supported' use-case).
 mod atomic;
 mod cell;
+mod data;
 mod raw;
-mod unaligned;
 
 use core::{fmt, ops};
 
@@ -21,12 +21,12 @@ use crate::layout::{
     Bytes, Decay, Layout, Mend, PlaneOf, Raster, RasterMut, Relocate, SliceLayout, Take, TryMend,
 };
 use crate::texel::MAX_ALIGN;
-use crate::{Texel, TexelBuffer};
+use crate::{BufferReuseError, Texel, TexelBuffer};
 
 pub use crate::stride::{StridedBufferMut, StridedBufferRef};
 pub use atomic::{AtomicImage, AtomicImageRef};
 pub use cell::{CellImage, CellImageRef};
-pub use unaligned::{DataCells, DataMut, DataRef};
+pub use data::{DataCells, DataMut, DataRef};
 
 /// A container of allocated bytes, parameterized over the layout.
 ///
@@ -846,6 +846,19 @@ impl<'data, L> ImageMut<'data, L> {
     {
         let image = self.inner.try_reinterpret(layout).ok()?;
         Some(image.into())
+    }
+
+    /// Attempt to modify the layout to a new value, without modifying its type.
+    ///
+    /// Returns an `Err` if the layout does not fit the underlying buffer. Otherwise returns `Ok`
+    /// and overwrites the layout accordingly.
+    ///
+    /// TODO: public name and provide a `set_capacity` for `L = Bytes`?
+    pub(crate) fn try_set_layout(&mut self, layout: L) -> Result<(), BufferReuseError>
+    where
+        L: Layout,
+    {
+        self.inner.try_reuse(layout)
     }
 
     /// Decay into a image with less specific layout.

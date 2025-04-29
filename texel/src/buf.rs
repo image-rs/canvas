@@ -1996,7 +1996,10 @@ mod tests {
                 n
             });
 
-            let target = atomic.as_texels(U16).index(offset..).index(..3 * MAX_ALIGN / 2);
+            let target = atomic
+                .as_texels(U16)
+                .index(offset..)
+                .index(..3 * MAX_ALIGN / 2);
             U16.store_atomic_slice(target, &data[..]);
 
             let mut check = [0; 3 * MAX_ALIGN / 2];

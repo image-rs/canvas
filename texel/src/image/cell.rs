@@ -5,7 +5,7 @@ use crate::buf::{cell_buf, CellBuffer};
 use crate::image::{raw::RawImage, IntoPlanesError};
 use crate::layout::{Bytes, Decay, Layout, Mend, PlaneOf, Relocate, SliceLayout, Take, TryMend};
 use crate::texel::{constants::U8, MAX_ALIGN};
-use crate::{Texel, TexelBuffer};
+use crate::{BufferReuseError, Texel, TexelBuffer};
 use core::cell::Cell;
 
 /// A container of allocated bytes, parameterized over the layout.
@@ -65,6 +65,19 @@ impl<L: Layout> CellImage<L> {
             .try_reinterpret(layout)
             .map(Into::into)
             .map_err(Into::into)
+    }
+
+    /// Attempt to modify the layout to a new value, without modifying its type.
+    ///
+    /// Returns an `Err` if the layout does not fit the underlying buffer. Otherwise returns `Ok`
+    /// and overwrites the layout accordingly.
+    ///
+    /// TODO: public name and provide a `set_capacity` for `L = Bytes`?
+    pub(crate) fn try_set_layout(&mut self, layout: L) -> Result<(), BufferReuseError>
+    where
+        L: Layout,
+    {
+        self.inner.try_reuse(layout)
     }
 
     /// Decay into a image with less specific layout.
@@ -368,6 +381,19 @@ impl<'data, L> CellImageRef<'data, L> {
         M: Layout,
     {
         Some(self.inner.try_reinterpret(layout).ok()?.into())
+    }
+
+    /// Attempt to modify the layout to a new value, without modifying its type.
+    ///
+    /// Returns an `Err` if the layout does not fit the underlying buffer. Otherwise returns `Ok`
+    /// and overwrites the layout accordingly.
+    ///
+    /// TODO: public name and provide a `set_capacity` for `L = Bytes`?
+    pub(crate) fn try_set_layout(&mut self, layout: L) -> Result<(), BufferReuseError>
+    where
+        L: Layout,
+    {
+        self.inner.try_reuse(layout)
     }
 
     /// Decay into a image with less specific layout.
