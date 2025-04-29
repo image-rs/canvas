@@ -272,7 +272,7 @@ impl Canvas {
 
         let mut offset = 0;
         // This frame's layout takes 0 bytes, so we can take all contents with split_layout
-        let frame: ImageMut<'_, Bytes> = self.as_mut().decay().expect("decay to bytes valid");
+        let frame: ImageMut<'_, Bytes> = self.as_mut().decay();
 
         let &Bytes(total_len) = frame.layout();
         let mut frame = frame.with_layout(Bytes(0)).expect("zero-byte layout valid");
@@ -444,7 +444,7 @@ impl<'data, C> ChannelsMut<'data, C> {
 impl<'data, T> From<PlaneRef<'data, T>> for BytePlaneRef<'data> {
     fn from(plane: PlaneRef<'data, T>) -> Self {
         BytePlaneRef {
-            inner: plane.inner.decay().unwrap(),
+            inner: plane.inner.decay(),
         }
     }
 }
@@ -452,7 +452,7 @@ impl<'data, T> From<PlaneRef<'data, T>> for BytePlaneRef<'data> {
 impl<'data, T> From<PlaneMut<'data, T>> for BytePlaneMut<'data> {
     fn from(plane: PlaneMut<'data, T>) -> Self {
         BytePlaneMut {
-            inner: plane.inner.decay().unwrap(),
+            inner: plane.inner.decay(),
         }
     }
 }
