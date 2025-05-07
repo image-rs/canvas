@@ -139,8 +139,8 @@ impl<L: Layout> CellImage<L> {
     /// Copy all bytes to a newly allocated image.
     ///
     /// Note this will allocate a buffer according to the capacity length of this reference, not
-    /// merely the layout. When this is not the intention, consider calling [`Self::split_layout`]
-    /// or [`Self::truncate_layout`] respectively.
+    /// merely the layout. When this is not the intention, consider first adjusting the buffer by
+    /// reference with [`Self::as_ref`].
     ///
     /// # Examples
     ///

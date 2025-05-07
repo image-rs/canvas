@@ -10,8 +10,9 @@
 //! advised, probably very common, and the only 'supported' use-case).
 mod atomic;
 mod cell;
-mod data;
 mod raw;
+
+pub mod data;
 
 use core::{fmt, ops};
 
@@ -26,7 +27,7 @@ use crate::{BufferReuseError, Texel, TexelBuffer};
 pub use crate::stride::{StridedBufferMut, StridedBufferRef};
 pub use atomic::{AtomicImage, AtomicImageRef};
 pub use cell::{CellImage, CellImageRef};
-pub use data::{DataCells, DataMut, DataRef};
+pub use data::{AsCopySource, AsCopyTarget, DataCells, DataMut, DataRef};
 
 /// A container of allocated bytes, parameterized over the layout.
 ///
