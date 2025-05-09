@@ -1,11 +1,11 @@
 [package]
 name = "image-texel"
-version = "0.4.0"
+version = "0.5.0"
 edition = "2021"
 rust-version = "1.77"
 
 description = "A texel type and allocated buffers suitable for image data."
-authors = ["Aurelia Molzer <andreas.molzer@gmx.de>"]
+authors = ["Aurelia Molzer <5550310+HeroicKatora@users.noreply.github.com>"]
 license = "MIT"
 readme = "Readme.md"
 documentation = "https://docs.rs/image-texel"
