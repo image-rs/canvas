@@ -1,7 +1,8 @@
 use std::sync::OnceLock;
 
-use image_texel::image::{DataRef, Image};
+use image_texel::image::{AtomicImage, CellImage, DataRef, Image};
 use image_texel::layout::{MatrixBytes, PlaneBytes};
+use image_texel::texels::U8;
 
 #[test]
 fn same_layout_io() {
@@ -16,6 +17,140 @@ fn same_layout_io() {
     // Layout must match, as must the bytes within the layout.
     assert_eq!(*target.layout(), input.layout);
     assert_eq!(target.as_buf().as_bytes(), input.data);
+}
+
+#[test]
+fn layout_copy() {
+    let input = TestData::hello_img();
+
+    let source = Image::with_bytes(input.layout, input.data);
+
+    let initially_empty = MatrixBytes::empty(input.layout.element());
+    let mut target = Image::new(initially_empty);
+
+    target.assign(source.as_source());
+
+    // Layout must match, as must the bytes within the layout.
+    assert_eq!(*target.layout(), input.layout);
+    assert_eq!(target.as_buf().as_bytes(), input.data);
+}
+
+#[test]
+fn layout_plane_copy() {
+    let input = TestData::hello_img();
+
+    let mut subplanes = {
+        let layout = PlaneBytes::new([input.layout, input.layout]);
+        let offset = layout.plane_ref(1).unwrap().offset.get();
+
+        let mut data = vec![0u8; offset];
+        data.extend_from_slice(input.data);
+
+        Image::with_bytes(layout, &data)
+    };
+
+    let (source, buffer) = {
+        let [buffer, plane] = subplanes.as_mut().into_planes([0, 1]).unwrap();
+        let inner = plane.layout().inner;
+        (plane.with_layout(inner).unwrap(), buffer)
+    };
+
+    let initially_empty = MatrixBytes::empty(input.layout.element());
+    let mut target = Image::new(initially_empty);
+
+    target.assign(source.as_source());
+
+    // Layout must match, as must the bytes within the layout.
+    assert_eq!(*target.layout(), input.layout);
+    assert_eq!(target.as_buf().as_bytes(), input.data);
+
+    {
+        let inner = buffer.layout().inner;
+        let mut target = buffer.with_layout(inner).unwrap();
+        target.assign(source.as_source()).expect("Enough space");
+
+        // Layout must match, as must the bytes within the layout.
+        assert_eq!(*target.layout(), input.layout);
+        assert_eq!(target.as_buf().as_bytes(), input.data);
+    }
+}
+
+#[test]
+fn layout_copy_cell() {
+    let input = TestData::hello_img();
+
+    let mut subplanes = {
+        let layout = PlaneBytes::new([input.layout, input.layout]);
+        let offset = layout.plane_ref(1).unwrap().offset.get();
+
+        let mut data = vec![0u8; offset];
+        data.extend_from_slice(input.data);
+
+        Image::with_bytes(layout, &data)
+    };
+
+    let (source, buffer) = {
+        let [buffer, plane] = subplanes.as_mut().into_planes([0, 1]).unwrap();
+        let inner = plane.layout().inner;
+        (plane.with_layout(inner).unwrap(), buffer)
+    };
+
+    // Different to the owned case, we must reserve enough buffer.
+    let mut cells = CellImage::new(input.layout);
+    cells.assign(source.as_source()).expect("Enough space");
+
+    // Layout must match, as must the bytes within the layout.
+    assert_eq!(*cells.layout(), input.layout);
+    assert!(cells.as_cell_buf() == input.data);
+
+    {
+        let inner = buffer.layout().inner;
+        let mut target = buffer.with_layout(inner).unwrap();
+        target.assign(cells.as_source()).expect("Enough space");
+
+        // Layout must match, as must the bytes within the layout.
+        assert_eq!(*target.layout(), input.layout);
+        assert_eq!(target.as_buf().as_bytes(), input.data);
+    }
+}
+
+#[test]
+fn layout_copy_atomic() {
+    let input = TestData::hello_img();
+
+    let mut subplanes = {
+        let layout = PlaneBytes::new([input.layout, input.layout]);
+        let offset = layout.plane_ref(1).unwrap().offset.get();
+
+        let mut data = vec![0u8; offset];
+        data.extend_from_slice(input.data);
+
+        Image::with_bytes(layout, &data)
+    };
+
+    let (source, buffer) = {
+        let [buffer, plane] = subplanes.as_mut().into_planes([0, 1]).unwrap();
+        let inner = plane.layout().inner;
+        (plane.with_layout(inner).unwrap(), buffer)
+    };
+
+    // Different to the owned case, we must reserve enough buffer.
+    let mut atomics = AtomicImage::new(input.layout);
+    atomics.assign(source.as_source()).expect("Enough space");
+
+    // Layout must match, as must the bytes within the layout.
+    assert_eq!(*atomics.layout(), input.layout);
+    assert!(atomics.as_texels(U8).to_vec() == input.data);
+
+    {
+        let inner = buffer.layout().inner;
+        let mut target = buffer.with_layout(inner).unwrap();
+        target.assign(atomics.as_source()).expect("Enough space");
+
+        // Layout must match, as must the bytes within the layout.
+        assert_eq!(*target.layout(), input.layout);
+        assert_eq!(target.as_buf().as_bytes(), input.data);
+    }
 }
 
 #[test]
