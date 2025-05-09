@@ -25,7 +25,7 @@ use crate::{BufferReuseError, Texel, TexelBuffer};
 /// manner.
 #[derive(Clone)]
 pub struct AtomicImage<Layout = Bytes> {
-    inner: RawImage<AtomicBuffer, Layout>,
+    pub(super) inner: RawImage<AtomicBuffer, Layout>,
 }
 
 /// A partial view of an atomic image.
@@ -35,7 +35,7 @@ pub struct AtomicImage<Layout = Bytes> {
 /// by calling [`AtomicImage::as_ref`] or [`AtomicImage::checked_to_ref`].
 #[derive(Clone, PartialEq, Eq)]
 pub struct AtomicImageRef<'buf, Layout = &'buf Bytes> {
-    inner: RawImage<&'buf atomic_buf, Layout>,
+    pub(super) inner: RawImage<&'buf atomic_buf, Layout>,
 }
 
 /// Image methods for all layouts.

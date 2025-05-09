@@ -1352,6 +1352,65 @@ impl<P> Texel<P> {
         lhs == rhs
     }
 
+    #[track_caller]
+    pub(crate) fn atomic_memory_move(self, a: AtomicSliceRef<'_, P>, b: AtomicSliceRef<'_, P>) {
+        struct SliceSource<'lt> {
+            skip: usize,
+            head: AtomicSliceRef<'lt, u8>,
+            // FIXME: the loads are straddling boundaries. Each side may be copied twice in the
+            // effort of loading. Also iterating like this incurs some bounds checks. It's very
+            // suboptimal. But the soundness of this whole thing scares me so let's not over
+            // optimize before we know atomic-to-atomic copy is actually needed to be very fast.
+            chunks: AtomicSliceRef<'lt, u8>,
+            tail: AtomicSliceRef<'lt, u8>,
+        }
+
+        impl DataSource for SliceSource<'_> {
+            fn init(&mut self, init: usize) {
+                let len = self.head.len().min(init);
+                let (head, body) = self.head.split_at(len);
+                self.head = head;
+                self.skip = MaxAtomic::PART_SIZE - init;
+
+                let chunks_len = body.len() & !(MaxAtomic::PART_SIZE - 1);
+                let (chunks, tail) = body.split_at(chunks_len);
+
+                self.chunks = chunks;
+                self.tail = tail;
+            }
+
+            fn load_head(&mut self, val: &mut [u8; MaxAtomic::PART_SIZE]) {
+                let target = &mut val[self.skip..][..self.head.len()];
+                constants::U8.load_atomic_slice(self.head, target);
+            }
+
+            fn load(&mut self, val: &mut [u8; MaxAtomic::PART_SIZE]) {
+                if let Some(next) = self.chunks.get(..MaxAtomic::PART_SIZE) {
+                    self.chunks = self.chunks.get(MaxAtomic::PART_SIZE..).unwrap();
+                    constants::U8.load_atomic_slice(next, val);
+                } else {
+                    debug_assert!(false);
+                }
+            }
+
+            fn load_tail(&mut self, val: &mut [u8; MaxAtomic::PART_SIZE]) {
+                let target = &mut val[..self.tail.len()];
+                constants::U8.load_atomic_slice(self.tail, target);
+            }
+        }
+
+        assert_eq!(a.len(), b.len());
+
+        let source = SliceSource {
+            head: self.atomic_bytes(a),
+            skip: 0,
+            chunks: atomic_buf::new(&[]).as_texels(constants::U8),
+            tail: atomic_buf::new(&[]).as_texels(constants::U8),
+        };
+
+        self.store_atomic_slice_unchecked(b, source);
+    }
+
     pub(crate) fn cast_buf<'buf>(self, buffer: &'buf buf) -> &'buf [P] {
         debug_assert_eq!(buffer.as_ptr() as usize % mem::align_of::<MaxAligned>(), 0);
         debug_assert_eq!(buffer.as_ptr() as usize % mem::align_of::<P>(), 0);

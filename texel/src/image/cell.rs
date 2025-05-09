@@ -15,7 +15,7 @@ use core::cell::Cell;
 /// between threads. In particular the same buffer may be owned and viewed with different layouts.
 #[derive(Clone, PartialEq, Eq)]
 pub struct CellImage<Layout = Bytes> {
-    inner: RawImage<CellBuffer, Layout>,
+    pub(super) inner: RawImage<CellBuffer, Layout>,
 }
 
 /// A partial view of an atomic image.
@@ -25,7 +25,7 @@ pub struct CellImage<Layout = Bytes> {
 /// by calling [`CellImage::as_ref`] or [`CellImage::checked_to_ref`].
 #[derive(Clone, PartialEq, Eq)]
 pub struct CellImageRef<'buf, Layout = &'buf Bytes> {
-    inner: RawImage<&'buf cell_buf, Layout>,
+    pub(super) inner: RawImage<&'buf cell_buf, Layout>,
 }
 
 /// Image methods for all layouts.

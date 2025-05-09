@@ -2134,4 +2134,30 @@ mod tests {
             );
         }
     }
+
+    #[test]
+    fn atomic_memory_move() {
+        const COPY_LEN: usize = 3 * core::mem::size_of::<MaxAtomic>();
+        const TOTAL_LEN: usize = 4 * core::mem::size_of::<MaxAtomic>();
+
+        for offset in 0..4 {
+            let data = [const { MaxAtomic::zero() }; 4];
+            let lhs = atomic_buf::new(&data[..]);
+
+            let data = [const { MaxAtomic::zero() }; 4];
+            let rhs = atomic_buf::new(&data[..]);
+
+            U8.store_atomic_slice(lhs.as_texels(U8).index(0..4), b"helo");
+
+            U8.atomic_memory_move(
+                lhs.as_texels(U8).index(offset..offset + COPY_LEN),
+                rhs.as_texels(U8).index(0..COPY_LEN),
+            );
+
+            let mut buffer = [0x42; TOTAL_LEN];
+            U8.load_atomic_slice(rhs.as_texels(U8), &mut buffer);
+
+            assert_eq!(buffer[..4], b"helo\0\0\0\0"[offset..][..4]);
+        }
+    }
 }
