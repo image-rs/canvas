@@ -4,7 +4,7 @@
 //! fragment unit, and pipeline multiple texels in parallel.
 use alloc::vec::Vec;
 use core::ops::Range;
-use image_texel::image::{ImageMut, ImageRef};
+use image_texel::image::{AtomicImageRef, CellImageRef, ImageMut, ImageRef};
 use image_texel::{AsTexel, Texel, TexelBuffer};
 
 use crate::arch::ShuffleOps;
@@ -63,7 +63,7 @@ pub struct Converter {
     pixel_out_buffer: TexelBuffer,
 }
 
-struct Info {
+struct ConvertInfo {
     /// Layout of the input frame.
     in_layout: CanvasLayout,
     /// Layout of the output frame.
@@ -145,8 +145,30 @@ enum CommonPixelOrder {
     PixelsInRowOrder,
 }
 
-type PlaneSource<'data, 'layout> = ImageRef<'data, &'layout CanvasLayout>;
-type PlaneTarget<'data, 'layout> = ImageMut<'data, &'layout mut CanvasLayout>;
+type PlaneSource<'data> = ImageRef<'data, &'data CanvasLayout>;
+type CellSource<'data> = CellImageRef<'data, &'data CanvasLayout>;
+type AtomicSource<'data> = AtomicImageRef<'data, &'data CanvasLayout>;
+
+type PlaneTarget<'data> = ImageMut<'data, &'data mut CanvasLayout>;
+type CellTarget<'data> = CellImageRef<'data, &'data CanvasLayout>;
+type AtomicTarget<'data> = AtomicImageRef<'data, &'data CanvasLayout>;
+
+struct Sources<'re, 'data> {
+    sync: &'re [PlaneSource<'data>],
+    cell: &'re [CellSource<'data>],
+    atomic: &'re [AtomicSource<'data>],
+}
+
+struct Targets<'re, 'data> {
+    sync: &'re mut [PlaneTarget<'data>],
+    cell: &'re [CellTarget<'data>],
+    atomic: &'re [AtomicTarget<'data>],
+}
+
+struct PlaneIo<'re, 'data> {
+    sources: Sources<'re, 'data>,
+    targets: Targets<'re, 'data>,
+}
 
 /// The function pointers doing the conversion.
 ///
@@ -155,16 +177,16 @@ type PlaneTarget<'data, 'layout> = ImageMut<'data, &'layout mut CanvasLayout>;
 /// matching types are being used.
 struct ConvertOps {
     /// Convert in texel coordinates to an index in the color plane.
-    fill_in_index: fn(&Info, &[[u32; 2]], &mut [usize], ChunkSpec),
+    fill_in_index: fn(&ConvertInfo, &[[u32; 2]], &mut [usize], ChunkSpec),
     /// Convert out texel coordinates to an index in the color plane.
-    fill_out_index: fn(&Info, &[[u32; 2]], &mut [usize], ChunkSpec),
+    fill_out_index: fn(&ConvertInfo, &[[u32; 2]], &mut [usize], ChunkSpec),
 
     /// Expand all texels into pixels in normalized channel order.
-    expand: fn(&Info, &ConvertOps, &TexelBuffer, &mut TexelBuffer, &mut [PlaneSource]),
+    expand: fn(&ConvertInfo, &ConvertOps, &TexelBuffer, &mut TexelBuffer, PlaneIo),
     /// Take pixels in normalized channel order and apply color conversion.
     recolor: Option<RecolorOps>,
     /// Join all pixels from normalized channel order to texels, clamping.
-    join: fn(&Info, &ConvertOps, &TexelBuffer, &mut TexelBuffer, &mut [PlaneTarget]),
+    join: fn(&ConvertInfo, &ConvertOps, &TexelBuffer, &mut TexelBuffer, PlaneIo),
 
     /// Well-define bit/byte/channel shuffle operations on common texel combinations.
     shuffle: ShuffleOps,
@@ -175,18 +197,18 @@ struct ConvertOps {
 }
 
 struct TexelConvertWith<'lt> {
-    ops: &'lt mut dyn FnMut(&mut Converter, &mut [PlaneSource], &mut [PlaneTarget]),
+    ops: &'lt mut dyn FnMut(&mut Converter, PlaneIo),
     should_defer_texel_read: bool,
     should_defer_texel_write: bool,
 }
 
 struct RecolorOps {
-    from: fn(&Info, &TexelBuffer, &mut TexelBuffer),
-    into: fn(&Info, &TexelBuffer, &mut TexelBuffer),
+    from: fn(&ConvertInfo, &TexelBuffer, &mut TexelBuffer),
+    into: fn(&ConvertInfo, &TexelBuffer, &mut TexelBuffer),
 }
 
 struct IntShuffleOps {
-    call: fn(&mut Converter, &ConvertOps, [u8; 4], &[PlaneSource], &mut [PlaneTarget]),
+    call: fn(&mut Converter, &ConvertOps, [u8; 4], PlaneIo),
     shuffle: [u8; 4],
     should_defer_texel_read: bool,
     should_defer_texel_write: bool,
@@ -241,7 +263,7 @@ impl Converter {
     }
 
     pub fn run_on(&mut self, frame_in: &Canvas, frame_out: &mut Canvas) {
-        let info = Info {
+        let info = ConvertInfo {
             in_layout: frame_in.layout().clone(),
             out_layout: frame_out.layout().clone(),
             // FIXME(perf): not optimal in all cases, but necessary for accurate conversion.
@@ -278,9 +300,7 @@ impl Converter {
         let convert_with: TexelConvertWith = {
             if let Some(int_ops) = &ops.int_shuffle {
                 convert_with_intshuffle =
-                    |that: &mut Self, fi: &mut [PlaneSource], fo: &mut [PlaneTarget]| {
-                        (int_ops.call)(that, &ops, int_ops.shuffle, fi, fo)
-                    };
+                    |that: &mut Self, io: PlaneIo| (int_ops.call)(that, &ops, int_ops.shuffle, io);
                 TexelConvertWith {
                     ops: &mut convert_with_intshuffle,
                     should_defer_texel_read: int_ops.should_defer_texel_read,
@@ -288,9 +308,7 @@ impl Converter {
                 }
             } else {
                 convert_texelbuf_with_ops =
-                    |that: &mut Self, fi: &mut [PlaneSource], fo: &mut [PlaneTarget]| {
-                        that.convert_texelbuf_with_ops(&info, &ops, fi, fo)
-                    };
+                    |that: &mut Self, io: PlaneIo| that.convert_texelbuf_with_ops(&info, &ops, io);
 
                 TexelConvertWith {
                     ops: &mut convert_texelbuf_with_ops,
@@ -300,7 +318,24 @@ impl Converter {
             }
         };
 
-        self.with_filled_texels(convert_with, &info, &ops, frame_in, frame_out)
+        use core::slice::{from_mut, from_ref};
+        let frame_in = frame_in.as_ref();
+        let mut frame_out = frame_out.as_mut();
+
+        let plane_io = PlaneIo {
+            sources: Sources {
+                sync: from_ref(&frame_in),
+                cell: &[],
+                atomic: &[],
+            },
+            targets: Targets {
+                sync: from_mut(&mut frame_out),
+                cell: &[],
+                atomic: &[],
+            },
+        };
+
+        self.with_filled_texels(convert_with, &info, &ops, plane_io)
     }
 
     /// Convert all loaded texels, using the provided `ConvertOps` as dynamic function selection.
@@ -310,17 +345,16 @@ impl Converter {
     /// because it depends on the chosen ops).
     fn convert_texelbuf_with_ops(
         &mut self,
-        info: &Info,
+        info: &ConvertInfo,
         ops: &ConvertOps,
-        frame_in: &mut [PlaneSource],
-        frame_out: &mut [PlaneTarget],
+        mut plane_io: PlaneIo,
     ) {
         (ops.expand)(
             &info,
             ops,
             &self.in_texels,
             &mut self.pixel_in_buffer,
-            frame_in,
+            plane_io.borrow(),
         );
 
         let pixel_out = if let Some(ref recolor) = ops.recolor {
@@ -336,7 +370,13 @@ impl Converter {
         };
 
         // FIXME: necessary to do a reorder of pixels here? Or let join do this?
-        (ops.join)(&info, ops, pixel_out, &mut self.out_texels, frame_out);
+        (ops.join)(
+            &info,
+            ops,
+            pixel_out,
+            &mut self.out_texels,
+            plane_io.borrow(),
+        );
     }
 
     /// Special case on `convert_texelbuf_with_ops`, when both buffers:
@@ -348,7 +388,7 @@ impl Converter {
     ///
     /// This avoids expanding them into `pixel_in_buffer` where they'd be represented as `f32x4`
     /// and thus undergo an expensive `u8->f32->u8` cast chain.
-    fn convert_intbuf_with_nocolor_ops(&mut self, info: &Info) -> Option<IntShuffleOps> {
+    fn convert_intbuf_with_nocolor_ops(&mut self, info: &ConvertInfo) -> Option<IntShuffleOps> {
         // Not yet handled, we need independent channels and the same amount.
         // FIXME(perf): we could use very similar code to expand pixels from blocks but that
         // requires specialized shuffle methods.
@@ -400,8 +440,7 @@ impl Converter {
             that: &mut Converter,
             ops: &ConvertOps,
             shuffle: [u8; 4],
-            source: &[PlaneSource],
-            target: &mut [PlaneTarget],
+            io: PlaneIo,
         ) where
             T: AsTexel,
         {
@@ -418,8 +457,8 @@ impl Converter {
             let in_texel = T::texel().array::<N>();
             let out_texel = T::texel().array::<M>();
 
-            let source_texels = source[0].as_texels(in_texel);
-            let target_texels = target[0].as_mut_texels(out_texel);
+            let source_texels = io.sources.sync[0].as_texels(in_texel);
+            let target_texels = io.targets.sync[0].as_mut_texels(out_texel);
 
             let in_texels = that.in_texels.as_texels(in_texel);
             let out_texels = that.out_texels.as_mut_texels(out_texel);
@@ -547,16 +586,14 @@ impl Converter {
     fn with_filled_texels(
         &mut self,
         texel_conversion: TexelConvertWith,
-        info: &Info,
+        info: &ConvertInfo,
         ops: &ConvertOps,
-        frame_in: &Canvas,
-        frame_out: &mut Canvas,
+        mut frame_io: PlaneIo,
     ) {
         // We *must* make progress.
         assert!(self.chunk > 0);
         assert!(self.chunk_count > 0);
 
-        use core::slice::from_mut;
         // We use a notion of 'supertexels', the common multiple of input and output texel blocks.
         // That is, if the input is a 2-by-2 pixel block and the output is single pixels then we
         // have 4 times as many outputs as inputs, respectively coordinates.
@@ -589,18 +626,14 @@ impl Converter {
             self.generate_coords(info, ops, &texel_conversion, &sb_x, &sb_y);
             self.reserve_buffers(info, ops);
             // FIXME(planar): should be repeated for all planes?
-            self.read_texels(info, ops, &texel_conversion, frame_in.as_ref());
-
-            let mut frame_in = frame_in.as_ref();
-            let mut frame_out = frame_out.as_mut();
-            (texel_conversion.ops)(self, from_mut(&mut frame_in), from_mut(&mut frame_out));
-
+            self.read_texels(info, ops, &texel_conversion, frame_io.borrow());
+            (texel_conversion.ops)(self, frame_io.borrow());
             // FIXME(planar): should be repeated for all planes?
-            self.write_texels(info, ops, &texel_conversion, frame_out);
+            self.write_texels(info, ops, &texel_conversion, frame_io.borrow());
         }
     }
 
-    fn super_texel(&self, info: &Info) -> (SuperTexel, SuperTexel) {
+    fn super_texel(&self, info: &ConvertInfo) -> (SuperTexel, SuperTexel) {
         let b0 = info.in_layout.texel.block;
         let b1 = info.out_layout.texel.block;
 
@@ -634,7 +667,7 @@ impl Converter {
 
     fn generate_coords(
         &mut self,
-        info: &Info,
+        info: &ConvertInfo,
         ops: &ConvertOps,
         converter: &TexelConvertWith,
         sb_x: &SuperTexel,
@@ -732,7 +765,7 @@ impl Converter {
         );
     }
 
-    fn reserve_buffers(&mut self, info: &Info, ops: &ConvertOps) {
+    fn reserve_buffers(&mut self, info: &ConvertInfo, ops: &ConvertOps) {
         struct ResizeAction<'data>(&'data mut TexelBuffer, usize);
 
         impl GenericTexelAction for ResizeAction<'_> {
@@ -774,10 +807,10 @@ impl Converter {
 
     fn read_texels(
         &mut self,
-        info: &Info,
+        info: &ConvertInfo,
         _: &ConvertOps,
         converter: &TexelConvertWith,
-        from: PlaneSource,
+        from: PlaneIo,
     ) {
         fn fetch_from_texel_array<T>(
             from: &PlaneSource,
@@ -800,14 +833,14 @@ impl Converter {
             }
         }
 
-        struct ReadUnit<'plane, 'data, 'layout> {
-            from: &'plane PlaneSource<'data, 'layout>,
+        struct ReadUnit<'plane, 'data> {
+            from: &'plane PlaneSource<'data>,
             idx: &'plane [usize],
             into: &'plane mut TexelBuffer,
             range: Range<usize>,
         }
 
-        impl GenericTexelAction for ReadUnit<'_, '_, '_> {
+        impl GenericTexelAction for ReadUnit<'_, '_> {
             fn run<T>(self, texel: Texel<T>) {
                 fetch_from_texel_array(self.from, self.idx, self.into, self.range, texel)
             }
@@ -836,7 +869,7 @@ impl Converter {
                 // the indicate that no texels are available from the layout.
                 *available = 0;
                 info.in_kind.action(ReadUnit {
-                    from: &from,
+                    from: &from.sources.sync[0],
                     idx: &self.in_index_list,
                     into: &mut self.in_texels,
                     range: start..start + indexes.len(),
@@ -844,7 +877,7 @@ impl Converter {
             }
         } else {
             info.in_kind.action(ReadUnit {
-                from: &from,
+                from: &from.sources.sync[0],
                 idx: &self.in_index_list,
                 into: &mut self.in_texels,
                 range: 0..self.in_index_list.len(),
@@ -856,10 +889,10 @@ impl Converter {
     ///
     fn write_texels(
         &mut self,
-        info: &Info,
+        info: &ConvertInfo,
         _: &ConvertOps,
         converter: &TexelConvertWith,
-        mut into: PlaneTarget,
+        into: PlaneIo,
     ) {
         fn write_from_texel_array<T>(
             into: &mut PlaneTarget,
@@ -884,14 +917,14 @@ impl Converter {
             }
         }
 
-        struct WriteUnit<'plane, 'data, 'layout> {
-            into: &'plane mut PlaneTarget<'data, 'layout>,
+        struct WriteUnit<'plane, 'data> {
+            into: &'plane mut PlaneTarget<'data>,
             idx: &'plane [usize],
             from: &'plane TexelBuffer,
             range: Range<usize>,
         }
 
-        impl GenericTexelAction for WriteUnit<'_, '_, '_> {
+        impl GenericTexelAction for WriteUnit<'_, '_> {
             fn run<T>(self, texel: Texel<T>) {
                 write_from_texel_array(self.into, self.idx, self.from, self.range, texel)
             }
@@ -922,7 +955,7 @@ impl Converter {
 
                 let offset = indexes.len() - unwritten;
                 info.out_kind.action(WriteUnit {
-                    into: &mut into,
+                    into: &mut into.targets.sync[0],
                     idx: &self.out_index_list,
                     from: &self.out_texels,
                     range: start + offset..start + indexes.len(),
@@ -930,7 +963,7 @@ impl Converter {
             }
         } else {
             info.out_kind.action(WriteUnit {
-                into: &mut into,
+                into: &mut into.targets.sync[0],
                 idx: &self.out_index_list,
                 from: &self.out_texels,
                 range: 0..self.out_index_list.len(),
@@ -978,11 +1011,21 @@ impl Converter {
         }
     }
 
-    fn index_from_in_info(info: &Info, texel: &[[u32; 2]], idx: &mut [usize], chunks: ChunkSpec) {
+    fn index_from_in_info(
+        info: &ConvertInfo,
+        texel: &[[u32; 2]],
+        idx: &mut [usize],
+        chunks: ChunkSpec,
+    ) {
         Self::index_from_layer(&info.in_layout, texel, idx, chunks)
     }
 
-    fn index_from_out_info(info: &Info, texel: &[[u32; 2]], idx: &mut [usize], chunks: ChunkSpec) {
+    fn index_from_out_info(
+        info: &ConvertInfo,
+        texel: &[[u32; 2]],
+        idx: &mut [usize],
+        chunks: ChunkSpec,
+    ) {
         Self::index_from_layer(&info.out_layout, texel, idx, chunks)
     }
 
@@ -997,6 +1040,23 @@ impl Converter {
     }
 }
 
+impl<'re, 'data> PlaneIo<'re, 'data> {
+    pub fn borrow(&mut self) -> PlaneIo<'_, 'data> {
+        PlaneIo {
+            sources: Sources {
+                sync: self.sources.sync,
+                cell: self.sources.cell,
+                atomic: self.sources.atomic,
+            },
+            targets: Targets {
+                sync: &mut *self.targets.sync,
+                cell: self.targets.cell,
+                atomic: self.targets.atomic,
+            },
+        }
+    }
+}
+
 trait ExpandYuvLike<const IN: usize, const OUT: usize> {
     fn expand<T: Copy>(_: [T; IN], fill: T) -> [[T; 4]; OUT];
 }
@@ -1008,12 +1068,12 @@ impl CommonPixel {
     /// convert their bit representation to the `CommonPixel` representation, then put them into
     /// the expected channel give by the color channel's normal form.
     fn expand_from_info(
-        info: &Info,
+        info: &ConvertInfo,
         // FIXME(perf): similar to join_from_info we could use shuffle sometimes..
         _: &ConvertOps,
         in_texel: &TexelBuffer,
         pixel_buf: &mut TexelBuffer,
-        _: &mut [PlaneSource],
+        _: PlaneIo,
     ) {
         // FIXME(perf): some bit/part combinations require no reordering of bits and could skip
         // large parts of this phase, or be done vectorized, effectively amounting to a memcpy when
@@ -1067,7 +1127,7 @@ impl CommonPixel {
     }
 
     fn expand_bits<const N: usize>(
-        info: &Info,
+        info: &ConvertInfo,
         bits: [[FromBits; 4]; N],
         in_texel: &TexelBuffer,
         pixel_buf: &mut TexelBuffer,
@@ -1086,7 +1146,7 @@ impl CommonPixel {
     }
 
     /// Expand into pixel normal form, an n×m array based on super blocks.
-    fn expand_sub_blocks(pixel_buf: &mut TexelBuffer, info: &Info, order: CommonPixelOrder) {
+    fn expand_sub_blocks(pixel_buf: &mut TexelBuffer, info: &ConvertInfo, order: CommonPixelOrder) {
         debug_assert!(matches!(order, CommonPixelOrder::PixelsInRowOrder));
         let block = info.in_layout.texel.block;
         let (bwidth, bheight) = (block.width(), block.height());
@@ -1110,7 +1170,7 @@ impl CommonPixel {
     /// Prepares a replacement value for channels that were not present in the texel. This is, for
     /// all colors, `[0, 0, 0, 1]`. FIXME(color): possibly incorrect for non-`???A` colors.
     fn expand_ints<const N: usize>(
-        info: &Info,
+        info: &ConvertInfo,
         bits: [[FromBits; 4]; N],
         in_texel: &TexelBuffer,
         pixel_buf: &mut TexelBuffer,
@@ -1178,7 +1238,7 @@ impl CommonPixel {
     }
 
     fn expand_floats(
-        info: &Info,
+        info: &ConvertInfo,
         bits: [FromBits; 4],
         in_texel: &TexelBuffer,
         pixel_buf: &mut TexelBuffer,
@@ -1211,7 +1271,7 @@ impl CommonPixel {
         }
     }
 
-    fn expand_yuv422(info: &Info, in_texel: &TexelBuffer, pixel_buf: &mut TexelBuffer) {
+    fn expand_yuv422(info: &ConvertInfo, in_texel: &TexelBuffer, pixel_buf: &mut TexelBuffer) {
         struct ExpandYuv422;
 
         impl ExpandYuvLike<4, 2> for ExpandYuv422 {
@@ -1232,7 +1292,7 @@ impl CommonPixel {
         )
     }
 
-    fn expand_yuy2(info: &Info, in_texel: &TexelBuffer, pixel_buf: &mut TexelBuffer) {
+    fn expand_yuy2(info: &ConvertInfo, in_texel: &TexelBuffer, pixel_buf: &mut TexelBuffer) {
         struct ExpandYuy2;
 
         impl ExpandYuvLike<4, 2> for ExpandYuy2 {
@@ -1253,7 +1313,7 @@ impl CommonPixel {
         )
     }
 
-    fn expand_yuv411(info: &Info, in_texel: &TexelBuffer, pixel_buf: &mut TexelBuffer) {
+    fn expand_yuv411(info: &ConvertInfo, in_texel: &TexelBuffer, pixel_buf: &mut TexelBuffer) {
         struct ExpandYuv411;
 
         impl ExpandYuvLike<6, 4> for ExpandYuv411 {
@@ -1280,7 +1340,7 @@ impl CommonPixel {
     }
 
     fn expand_yuv_like<F, const N: usize, const M: usize>(
-        info: &Info,
+        info: &ConvertInfo,
         in_texel: &TexelBuffer,
         pixel_buf: &mut TexelBuffer,
         tex_u8: Texel<[u8; N]>,
@@ -1351,12 +1411,12 @@ impl CommonPixel {
     }
 
     fn join_from_info(
-        info: &Info,
+        info: &ConvertInfo,
         ops: &ConvertOps,
         pixel_buf: &TexelBuffer,
         out_texels: &mut TexelBuffer,
         // FIXME(perf): see `join_bits` which could use it but requires chunk information.
-        _: &mut [PlaneTarget],
+        _: PlaneIo,
     ) {
         // FIXME(perf): some bit/part combinations require no reordering of bits and could skip
         // large parts of this phase, or be done vectorized, effectively amounting to a memcpy when
@@ -1417,7 +1477,7 @@ impl CommonPixel {
     // FIXME(perf): for single-plane, in particular integer cases, we could write directly into the
     // target buffer by chunks if this is available.
     fn join_bits<const N: usize>(
-        info: &Info,
+        info: &ConvertInfo,
         _: &ConvertOps,
         bits: [[FromBits; 4]; N],
         pixel_buf: &TexelBuffer,
@@ -1438,7 +1498,7 @@ impl CommonPixel {
 
     // FIXME(color): int component bias
     fn join_ints<const N: usize>(
-        info: &Info,
+        info: &ConvertInfo,
         bits: [[FromBits; 4]; N],
         pixel_buf: &TexelBuffer,
         out_texels: &mut TexelBuffer,
@@ -1496,7 +1556,7 @@ impl CommonPixel {
     }
 
     /// Expand into pixel normal form, an n×m array based on super blocks.
-    fn join_sub_blocks(pixel_buf: &mut TexelBuffer, info: &Info, order: CommonPixelOrder) {
+    fn join_sub_blocks(pixel_buf: &mut TexelBuffer, info: &ConvertInfo, order: CommonPixelOrder) {
         debug_assert!(matches!(order, CommonPixelOrder::PixelsInRowOrder));
         let block = info.out_layout.texel.block;
         let (bwidth, bheight) = (block.width(), block.height());
@@ -1632,7 +1692,7 @@ impl CommonPixel {
     }
 
     fn join_floats(
-        info: &Info,
+        info: &ConvertInfo,
         bits: [FromBits; 4],
         pixel_buf: &TexelBuffer,
         out_texels: &mut TexelBuffer,
@@ -1664,7 +1724,7 @@ impl CommonPixel {
         }
     }
 
-    fn join_yuv422(_: &Info, _: &TexelBuffer, _: &mut TexelBuffer) {
+    fn join_yuv422(_: &ConvertInfo, _: &TexelBuffer, _: &mut TexelBuffer) {
         // FIXME(color): actually implement this..
         debug_assert!(false);
     }
@@ -1677,7 +1737,7 @@ impl CommonPixel {
 }
 
 impl CommonColor {
-    fn cie_xyz_from_info(info: &Info, pixel: &TexelBuffer, xyz: &mut TexelBuffer) {
+    fn cie_xyz_from_info(info: &ConvertInfo, pixel: &TexelBuffer, xyz: &mut TexelBuffer) {
         // If we do color conversion, we always choose [f32; 4] representation.
         // Or, at least we should. Otherwise, do nothing..
         if !matches!(info.common_pixel, CommonPixel::F32x4) {
@@ -1700,7 +1760,7 @@ impl CommonColor {
         }
     }
 
-    fn cie_xyz_into_info(info: &Info, xyz: &TexelBuffer, pixel: &mut TexelBuffer) {
+    fn cie_xyz_into_info(info: &ConvertInfo, xyz: &TexelBuffer, pixel: &mut TexelBuffer) {
         // If we do color conversion, we always choose [f32; 4] representation.
         // Or, at least we should. Otherwise, do nothing..
         if !matches!(info.common_pixel, CommonPixel::F32x4) {
