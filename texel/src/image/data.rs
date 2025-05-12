@@ -128,7 +128,7 @@ mod sealed {
 use core::{cell::Cell, ops::Range};
 use sealed::{Loadable, Storable};
 
-use crate::buf::{atomic_buf, buf, cell_buf};
+use crate::buf::{atomic_buf, buf, cell_buf, AtomicBuffer, Buffer, CellBuffer};
 use crate::image::{
     AtomicImage, AtomicImageRef, CellImage, CellImageRef, Image, ImageMut, ImageRef,
 };
@@ -243,9 +243,9 @@ impl Storable for &'_ [u8] {
 
     fn store_to_cell(&self, buffer: &cell_buf, what: Range<usize>, into: usize) {
         let len = what.len();
-        let source = &buffer.as_texels(texels::U8).as_slice_of_cells()[into..][..len];
-        let target = &self[what.start..what.end];
-        texels::U8.store_cell_slice(source, target);
+        let target = &buffer.as_texels(texels::U8).as_slice_of_cells()[into..][..len];
+        let source = &self[what.start..what.end];
+        texels::U8.store_cell_slice(target, source);
     }
 
     fn store_to_atomic(&self, buffer: &atomic_buf, what: Range<usize>, into: usize) {
@@ -599,6 +599,38 @@ impl<E: LayoutEngine> AsCopySource<'_, E> {
     }
 }
 
+impl Storable for Buffer {
+    #[track_caller]
+    fn store_to_buf(&self, buffer: &mut buf, what: Range<usize>, into: usize) {
+        <&'_ [u8]>::store_to_buf(&self.as_bytes(), buffer, what, into)
+    }
+
+    #[track_caller]
+    fn store_to_cell(&self, buffer: &cell_buf, what: Range<usize>, into: usize) {
+        <&'_ [u8]>::store_to_cell(&self.as_bytes(), buffer, what, into)
+    }
+
+    #[track_caller]
+    fn store_to_atomic(&self, buffer: &atomic_buf, what: Range<usize>, into: usize) {
+        <&'_ [u8]>::store_to_atomic(&self.as_bytes(), buffer, what, into)
+    }
+}
+
+impl Loadable for Buffer {
+    #[track_caller]
+    fn load_from_buf(&mut self, buffer: &buf, what: Range<usize>, into: usize) {
+        <&'_ mut [u8]>::load_from_buf(&mut self.as_bytes_mut(), buffer, what, into)
+    }
+
+    fn load_from_cell(&mut self, buffer: &cell_buf, what: Range<usize>, into: usize) {
+        <&'_ mut [u8]>::load_from_cell(&mut self.as_bytes_mut(), buffer, what, into)
+    }
+
+    fn load_from_atomic(&mut self, buffer: &atomic_buf, what: Range<usize>, into: usize) {
+        <&'_ mut [u8]>::load_from_atomic(&mut self.as_bytes_mut(), buffer, what, into)
+    }
+}
+
 impl<L> Image<L> {
     /// Write to an image, changing the layout in the process.
     ///
@@ -619,6 +651,81 @@ impl<L> Image<L> {
         self.ensure_layout();
         data.engine_to_buf_at(self.as_capacity_buf_mut());
     }
+
+    /// An adapter reading from the data as one contiguous chunk.
+    ///
+    /// See [`RangeEngine`] for more explanations.
+    pub fn as_source(&self) -> AsCopySource<'_, RangeEngine<L>>
+    where
+        L: Clone + Layout,
+    {
+        AsCopySource {
+            inner: self.inner.get(),
+            engine: RangeEngine::new(self.layout(), 0),
+        }
+    }
+
+    /// An adapter writing to this buffer in one contiguous chunk.
+    ///
+    /// See [`RangeEngine`] for more explanations.
+    pub fn as_target(&mut self) -> AsCopyTarget<'_, RangeEngine<L>>
+    where
+        L: Clone + Layout,
+    {
+        AsCopyTarget {
+            engine: RangeEngine::new(self.layout(), 0),
+            inner: self.inner.get_mut(),
+        }
+    }
+}
+
+impl Storable for &'_ buf {
+    #[track_caller]
+    fn store_to_buf(&self, buffer: &mut buf, what: Range<usize>, into: usize) {
+        <&'_ [u8]>::store_to_buf(&self.as_bytes(), buffer, what, into)
+    }
+
+    #[track_caller]
+    fn store_to_cell(&self, buffer: &cell_buf, what: Range<usize>, into: usize) {
+        <&'_ [u8]>::store_to_cell(&self.as_bytes(), buffer, what, into)
+    }
+
+    #[track_caller]
+    fn store_to_atomic(&self, buffer: &atomic_buf, what: Range<usize>, into: usize) {
+        <&'_ [u8]>::store_to_atomic(&self.as_bytes(), buffer, what, into)
+    }
+}
+
+impl Storable for &'_ mut buf {
+    #[track_caller]
+    fn store_to_buf(&self, buffer: &mut buf, what: Range<usize>, into: usize) {
+        <&'_ [u8]>::store_to_buf(&self.as_bytes(), buffer, what, into)
+    }
+
+    #[track_caller]
+    fn store_to_cell(&self, buffer: &cell_buf, what: Range<usize>, into: usize) {
+        <&'_ [u8]>::store_to_cell(&self.as_bytes(), buffer, what, into)
+    }
+
+    #[track_caller]
+    fn store_to_atomic(&self, buffer: &atomic_buf, what: Range<usize>, into: usize) {
+        <&'_ [u8]>::store_to_atomic(&self.as_bytes(), buffer, what, into)
+    }
+}
+
+impl Loadable for &'_ mut buf {
+    #[track_caller]
+    fn load_from_buf(&mut self, buffer: &buf, what: Range<usize>, into: usize) {
+        <&'_ mut [u8]>::load_from_buf(&mut self.as_bytes_mut(), buffer, what, into)
+    }
+
+    fn load_from_cell(&mut self, buffer: &cell_buf, what: Range<usize>, into: usize) {
+        <&'_ mut [u8]>::load_from_cell(&mut self.as_bytes_mut(), buffer, what, into)
+    }
+
+    fn load_from_atomic(&mut self, buffer: &atomic_buf, what: Range<usize>, into: usize) {
+        <&'_ mut [u8]>::load_from_atomic(&mut self.as_bytes_mut(), buffer, what, into)
+    }
 }
 
 impl<L> ImageMut<'_, L> {
@@ -638,6 +745,79 @@ impl<L> ImageMut<'_, L> {
         self.try_set_layout(layout)?;
         data.engine_to_buf_at(self.as_capacity_buf_mut());
         Ok(())
+    }
+
+    /// An adapter reading from the data as one contiguous chunk.
+    ///
+    /// See [`RangeEngine`] for more explanations.
+    pub fn as_source(&self) -> AsCopySource<'_, RangeEngine<L>>
+    where
+        L: Clone + Layout,
+    {
+        AsCopySource {
+            inner: self.inner.get(),
+            engine: RangeEngine::new(self.layout(), 0),
+        }
+    }
+
+    /// An adapter writing to this buffer in one contiguous chunk.
+    ///
+    /// See [`RangeEngine`] for more explanations.
+    pub fn as_target(&mut self) -> AsCopyTarget<'_, RangeEngine<L>>
+    where
+        L: Clone + Layout,
+    {
+        AsCopyTarget {
+            engine: RangeEngine::new(self.layout(), 0),
+            inner: self.inner.get_mut(),
+        }
+    }
+}
+
+impl<L> ImageRef<'_, L> {
+    /// An adapter reading from the data as one contiguous chunk.
+    ///
+    /// See [`RangeEngine`] for more explanations.
+    pub fn as_source(&self) -> AsCopySource<'_, RangeEngine<L>>
+    where
+        L: Clone + Layout,
+    {
+        AsCopySource {
+            inner: self.inner.get(),
+            engine: RangeEngine::new(self.layout(), 0),
+        }
+    }
+}
+
+impl Storable for CellBuffer {
+    #[track_caller]
+    fn store_to_buf(&self, buffer: &mut buf, what: Range<usize>, into: usize) {
+        <&'_ cell_buf>::store_to_buf(&&**self, buffer, what, into)
+    }
+
+    #[track_caller]
+    fn store_to_cell(&self, buffer: &cell_buf, what: Range<usize>, into: usize) {
+        <&'_ cell_buf>::store_to_cell(&&**self, buffer, what, into)
+    }
+
+    #[track_caller]
+    fn store_to_atomic(&self, buffer: &atomic_buf, what: Range<usize>, into: usize) {
+        <&'_ cell_buf>::store_to_atomic(&&**self, buffer, what, into)
+    }
+}
+
+impl Loadable for CellBuffer {
+    #[track_caller]
+    fn load_from_buf(&mut self, buffer: &buf, what: Range<usize>, into: usize) {
+        <&'_ cell_buf>::load_from_buf(&mut &**self, buffer, what, into)
+    }
+
+    fn load_from_cell(&mut self, buffer: &cell_buf, what: Range<usize>, into: usize) {
+        <&'_ cell_buf>::load_from_cell(&mut &**self, buffer, what, into)
+    }
+
+    fn load_from_atomic(&mut self, buffer: &atomic_buf, what: Range<usize>, into: usize) {
+        <&'_ cell_buf>::load_from_atomic(&mut &**self, buffer, what, into)
     }
 }
 
@@ -661,6 +841,70 @@ impl<L> CellImage<L> {
         data.engine_to_buf_at(self.as_capacity_cell_buf());
         Ok(())
     }
+
+    /// An adapter reading from the data as one contiguous chunk.
+    ///
+    /// See [`RangeEngine`] for more explanations.
+    pub fn as_source(&self) -> AsCopySource<'_, RangeEngine<L>>
+    where
+        L: Clone + Layout,
+    {
+        AsCopySource {
+            inner: self.inner.get(),
+            engine: RangeEngine::new(self.layout(), 0),
+        }
+    }
+
+    /// An adapter writing to this buffer in one contiguous chunk.
+    ///
+    /// See [`RangeEngine`] for more explanations.
+    pub fn as_target(&mut self) -> AsCopyTarget<'_, RangeEngine<L>>
+    where
+        L: Clone + Layout,
+    {
+        AsCopyTarget {
+            engine: RangeEngine::new(self.layout(), 0),
+            inner: self.inner.get_mut(),
+        }
+    }
+}
+
+impl Storable for &'_ cell_buf {
+    #[track_caller]
+    fn store_to_buf(&self, buffer: &mut buf, what: Range<usize>, into: usize) {
+        let inner = self.as_texels(texels::U8).as_slice_of_cells();
+        <&'_ [Cell<u8>]>::store_to_buf(&inner, buffer, what, into)
+    }
+
+    #[track_caller]
+    fn store_to_cell(&self, buffer: &cell_buf, what: Range<usize>, into: usize) {
+        let inner = self.as_texels(texels::U8).as_slice_of_cells();
+        <&'_ [Cell<u8>]>::store_to_cell(&inner, buffer, what, into)
+    }
+
+    #[track_caller]
+    fn store_to_atomic(&self, buffer: &atomic_buf, what: Range<usize>, into: usize) {
+        let inner = self.as_texels(texels::U8).as_slice_of_cells();
+        <&'_ [Cell<u8>]>::store_to_atomic(&inner, buffer, what, into)
+    }
+}
+
+impl Loadable for &'_ cell_buf {
+    #[track_caller]
+    fn load_from_buf(&mut self, buffer: &buf, what: Range<usize>, into: usize) {
+        let mut inner = self.as_texels(texels::U8).as_slice_of_cells();
+        <&'_ [Cell<u8>]>::load_from_buf(&mut inner, buffer, what, into)
+    }
+
+    fn load_from_cell(&mut self, buffer: &cell_buf, what: Range<usize>, into: usize) {
+        let mut inner = self.as_texels(texels::U8).as_slice_of_cells();
+        <&'_ [Cell<u8>]>::load_from_cell(&mut inner, buffer, what, into)
+    }
+
+    fn load_from_atomic(&mut self, buffer: &atomic_buf, what: Range<usize>, into: usize) {
+        let mut inner = self.as_texels(texels::U8).as_slice_of_cells();
+        <&'_ [Cell<u8>]>::load_from_atomic(&mut inner, buffer, what, into)
+    }
 }
 
 impl<L> CellImageRef<'_, L> {
@@ -680,6 +924,64 @@ impl<L> CellImageRef<'_, L> {
         self.try_set_layout(layout)?;
         data.engine_to_buf_at(self.as_capacity_cell_buf());
         Ok(())
+    }
+
+    /// An adapter reading from the data as one contiguous chunk.
+    ///
+    /// See [`RangeEngine`] for more explanations.
+    pub fn as_source(&self) -> AsCopySource<'_, RangeEngine<L>>
+    where
+        L: Clone + Layout,
+    {
+        AsCopySource {
+            inner: self.inner.get(),
+            engine: RangeEngine::new(self.layout(), 0),
+        }
+    }
+
+    /// An adapter writing to this buffer in one contiguous chunk.
+    ///
+    /// See [`RangeEngine`] for more explanations.
+    pub fn as_target(&mut self) -> AsCopyTarget<'_, RangeEngine<L>>
+    where
+        L: Clone + Layout,
+    {
+        AsCopyTarget {
+            engine: RangeEngine::new(self.layout(), 0),
+            inner: self.inner.get_mut(),
+        }
+    }
+}
+
+impl Storable for AtomicBuffer {
+    #[track_caller]
+    fn store_to_buf(&self, buffer: &mut buf, what: Range<usize>, into: usize) {
+        <&'_ atomic_buf>::store_to_buf(&&**self, buffer, what, into)
+    }
+
+    #[track_caller]
+    fn store_to_cell(&self, buffer: &cell_buf, what: Range<usize>, into: usize) {
+        <&'_ atomic_buf>::store_to_cell(&&**self, buffer, what, into)
+    }
+
+    #[track_caller]
+    fn store_to_atomic(&self, buffer: &atomic_buf, what: Range<usize>, into: usize) {
+        <&'_ atomic_buf>::store_to_atomic(&&**self, buffer, what, into)
+    }
+}
+
+impl Loadable for AtomicBuffer {
+    #[track_caller]
+    fn load_from_buf(&mut self, buffer: &buf, what: Range<usize>, into: usize) {
+        <&'_ atomic_buf>::load_from_buf(&mut &**self, buffer, what, into)
+    }
+
+    fn load_from_cell(&mut self, buffer: &cell_buf, what: Range<usize>, into: usize) {
+        <&'_ atomic_buf>::load_from_cell(&mut &**self, buffer, what, into)
+    }
+
+    fn load_from_atomic(&mut self, buffer: &atomic_buf, what: Range<usize>, into: usize) {
+        <&'_ atomic_buf>::load_from_atomic(&mut &**self, buffer, what, into)
     }
 }
 
@@ -703,6 +1005,82 @@ impl<L> AtomicImage<L> {
         data.engine_to_buf_at(self.as_capacity_atomic_buf());
         Ok(())
     }
+
+    /// An adapter reading from the data as one contiguous chunk.
+    ///
+    /// See [`RangeEngine`] for more explanations.
+    pub fn as_source(&self) -> AsCopySource<'_, RangeEngine<L>>
+    where
+        L: Clone + Layout,
+    {
+        AsCopySource {
+            inner: self.inner.get(),
+            engine: RangeEngine::new(self.layout(), 0),
+        }
+    }
+
+    /// An adapter writing to this buffer in one contiguous chunk.
+    ///
+    /// See [`RangeEngine`] for more explanations.
+    pub fn as_target(&mut self) -> AsCopyTarget<'_, RangeEngine<L>>
+    where
+        L: Clone + Layout,
+    {
+        AsCopyTarget {
+            engine: RangeEngine::new(self.layout(), 0),
+            inner: self.inner.get_mut(),
+        }
+    }
+}
+
+impl Storable for &'_ atomic_buf {
+    #[track_caller]
+    fn store_to_buf(&self, buffer: &mut buf, what: Range<usize>, into: usize) {
+        let len = what.len();
+        let target = &mut buffer.as_bytes_mut()[into..][..len];
+        let source = self.index(texels::U8.to_range(what).unwrap());
+        texels::U8.load_atomic_slice(source, target);
+    }
+
+    #[track_caller]
+    fn store_to_cell(&self, buffer: &cell_buf, what: Range<usize>, into: usize) {
+        let len = what.len();
+        let target = &buffer.as_texels(texels::U8).as_slice_of_cells()[into..][..len];
+        let source = self.index(texels::U8.to_range(what).unwrap());
+        texels::U8.load_atomic_to_cells(source, target);
+    }
+
+    #[track_caller]
+    fn store_to_atomic(&self, buffer: &atomic_buf, what: Range<usize>, into: usize) {
+        let len = what.len();
+        let target = buffer.index(texels::U8.to_range(into..into + len).unwrap());
+        let source = self.index(texels::U8.to_range(what).unwrap());
+        texels::U8.atomic_memory_move(source, target);
+    }
+}
+
+impl Loadable for &'_ atomic_buf {
+    #[track_caller]
+    fn load_from_buf(&mut self, buffer: &buf, what: Range<usize>, into: usize) {
+        let len = what.len();
+        let source = &buffer.as_bytes()[into..][..len];
+        let target = self.index(texels::U8.to_range(what).unwrap());
+        texels::U8.store_atomic_slice(target, source);
+    }
+
+    fn load_from_cell(&mut self, buffer: &cell_buf, what: Range<usize>, into: usize) {
+        let len = what.len();
+        let source = &buffer.as_texels(texels::U8).as_slice_of_cells()[into..][..len];
+        let target = self.index(texels::U8.to_range(what).unwrap());
+        texels::U8.store_atomic_from_cells(target, source);
+    }
+
+    fn load_from_atomic(&mut self, buffer: &atomic_buf, what: Range<usize>, into: usize) {
+        let len = what.len();
+        let source = buffer.index(texels::U8.to_range(into..into + len).unwrap());
+        let target = self.index(texels::U8.to_range(what).unwrap());
+        texels::U8.atomic_memory_move(source, target);
+    }
 }
 
 impl<L> AtomicImageRef<'_, L> {
@@ -722,6 +1100,32 @@ impl<L> AtomicImageRef<'_, L> {
         self.try_set_layout(layout)?;
         data.engine_to_buf_at(self.as_capacity_atomic_buf());
         Ok(())
+    }
+
+    /// An adapter reading from the data as one contiguous chunk.
+    ///
+    /// See [`RangeEngine`] for more explanations.
+    pub fn as_source(&self) -> AsCopySource<'_, RangeEngine<L>>
+    where
+        L: Clone + Layout,
+    {
+        AsCopySource {
+            inner: self.inner.get(),
+            engine: RangeEngine::new(self.layout(), 0),
+        }
+    }
+
+    /// An adapter writing to this buffer in one contiguous chunk.
+    ///
+    /// See [`RangeEngine`] for more explanations.
+    pub fn as_target(&mut self) -> AsCopyTarget<'_, RangeEngine<L>>
+    where
+        L: Clone + Layout,
+    {
+        AsCopyTarget {
+            engine: RangeEngine::new(self.layout(), 0),
+            inner: self.inner.get_mut(),
+        }
     }
 }
 
