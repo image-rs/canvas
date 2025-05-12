@@ -2,7 +2,7 @@
 //!
 //! Takes quite a lot of inspiration from how GPUs work. We have a primitive sampler unit, a
 //! fragment unit, and pipeline multiple texels in parallel.
-use alloc::vec::Vec;
+use alloc::{vec::Vec, boxed::Box};
 use core::ops::Range;
 use image_texel::image::{AtomicImageRef, CellImageRef, ImageMut, ImageRef};
 use image_texel::{AsTexel, Texel, TexelBuffer};
@@ -16,6 +16,11 @@ use crate::Canvas;
 
 /// A buffer for conversion.
 pub struct Converter {
+    inner: Box<ConverterRt>,
+}
+
+/// Runtime state utilized by operations.
+struct ConverterRt {
     /// How many super-blocks to do at once.
     ///
     /// A super-texel is a unit determined by the shader which encompasses a whole number of input
@@ -175,29 +180,39 @@ struct PlaneIo<'re, 'data> {
 /// Note how there are no types involved here. Instead, `TexelCoord` is a polymorphic buffer that
 /// each function can access with any type it sees feed. We expect the constructor to ensure only
 /// matching types are being used.
-struct ConvertOps {
+struct ConvertOps<'rt> {
     /// Convert in texel coordinates to an index in the color plane.
     fill_in_index: fn(&ConvertInfo, &[[u32; 2]], &mut [usize], ChunkSpec),
     /// Convert out texel coordinates to an index in the color plane.
     fill_out_index: fn(&ConvertInfo, &[[u32; 2]], &mut [usize], ChunkSpec),
 
     /// Expand all texels into pixels in normalized channel order.
-    expand: fn(&ConvertInfo, &ConvertOps, &TexelBuffer, &mut TexelBuffer, PlaneIo),
+    expand: fn(&ConvertOps, &TexelBuffer, &mut TexelBuffer, PlaneIo),
     /// Take pixels in normalized channel order and apply color conversion.
     recolor: Option<RecolorOps>,
     /// Join all pixels from normalized channel order to texels, clamping.
-    join: fn(&ConvertInfo, &ConvertOps, &TexelBuffer, &mut TexelBuffer, PlaneIo),
+    join: fn(&ConvertOps, &TexelBuffer, &mut TexelBuffer, PlaneIo),
 
     /// Well-define bit/byte/channel shuffle operations on common texel combinations.
     shuffle: ShuffleOps,
 
-    // Ops that are available, dynamically.
-    /// Simple int-shuffles, avoiding color decoding.
-    int_shuffle: Option<IntShuffleOps>,
+    // Parameter of ops that are available, dynamically.
+    /// The parameters to an integer shuffle that replaces texel conversion.
+    int_shuffle_params: IntShuffleParameter,
+
+    /// The operations that converts from the full input texel to the output texel.
+    ///
+    /// These usually work on the interleaved buffer, i.e. a load and expansion has happened
+    /// before. However, they can indicate to skip those stages if the same information is also
+    /// available on the input / output buffer itself and loads would be purely memory copies.
+    texel: TexelConvertWith,
+
+    /// The layout and format indications valid for the specific runtime.
+    info: &'rt ConvertInfo,
 }
 
-struct TexelConvertWith<'lt> {
-    ops: &'lt mut dyn FnMut(&mut Converter, PlaneIo),
+struct TexelConvertWith {
+    ops: fn(&mut ConverterRt, &ConvertOps, PlaneIo),
     should_defer_texel_read: bool,
     should_defer_texel_write: bool,
 }
@@ -208,10 +223,15 @@ struct RecolorOps {
 }
 
 struct IntShuffleOps {
-    call: fn(&mut Converter, &ConvertOps, [u8; 4], PlaneIo),
+    call: fn(&mut ConverterRt, &ConvertOps, PlaneIo),
     shuffle: [u8; 4],
     should_defer_texel_read: bool,
     should_defer_texel_write: bool,
+}
+
+#[derive(Default)]
+struct IntShuffleParameter {
+    shuffle: [u8; 4],
 }
 
 #[derive(Debug)]
@@ -232,22 +252,24 @@ pub(crate) struct ChunkSpec<'ch> {
 impl Converter {
     pub fn new() -> Self {
         Converter {
-            chunk: 1024,
-            chunk_count: 1,
-            chunk_per_fetch: 0,
-            chunk_per_write: 0,
-            super_blocks: TexelBuffer::default(),
-            in_texels: TexelBuffer::default(),
-            in_coords: TexelBuffer::default(),
-            in_index_list: vec![],
-            in_slices: TexelBuffer::default(),
-            out_texels: TexelBuffer::default(),
-            out_coords: TexelBuffer::default(),
-            out_index_list: vec![],
-            out_slices: TexelBuffer::default(),
-            pixel_in_buffer: TexelBuffer::default(),
-            neutral_color_buffer: TexelBuffer::default(),
-            pixel_out_buffer: TexelBuffer::default(),
+            inner: Box::new(ConverterRt {
+                chunk: 1024,
+                chunk_count: 1,
+                chunk_per_fetch: 0,
+                chunk_per_write: 0,
+                super_blocks: TexelBuffer::default(),
+                in_texels: TexelBuffer::default(),
+                in_coords: TexelBuffer::default(),
+                in_index_list: vec![],
+                in_slices: TexelBuffer::default(),
+                out_texels: TexelBuffer::default(),
+                out_coords: TexelBuffer::default(),
+                out_index_list: vec![],
+                out_slices: TexelBuffer::default(),
+                pixel_in_buffer: TexelBuffer::default(),
+                neutral_color_buffer: TexelBuffer::default(),
+                pixel_out_buffer: TexelBuffer::default(),
+            }),
         }
     }
 
@@ -279,43 +301,46 @@ impl Converter {
         };
 
         let recolor = Self::recolor_ops(frame_in.layout(), frame_out.layout());
+
         let int_shuffle = self
+            .inner
             .convert_intbuf_with_nocolor_ops(&info)
             .filter(|_| recolor.is_none());
 
-        let ops = ConvertOps {
-            fill_in_index: Self::index_from_in_info,
-            fill_out_index: Self::index_from_out_info,
-            expand: CommonPixel::expand_from_info,
-            recolor,
-            join: CommonPixel::join_from_info,
-            shuffle: ShuffleOps::default().with_arch(),
-
-            int_shuffle,
-        };
-
+        let int_shuffle_params;
         // Choose how we actually perform conversion.
-        let mut convert_texelbuf_with_ops;
-        let mut convert_with_intshuffle;
         let convert_with: TexelConvertWith = {
-            if let Some(int_ops) = &ops.int_shuffle {
-                convert_with_intshuffle =
-                    |that: &mut Self, io: PlaneIo| (int_ops.call)(that, &ops, int_ops.shuffle, io);
+            if let Some(int_ops) = &int_shuffle {
+                int_shuffle_params = IntShuffleParameter {
+                    shuffle: int_ops.shuffle,
+                };
+
                 TexelConvertWith {
-                    ops: &mut convert_with_intshuffle,
+                    ops: int_ops.call,
                     should_defer_texel_read: int_ops.should_defer_texel_read,
                     should_defer_texel_write: int_ops.should_defer_texel_write,
                 }
             } else {
-                convert_texelbuf_with_ops =
-                    |that: &mut Self, io: PlaneIo| that.convert_texelbuf_with_ops(&info, &ops, io);
+                int_shuffle_params = IntShuffleParameter::default();
 
                 TexelConvertWith {
-                    ops: &mut convert_texelbuf_with_ops,
+                    ops: ConverterRt::convert_texelbuf_with_ops,
                     should_defer_texel_read: false,
                     should_defer_texel_write: false,
                 }
             }
+        };
+
+        let ops = ConvertOps {
+            fill_in_index: ConverterRt::index_from_in_info,
+            fill_out_index: ConverterRt::index_from_out_info,
+            expand: CommonPixel::expand_from_info,
+            recolor,
+            join: CommonPixel::join_from_info,
+            shuffle: ShuffleOps::default().with_arch(),
+            int_shuffle_params,
+            texel: convert_with,
+            info: &info,
         };
 
         use core::slice::{from_mut, from_ref};
@@ -335,22 +360,18 @@ impl Converter {
             },
         };
 
-        self.with_filled_texels(convert_with, &info, &ops, plane_io)
+        self.inner.with_filled_texels(&info, &ops, plane_io)
     }
+}
 
+impl ConverterRt {
     /// Convert all loaded texels, using the provided `ConvertOps` as dynamic function selection.
     ///
     /// Assumes that the caller resized all buffers appropriately (TODO: should be a better
     /// contract for this, with explicit data flow of this invariant and what 'proper' size means,
     /// because it depends on the chosen ops).
-    fn convert_texelbuf_with_ops(
-        &mut self,
-        info: &ConvertInfo,
-        ops: &ConvertOps,
-        mut plane_io: PlaneIo,
-    ) {
+    fn convert_texelbuf_with_ops(&mut self, ops: &ConvertOps, mut plane_io: PlaneIo) {
         (ops.expand)(
-            &info,
             ops,
             &self.in_texels,
             &mut self.pixel_in_buffer,
@@ -358,9 +379,13 @@ impl Converter {
         );
 
         let pixel_out = if let Some(ref recolor) = ops.recolor {
-            (recolor.from)(&info, &self.pixel_in_buffer, &mut self.neutral_color_buffer);
+            (recolor.from)(
+                &ops.info,
+                &self.pixel_in_buffer,
+                &mut self.neutral_color_buffer,
+            );
             (recolor.into)(
-                &info,
+                &ops.info,
                 &self.neutral_color_buffer,
                 &mut self.pixel_out_buffer,
             );
@@ -370,13 +395,7 @@ impl Converter {
         };
 
         // FIXME: necessary to do a reorder of pixels here? Or let join do this?
-        (ops.join)(
-            &info,
-            ops,
-            pixel_out,
-            &mut self.out_texels,
-            plane_io.borrow(),
-        );
+        (ops.join)(ops, pixel_out, &mut self.out_texels, plane_io.borrow());
     }
 
     /// Special case on `convert_texelbuf_with_ops`, when both buffers:
@@ -437,9 +456,8 @@ impl Converter {
         }
 
         fn shuffle_with_texel<T, S: Shuffle<T, N, M>, const N: usize, const M: usize>(
-            that: &mut Converter,
+            that: &mut ConverterRt,
             ops: &ConvertOps,
-            shuffle: [u8; 4],
             io: PlaneIo,
         ) where
             T: AsTexel,
@@ -453,6 +471,8 @@ impl Converter {
                 that.chunk, that.chunk_per_write,
                 "Inconsistent usage of channel shuffle, only applicable to matching texels"
             );
+
+            let shuffle = ops.int_shuffle_params.shuffle;
 
             let in_texel = T::texel().array::<N>();
             let out_texel = T::texel().array::<M>();
@@ -583,13 +603,7 @@ impl Converter {
     }
 
     /// Choose iteration order of texels, fill with texels and then put them back.
-    fn with_filled_texels(
-        &mut self,
-        texel_conversion: TexelConvertWith,
-        info: &ConvertInfo,
-        ops: &ConvertOps,
-        mut frame_io: PlaneIo,
-    ) {
+    fn with_filled_texels(&mut self, info: &ConvertInfo, ops: &ConvertOps, mut frame_io: PlaneIo) {
         // We *must* make progress.
         assert!(self.chunk > 0);
         assert!(self.chunk_count > 0);
@@ -623,13 +637,13 @@ impl Converter {
                 break;
             }
 
-            self.generate_coords(info, ops, &texel_conversion, &sb_x, &sb_y);
+            self.generate_coords(info, ops, &sb_x, &sb_y);
             self.reserve_buffers(info, ops);
             // FIXME(planar): should be repeated for all planes?
-            self.read_texels(info, ops, &texel_conversion, frame_io.borrow());
-            (texel_conversion.ops)(self, frame_io.borrow());
+            self.read_texels(info, ops, frame_io.borrow());
+            (ops.texel.ops)(self, ops, frame_io.borrow());
             // FIXME(planar): should be repeated for all planes?
-            self.write_texels(info, ops, &texel_conversion, frame_io.borrow());
+            self.write_texels(info, ops, frame_io.borrow());
         }
     }
 
@@ -669,7 +683,6 @@ impl Converter {
         &mut self,
         info: &ConvertInfo,
         ops: &ConvertOps,
-        converter: &TexelConvertWith,
         sb_x: &SuperTexel,
         sb_y: &SuperTexel,
     ) {
@@ -741,13 +754,13 @@ impl Converter {
         let in_chunk = ChunkSpec {
             chunks: self.in_slices.as_mut_slice(),
             chunk_size: self.chunk_per_fetch,
-            should_defer_texel_ops: converter.should_defer_texel_read,
+            should_defer_texel_ops: ops.texel.should_defer_texel_read,
         };
 
         let out_chunk = ChunkSpec {
             chunks: self.out_slices.as_mut_slice(),
             chunk_size: self.chunk_per_write,
-            should_defer_texel_ops: converter.should_defer_texel_write,
+            should_defer_texel_ops: ops.texel.should_defer_texel_write,
         };
 
         (ops.fill_in_index)(
@@ -805,13 +818,7 @@ impl Converter {
         }
     }
 
-    fn read_texels(
-        &mut self,
-        info: &ConvertInfo,
-        _: &ConvertOps,
-        converter: &TexelConvertWith,
-        from: PlaneIo,
-    ) {
+    fn read_texels(&mut self, info: &ConvertInfo, ops: &ConvertOps, from: PlaneIo) {
         fn fetch_from_texel_array<T>(
             from: &PlaneSource,
             idx: &[usize],
@@ -846,7 +853,7 @@ impl Converter {
             }
         }
 
-        if converter.should_defer_texel_read {
+        if ops.texel.should_defer_texel_read {
             /* For deferred reading, we expect some functions to do the transfer for us allowing us
              * to leave the source texel blank, uninitialized, or in an otherwise unreadable state.
              * We should skip them. The protocol here is that each chunk has two indices; the index
@@ -887,13 +894,7 @@ impl Converter {
 
     /// The job of this function is transferring texel information onto the target plane.
     ///
-    fn write_texels(
-        &mut self,
-        info: &ConvertInfo,
-        _: &ConvertOps,
-        converter: &TexelConvertWith,
-        into: PlaneIo,
-    ) {
+    fn write_texels(&mut self, info: &ConvertInfo, ops: &ConvertOps, into: PlaneIo) {
         fn write_from_texel_array<T>(
             into: &mut PlaneTarget,
             idx: &[usize],
@@ -930,7 +931,7 @@ impl Converter {
             }
         }
 
-        if converter.should_defer_texel_write {
+        if ops.texel.should_defer_texel_write {
             /* For deferred writing, we expect some functions to have already done the transfer for
              * us and left the source texel blank, uninitialized, or in an otherwise unreadable
              * state. We must skip them. The protocol here is that each chunk has two indices; the
@@ -1068,13 +1069,14 @@ impl CommonPixel {
     /// convert their bit representation to the `CommonPixel` representation, then put them into
     /// the expected channel give by the color channel's normal form.
     fn expand_from_info(
-        info: &ConvertInfo,
         // FIXME(perf): similar to join_from_info we could use shuffle sometimes..
-        _: &ConvertOps,
+        ops: &ConvertOps,
         in_texel: &TexelBuffer,
         pixel_buf: &mut TexelBuffer,
         _: PlaneIo,
     ) {
+        let info = &ops.info;
+
         // FIXME(perf): some bit/part combinations require no reordering of bits and could skip
         // large parts of this phase, or be done vectorized, effectively amounting to a memcpy when
         // the expanded value has the same representation as the texel.
@@ -1411,13 +1413,14 @@ impl CommonPixel {
     }
 
     fn join_from_info(
-        info: &ConvertInfo,
         ops: &ConvertOps,
         pixel_buf: &TexelBuffer,
         out_texels: &mut TexelBuffer,
         // FIXME(perf): see `join_bits` which could use it but requires chunk information.
         _: PlaneIo,
     ) {
+        let info = &ops.info;
+
         // FIXME(perf): some bit/part combinations require no reordering of bits and could skip
         // large parts of this phase, or be done vectorized, effectively amounting to a memcpy when
         // the expanded value had the same representation as the texel.
