@@ -13,6 +13,24 @@ use core::cell::Cell;
 /// This is a unsynchronized, shared equivalent to [`Image`][`crate::image::Image`]. That is the
 /// buffer of bytes of this container is shared between clones of this value but can not be sent
 /// between threads. In particular the same buffer may be owned and viewed with different layouts.
+///
+/// # Examples
+///
+/// As a type with shared ownership over the underling buffer, this type can be cloned very
+/// cheaply. Such duplicates refer to the same buffer, making changes in one visible to the other.
+///
+/// ```
+/// use image_texel::{image::CellImage, layout::Matrix};
+/// let matrix = Matrix::<u8>::width_and_height(400, 400).unwrap();
+/// let image: CellImage<_> = CellImage::new(matrix);
+///
+/// let another_reference = image.clone();
+/// assert!(CellImage::ptr_eq(&image, &another_reference));
+///
+/// another_reference.as_slice().as_slice_of_cells()[0].set(0xff);
+/// let value = image.as_slice().as_slice_of_cells()[0].get();
+/// assert_eq!(value, 0xff);
+/// ```
 #[derive(Clone, PartialEq, Eq)]
 pub struct CellImage<Layout = Bytes> {
     pub(super) inner: RawImage<CellBuffer, Layout>,
@@ -219,7 +237,10 @@ impl<L> CellImage<L> {
     }
 
     /// Check if two images refer to the same buffer.
-    pub fn ptr_eq(&self, other: &Self) -> bool {
+    ///
+    /// Note that two buffers can use different layout types to describe their share of the data or
+    /// even to refer to the same data in different ways.
+    pub fn ptr_eq<O>(&self, other: &CellImage<O>) -> bool {
         CellBuffer::ptr_eq(self.inner.get(), other.inner.get())
     }
 

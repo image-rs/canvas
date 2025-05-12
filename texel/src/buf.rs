@@ -1443,6 +1443,34 @@ impl<P> Clone for AtomicSliceRef<'_, P> {
 
 impl<P> Copy for AtomicSliceRef<'_, P> {}
 
+impl<P> AtomicRef<'_, P> {
+    /// Modify the value stored in the reference.
+    ///
+    /// Note that this does *not* promise to be atomic in the whole value, just that it atomically
+    /// modifies the underlying buffer elements. The bytes of the value may be torn if another
+    /// write happens concurrently to the same element.
+    ///
+    /// However, it is guaranteed that the contents of any other non-aliased value in the buffer is
+    /// not modified even if they share the same atomic unit.
+    pub fn store(self, value: P) {
+        self.texel.store_atomic(self, value);
+    }
+
+    /// Retrieve a value stored in the reference.
+    ///
+    /// Note that this does *not* promise to be atomic in the whole value, just that it atomically
+    /// reads from the underlying buffer. The bytes of the value may be torn if another write
+    /// happens concurrently to the same element.
+    ///
+    /// If no such write occurs concurrently, when all writes are ordered-before or ordered-after
+    /// this load then the value is correct. This needs only hold to writes accessing the bytes
+    /// making up _this value_. Even if another values shares atomic units with this value their
+    /// writes are guaranteed to never modify the bits of this value.
+    pub fn load(self) -> P {
+        self.texel.load_atomic(self)
+    }
+}
+
 impl<P> Clone for AtomicRef<'_, P> {
     fn clone(&self) -> Self {
         AtomicRef { ..*self }

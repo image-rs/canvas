@@ -23,6 +23,24 @@ use crate::{BufferReuseError, Texel, TexelBuffer};
 /// on other threads. While the implementation prevents any unsound *data races* there is no
 /// specific meaning to any of its outcomes unless the caller ensure synchronization in some other
 /// manner.
+///
+/// # Examples
+///
+/// As a type with shared ownership over the underling buffer, this type can be cloned very
+/// cheaply. Such duplicates refer to the same buffer, making changes in one visible to the other.
+///
+/// ```
+/// use image_texel::{image::AtomicImage, layout::Matrix};
+/// let matrix = Matrix::<u8>::width_and_height(400, 400).unwrap();
+/// let image: AtomicImage<_> = AtomicImage::new(matrix);
+///
+/// let another_reference = image.clone();
+/// assert!(AtomicImage::ptr_eq(&image, &another_reference));
+///
+/// another_reference.as_slice().index_one(0).store(0xff);
+/// let value = image.as_slice().index_one(0).load();
+/// assert_eq!(value, 0xff);
+/// ```
 #[derive(Clone)]
 pub struct AtomicImage<Layout = Bytes> {
     pub(super) inner: RawImage<AtomicBuffer, Layout>,
@@ -227,7 +245,10 @@ impl<L> AtomicImage<L> {
     }
 
     /// Check if two images refer to the same buffer.
-    pub fn ptr_eq(&self, other: &Self) -> bool {
+    ///
+    /// Note that two buffers can use different layout types to describe their share of the data or
+    /// even to refer to the same data in different ways.
+    pub fn ptr_eq<O>(&self, other: &AtomicImage<O>) -> bool {
         AtomicBuffer::ptr_eq(self.inner.get(), other.inner.get())
     }
 
