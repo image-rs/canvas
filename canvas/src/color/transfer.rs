@@ -143,6 +143,7 @@ pub fn transfer_display_scene_smpte2084(val: f32) -> f32 {
 pub fn transfer_oe_smpte2084(val: f32) -> f32 {
     transfer_eo_inv_smpte2084(transfer_scene_display_smpte2084(val))
 }
+#[expect(dead_code)]
 pub fn transfer_oe_inv_smpte2084(val: f32) -> f32 {
     transfer_display_scene_smpte2084(transfer_eo_smpte2084(val))
 }

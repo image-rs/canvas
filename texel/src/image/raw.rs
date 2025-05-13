@@ -124,6 +124,7 @@ impl<B: BufferLike, L> RawImage<B, L> {
 
 /// Methods specifically with a dynamic layout.
 impl<B> RawImage<B, DynLayout> {
+    #[expect(dead_code)]
     pub(crate) fn try_from_dynamic<Other>(self, layout: Other) -> Result<RawImage<B, Other>, Self>
     where
         Other: Into<DynLayout> + Clone,
