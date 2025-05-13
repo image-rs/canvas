@@ -55,6 +55,14 @@
 // Deny, not forbid, unsafe code. In `arch` module we have inherently unsafe code, for the moment.
 // Maybe at a future point we gain some possibility to write such code safely.
 #![deny(unsafe_code)]
+// Be std for doctests, avoids a weird warning about missing allocator.
+#![cfg_attr(not(doctest), no_std)]
+
+#[cfg(feature = "runtime-features")]
+extern crate std;
+
+#[macro_use]
+extern crate alloc;
 
 mod arch;
 mod bits;
@@ -65,6 +73,8 @@ mod color_matrix;
 mod frame;
 /// The layout implementation, builders, descriptors.
 pub mod layout;
+/// Core maths operations.
+mod math;
 /// Conversion operation.
 mod shader;
 

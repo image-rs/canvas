@@ -14,6 +14,11 @@ categories = ["multimedia::images"]
 [dependencies]
 image-texel = { path = "../texel", version = "0.5.0" }
 bytemuck = "1.1"
+libm = { version = "0.2", default-features = false, features = ["arch"] }
+
+[features]
+# Use runtime feature detection on x86 and x86_64 targets.
+runtime-features = []
 
 [dev-dependencies]
 brunch = "0.6.1"

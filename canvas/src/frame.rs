@@ -1,4 +1,8 @@
 //! A byte-buffer based image descriptor.
+
+use alloc::borrow::ToOwned;
+use alloc::vec::Vec;
+
 use image_texel::image::{ImageMut, ImageRef};
 use image_texel::Image;
 

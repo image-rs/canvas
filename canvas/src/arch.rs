@@ -1,4 +1,6 @@
 #![allow(unsafe_code)]
+// May be unused if no architecture features are detected at compile time or runtime.
+#[allow(unused_imports)]
 use core::mem::transmute;
 
 // For when we want to make sure we have a texel at compile time based on bytemuck.
@@ -12,8 +14,12 @@ macro_rules! expect_texel {
     };
 }
 
+// May be unused if no architecture features are detected at compile time or runtime.
+#[allow(dead_code)]
 #[cfg(any(target_arch = "x86", target_arch = "x86_64"))]
 mod x86_avx2;
+// May be unused if no architecture features are detected at compile time or runtime.
+#[allow(dead_code)]
 #[cfg(any(target_arch = "x86", target_arch = "x86_64"))]
 mod x86_ssse3;
 
@@ -30,29 +36,85 @@ pub(crate) struct ShuffleOps {
 
 impl ShuffleOps {
     /// FIXME(perf): implement and choose arch-specific shuffles.
+    // May be unused if no architecture features are detected at compile time or runtime.
+    #[allow(unused_mut)]
     pub fn with_arch(mut self) -> Self {
         #[cfg(any(target_arch = "x86", target_arch = "x86_64"))]
-        if std::is_x86_feature_detected!("ssse3") {
-            self.shuffle_u8x4 = unsafe {
-                transmute::<unsafe fn(&mut [[u8; 4]], [u8; 4]), _>(x86_ssse3::shuffle_u8x4)
-            };
-            self.shuffle_u16x4 = unsafe {
-                transmute::<unsafe fn(&mut [[u16; 4]], [u8; 4]), _>(x86_ssse3::shuffle_u16x4)
-            };
+        {
+            self = self.with_x86();
         }
 
+        self
+    }
+
+    #[cfg(any(target_arch = "x86", target_arch = "x86_64"))]
+    // May be unused if no architecture features are detected at compile time or runtime.
+    #[allow(unused_mut)]
+    fn with_x86(mut self) -> Self {
+        #[cfg(target_feature = "ssse3")]
+        // SAFETY: `ssse3` detected at compile time
+        unsafe {
+            self = self.with_x86_ssse3();
+        }
+
+        #[cfg(not(target_feature = "ssse3"))]
+        #[cfg(feature = "runtime-features")]
+        if std::is_x86_feature_detected!("ssse3") {
+            // SAFETY: `ssse3` detected at runtime
+            unsafe {
+                self = self.with_x86_ssse3();
+            }
+        }
+
+        #[cfg(target_feature = "avx2")]
+        // SAFETY: `avx2` detected at compile time
+        unsafe {
+            self = self.with_x86_avx2();
+        }
+
+        #[cfg(not(target_feature = "avx2"))]
+        #[cfg(feature = "runtime-features")]
+        if std::is_x86_feature_detected!("avx2") {
+            // SAFETY: `avx2` detected at runtime
+            unsafe {
+                self = self.with_x86_avx2();
+            }
+        }
+
+        self
+    }
+
+    /// # Safety
+    ///
+    /// Must only be used when the `ssse3` feature is available.
+    // May be unused if no architecture features are detected at compile time or runtime.
+    #[allow(dead_code)]
+    #[cfg(any(target_arch = "x86", target_arch = "x86_64"))]
+    unsafe fn with_x86_ssse3(mut self) -> Self {
+        self.shuffle_u8x4 =
+            unsafe { transmute::<unsafe fn(&mut [[u8; 4]], [u8; 4]), _>(x86_ssse3::shuffle_u8x4) };
+        self.shuffle_u16x4 = unsafe {
+            transmute::<unsafe fn(&mut [[u16; 4]], [u8; 4]), _>(x86_ssse3::shuffle_u16x4)
+        };
+
+        self
+    }
+
+    /// # Safety
+    ///
+    /// Must only be used when the `avx2` feature is available.
+    // May be unused if no architecture features are detected at compile time or runtime.
+    #[allow(dead_code)]
+    #[cfg(any(target_arch = "x86", target_arch = "x86_64"))]
+    unsafe fn with_x86_avx2(mut self) -> Self {
         // Note: On Ivy Bridge these have the same *throughput* of 256bit-per-cycle as their SSSE3
         // equivalents until Icelake. With Icelake they are twice as fast at 512bit-per-cycle.
         // Therefore, we don't select them until we find a way to predict/select this.
-        #[cfg(any(target_arch = "x86", target_arch = "x86_64"))]
-        if std::is_x86_feature_detected!("avx2") {
-            self.shuffle_u8x4 = unsafe {
-                transmute::<unsafe fn(&mut [[u8; 4]], [u8; 4]), _>(x86_avx2::shuffle_u8x4)
-            };
-            self.shuffle_u16x4 = unsafe {
-                transmute::<unsafe fn(&mut [[u16; 4]], [u8; 4]), _>(x86_avx2::shuffle_u16x4)
-            };
-        }
+
+        self.shuffle_u8x4 =
+            unsafe { transmute::<unsafe fn(&mut [[u8; 4]], [u8; 4]), _>(x86_avx2::shuffle_u8x4) };
+        self.shuffle_u16x4 =
+            unsafe { transmute::<unsafe fn(&mut [[u16; 4]], [u8; 4]), _>(x86_avx2::shuffle_u16x4) };
 
         self
     }
