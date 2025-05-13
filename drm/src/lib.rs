@@ -13,6 +13,9 @@
 //! pixel matrix. Then some of those formats map cleanly to planes of color information that can be
 //! viewed as a matrix with strides, which finally enables useful operations such as
 //! initialization.
+// Be std for doctests, avoids a weird warning about missing allocator.
+#![cfg_attr(not(doctest), no_std)]
+
 use canvas::{layout, texels};
 use core::convert::TryFrom;
 use core::fmt;

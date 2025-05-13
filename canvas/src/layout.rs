@@ -1,5 +1,6 @@
 //! Defines layout and buffer of our images.
-use crate::color::{Color, ColorChannel, ColorChannelModel};
+
+use alloc::boxed::Box;
 
 use image_texel::image::{Coord, ImageRef};
 use image_texel::layout::{
@@ -7,6 +8,7 @@ use image_texel::layout::{
     Strides, TexelLayout,
 };
 
+use crate::color::{Color, ColorChannel, ColorChannelModel};
 use crate::shader::ChunkSpec;
 
 /// The byte layout of a buffer.

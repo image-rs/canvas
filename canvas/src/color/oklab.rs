@@ -1,4 +1,5 @@
 use crate::color_matrix::ColMatrix;
+use libm::powf;
 
 const M1: ColMatrix = ColMatrix([
     [0.8189330101, 0.0329845436, 0.0482003018],
@@ -94,7 +95,7 @@ pub(crate) fn f_lms_inv(lms: [f32; 3]) -> [f32; 3] {
 }
 
 fn pow([a, b, c]: [f32; 3], exp: f32) -> [f32; 3] {
-    [a.powf(exp), b.powf(exp), c.powf(exp)]
+    [powf(a, exp), powf(b, exp), powf(c, exp)]
 }
 
 fn copysign([a, b, c]: [f32; 3], [sa, sb, sc]: [f32; 3]) -> [f32; 3] {

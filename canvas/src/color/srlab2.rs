@@ -1,5 +1,6 @@
 use crate::color::Whitepoint;
 use crate::color_matrix::ColMatrix;
+use libm::powf;
 
 #[rustfmt::skip]
 const M_CAT02: ColMatrix = ColMatrix([
@@ -119,7 +120,7 @@ fn non_linearity(lms: [f32; 3]) -> [f32; 3] {
             // Limited to 0.08 precisely
             v * 24389.0 / 2700.0
         } else {
-            1.16 * v.powf(1.0 / 3.0) - 0.16
+            1.16 * powf(v, 1.0 / 3.0) - 0.16
         }
     }
 
@@ -131,7 +132,7 @@ fn non_linearity_inv(lms: [f32; 3]) -> [f32; 3] {
         if v.abs() < 0.08 {
             v * 2700.0 / 24389.0
         } else {
-            ((v + 0.16) / 1.16).powf(3.0)
+            powf((v + 0.16) / 1.16, 3.0)
         }
     }
 
