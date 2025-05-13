@@ -1,3 +1,39 @@
+# v0.5.0
+
+For the primitive buffers:
+- `cell_buf` can be indexed by a `TexelRange<P>` for `&Cell<P>`.
+- `cell_buf` can now be compared against `[u8]`.
+- `atomic_buf` can be indexed by a `TexelRange<P>` for `AtomicSliceRef<P>`.
+- `AtomicRef` gained `store` and `load`, mirroring methods on `Cell`.
+- `AtomicSliceRef<P>` can be efficiently loaded into an owned `Vec<P>` or an
+  aligned `TexelBuffer<P>`.
+
+For images:
+- `Decay` is now presumed to result in a layout that is at most the size of the
+  previous layout, as documented. The signature of functions no longer return
+  an `Option`, panicking instead on a violation. A new set of `checked_decay`
+  makes it consistently opt-in to verify this property.
+- `as_{capacity_,}{,cell_,atomic_}buf` are now consistently available on images
+  and their reference equivalents.
+- Shared and reference image types gained `into_owned` to convert them into an
+  owned `Image<L>` buffer with the same layout.
+- `CellImage` now exposes `as_cell_buf` and `as_capacity_cell_buf`.
+- `AtomicImage` now exposes `as_atomic_buf`
+
+The `image::data` module:
+- Added this module to interface between aligned image buffers and unaligned
+  external byte buffers. You can wrap `&[u8]`, `&mut [u8]` and `&[Cell<u8>]` to
+  transfer data between them.
+- Images have an `assign` method for transferring data _and_ layout. These are
+  fallible on all images other than `Image`, which can always reallocate its
+  buffers instead.
+- All images have `as_source` and `as_target` to treat them as unaligned slices
+  for the sake of interfaces specified as such. Copying relies on dynamic
+  dispatch, so these share the exact type of unaligned data buffers.
+
+Documentation:
+- received a major overhaul and a preface overview of the library.
+
 # v0.4.0
 
 - Add `AtomicImage`, `CellImage` and several supporting types and interfaces.
