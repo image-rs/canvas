@@ -85,14 +85,21 @@ impl<L: Layout> AtomicImage<L> {
     /// original image if the buffer does not fit the new layout. Returns `Ok` with the new image
     /// if the buffer does fit. Never reallocates the buffer, the new image will always alias any
     /// other image sharing the buffer.
-    pub fn try_with_layout<M>(self, layout: M) -> Result<AtomicImage<M>, Self>
+    ///
+    /// This returns a [`BufferReuseError`] with information about the exceeded limits. If you need
+    /// the prior value then you can make a [`AtomicImage::clone`]` of it, it is cheap.
+    pub fn try_with_layout<M>(self, layout: M) -> Result<AtomicImage<M>, BufferReuseError>
     where
         M: Layout,
     {
-        self.inner
-            .try_reinterpret(layout)
-            .map(Into::into)
-            .map_err(Into::into)
+        let requested = layout.byte_len();
+        match self.inner.try_reinterpret(layout) {
+            Ok(raw) => Ok(raw.into()),
+            Err(err) => Err(BufferReuseError {
+                capacity: err.as_capacity_atomic_buf().len(),
+                requested: Some(requested),
+            }),
+        }
     }
 
     /// Attempt to modify the layout to a new value, without modifying its type.

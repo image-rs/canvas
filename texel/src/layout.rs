@@ -24,6 +24,7 @@ pub(crate) use upsampling::Yuv420p;
 /// This is a minimal implementation of the basic `Layout` trait. It does not provide any
 /// additional semantics for the buffer bytes described by it. All other layouts may be converted
 /// into this layout.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub struct Bytes(pub usize);
 
 /// Describes the byte layout of an texture element, untyped.
