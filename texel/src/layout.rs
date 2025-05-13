@@ -10,14 +10,12 @@ use core::{alloc, cmp};
 mod matrix;
 mod planar;
 mod relocated;
-mod upsampling;
 
 use crate::image::{Coord, ImageMut, ImageRef};
 pub use crate::stride::{BadStrideError, StrideSpec, StridedBytes, StridedLayout, Strides};
 pub use matrix::{Matrix, MatrixBytes, MatrixLayout};
 pub use planar::{PlaneBytes, PlaneMatrices, Planes};
 pub use relocated::Relocated;
-pub(crate) use upsampling::Yuv420p;
 
 /// A byte layout that only describes the user bytes.
 ///
@@ -442,20 +440,6 @@ impl AlignedOffset {
     }
 }
 
-/// A dynamic descriptor of an image's layout.
-///
-/// FIXME: figure out if this is 'right' to expose in this crate.
-#[derive(Clone, Debug, PartialEq, Eq, Hash)]
-pub(crate) struct DynLayout {
-    pub(crate) repr: LayoutRepr,
-}
-
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
-pub(crate) enum LayoutRepr {
-    Matrix(MatrixBytes),
-    Yuv420p(Yuv420p),
-}
-
 /// An error indicating that mending failed due to mismatching pixel attributes.
 ///
 /// This struct is used when a layout with dynamic pixel information should be mended into another
@@ -571,15 +555,6 @@ impl<T> From<Texel<T>> for TexelLayout {
     }
 }
 
-impl DynLayout {
-    pub fn byte_len(&self) -> usize {
-        match self.repr {
-            LayoutRepr::Matrix(matrix) => matrix.byte_len(),
-            LayoutRepr::Yuv420p(matrix) => matrix.byte_len(),
-        }
-    }
-}
-
 impl Layout for Bytes {
     fn byte_len(&self) -> usize {
         self.0
@@ -601,12 +576,6 @@ impl<'lt, T: Layout + ?Sized> Layout for &'lt mut T {
 impl Take for Bytes {
     fn take(&mut self) -> Self {
         Bytes(core::mem::take(&mut self.0))
-    }
-}
-
-impl Layout for DynLayout {
-    fn byte_len(&self) -> usize {
-        DynLayout::byte_len(self)
     }
 }
 
@@ -697,25 +666,8 @@ macro_rules! bytes_from_layout {
     };
 }
 
-bytes_from_layout!(DynLayout);
 bytes_from_layout!(MatrixBytes);
 bytes_from_layout!(<P> Matrix);
-
-impl From<MatrixBytes> for DynLayout {
-    fn from(matrix: MatrixBytes) -> Self {
-        DynLayout {
-            repr: LayoutRepr::Matrix(matrix),
-        }
-    }
-}
-
-impl From<Yuv420p> for DynLayout {
-    fn from(matrix: Yuv420p) -> Self {
-        DynLayout {
-            repr: LayoutRepr::Yuv420p(matrix),
-        }
-    }
-}
 
 impl<P, L> PlaneOf<&'_ L> for P
 where

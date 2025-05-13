@@ -1,4 +1,4 @@
-use crate::layout::TexelLayout;
+use image_texel::layout::TexelLayout;
 
 /// Planar chroma 2×2 block-wise sub-sampled image.
 ///
@@ -24,7 +24,7 @@ impl Yuv420p {
         let uv_count = y_count / 2;
 
         let count = y_count.checked_add(uv_count)?;
-        let _ = count.checked_mul(channel.size)?;
+        let _ = count.checked_mul(channel.size())?;
 
         Some(Yuv420p {
             channel,
@@ -34,7 +34,7 @@ impl Yuv420p {
     }
 
     pub const fn byte_len(self) -> usize {
-        let ylen = (self.width as usize) * (self.height as usize) * self.channel.size;
+        let ylen = (self.width as usize) * (self.height as usize) * self.channel.size();
         ylen + ylen / 2
     }
 }
