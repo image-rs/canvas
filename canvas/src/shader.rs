@@ -2,6 +2,7 @@
 //!
 //! Takes quite a lot of inspiration from how GPUs work. We have a primitive sampler unit, a
 //! fragment unit, and pipeline multiple texels in parallel.
+use alloc::vec::Vec;
 use core::ops::Range;
 use image_texel::image::{ImageMut, ImageRef};
 use image_texel::{AsTexel, Texel, TexelBuffer};
@@ -1482,7 +1483,9 @@ impl CommonPixel {
                 // FIXME: do the transform u32::from_ne_bytes(x.as_ne_bytes()) when appropriate.
                 join_fn: |num, bits, idx| {
                     let max_val = bits.mask();
-                    let raw = (num[(idx & 0x3) as usize] * max_val as f32).round() as u32;
+                    // Equivalent to `x.round() as u32` for positive-normal f32
+                    let round = |x| (x + 0.5) as u32;
+                    let raw = round(num[(idx & 0x3) as usize] * max_val as f32);
                     raw.min(max_val)
                 },
                 bits,
