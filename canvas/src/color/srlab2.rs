@@ -1,6 +1,6 @@
 use crate::color::Whitepoint;
 use crate::color_matrix::ColMatrix;
-use crate::math::powf;
+use libm::powf;
 
 #[rustfmt::skip]
 const M_CAT02: ColMatrix = ColMatrix([

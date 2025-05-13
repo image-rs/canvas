@@ -1,7 +1,7 @@
 /// To emulate the syntax used in GLSL more closely.
 #[inline]
 fn pow(base: f32, exp: f32) -> f32 {
-    crate::math::powf(base, exp)
+    libm::powf(base, exp)
 }
 
 pub fn transfer_oe_bt709(val: f32) -> f32 {

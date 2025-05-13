@@ -73,8 +73,6 @@ mod color_matrix;
 mod frame;
 /// The layout implementation, builders, descriptors.
 pub mod layout;
-/// Core maths operations.
-mod math;
 /// Conversion operation.
 mod shader;
 

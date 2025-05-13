@@ -1,5 +1,5 @@
 use crate::color_matrix::ColMatrix;
-use crate::math::powf;
+use libm::powf;
 
 const M1: ColMatrix = ColMatrix([
     [0.8189330101, 0.0329845436, 0.0482003018],
