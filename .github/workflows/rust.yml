@@ -12,24 +12,41 @@ jobs:
         rust: [ stable, nightly ]
     runs-on: ${{ matrix.runson }}
     steps:
-    - uses: actions/checkout@v2
-    - uses: actions-rs/toolchain@v1
+    - uses: actions/checkout@v4
+    - uses: dtolnay/rust-toolchain@stable
       with:
-        toolchain: stable
-        override: true
+        toolchain: ${{ matrix.rust }}
+    - name: Cache Cargo Dependencies
+      uses: Swatinem/rust-cache@v2
+      with:
+        cache-on-failure: true
     - name: build
       run: |
         cargo build --verbose
         cargo test --verbose
         cargo doc --verbose
+  miri:
+    runs-on: ubuntu-latest
+    steps:
+    - uses: actions/checkout@v4
+    - uses: dtolnay/rust-toolchain@stable
+      with:
+        toolchain: nightly
+        components: miri
+    - name: Cache Cargo Dependencies
+      uses: Swatinem/rust-cache@v2
+      with:
+        cache-on-failure: true
+    - name: miri-test
+      run: |
+        cargo +nightly miri test -p image-texel
   rustfmt:
     runs-on: ubuntu-latest
     steps:
-    - uses: actions/checkout@v2
-    - uses: actions-rs/toolchain@v1
+    - uses: actions/checkout@v4
+    - uses: dtolnay/rust-toolchain@stable
       with:
         toolchain: stable
-        override: true
         components: rustfmt
     - name: Run rustfmt check
       uses: actions-rs/cargo@v1

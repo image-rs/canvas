@@ -6,31 +6,37 @@ a more efficient interface to casting the data or rearranging the contents.
 
 ## What it is
 
-The buffer types provided provide several utility operations out of the box, or
-they can be used as internal structures on which a more concrete interface is
-built.
+The goal is to create a comprehensive library that supplements the standard
+`alloc` library specifically for texture buffers, bags of bytes which are
+mostly dynamically typed with regards to the data types and layout they
+contain. The main problem is the ability to convert from this weak typing to
+stronger typing needed for efficient and custom computation in ad-hoc settings.
 
-- As the inner type of opaque image struct that offers conversion.
-- As standard forms of particularly shaped image data in interfaces.
-- As references to image data with their layout attached.
-- As a basis for optimized transform libraries.
-- As a mechanism for an FFI interface.
+This library is therefore strictly `no_std` (but with `extern crate alloc`).
 
-## Why
+This crate defines special buffers around `Texel`s. With that term we mean a
+non-empty, plain-old-data type with reasonable alignment, i.e. not needing to
+be aligned to a page but aligned to about the largest register size. Since we
+can interact with such values on a byte-for-byte level we provide interactions
+with byte slices, cells, and atomics, polymorphic buffers that can be
+reinterpreted with almost no cost, and layout-imbued image containers.
 
-After [some discussion](https://github.com/image-rs/image/pull/885) it
-was concluded that there is likely no safe way to reinterpret the allocation of
-a `Vec<T>` for a different `Vec<U>`, except in a very restricted set of cases¹.
-This includes grouping samples in logic pixel structs, even if those are
-annotated `#[repr(C)]` or alike. This is hardly the fault of `Vec<_>`, as
-images and the necessary transmutations of the representative binary data are
-*far* from general but `Vec` must be.
+## Motivation
 
-¹This was slightly relaxed in Rust 1.61 where few casts such as `Vec<[u8; 3]>`
-to `Vec<u8>` are now permitted, and the reverse under a restricted set of
-circumstances. This may provide us a good 'out' to perform zero-allocation
-conversion into and from a standard vector. It's still far from flexible enough
-for most high-performance needs.
+As `wgpu` discovered early on, it isn't a good idea to try encode too much of
+dynamic information such as layouts of textures into the type system. Despite
+this realization, most libraries interacting with image data define structs
+such as `Rgb` or `Luma` and their buffers in terms of those. And to complicate
+matters further, these are often not interchangeable. Thus a host of ad-hoc
+casting with `bytemuck` or, worse, `unsafe` code ensues with anything from
+dubious to broken effect.
+
+To avoid engaging with the rather Sisyphean task of unifying the ecosystem's
+representation of pixel data and enumerating uncountable different texel
+formats across GPU vendors etc we let you bring your own type. You describe the
+texels and your layout only as much as necessary for the containers to work,
+and the library utilizes the extra knowledge of your data being `Copy` to run
+on bytes.
 
 ## What it is not
 
@@ -42,7 +48,14 @@ though we may not accept PRs to introduce additional complexity motivated
 solely by such use. Rather, use the code and free license to shape it to those
 other needs.
 
+It is also not an opinionated interface. This crate offers the general
+mechanisms for safely and soundly dealing with texel buffers. The user API for
+handling real world data, including image metadata, color interpretation, is
+left to a higher level crate.
+
 ## Todo
 
 * Safely wrap SIMD iteration/transmutation/map-operation that are sound under
-  the alignment guarantees of the buffer and slice types provided.
+  the alignment guarantees of the buffer and slice types provided. `std::simd`
+  is a good attempt at this and we may mostly provide interoperability in the
+  form of `Texel` constants.

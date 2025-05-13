@@ -1,16 +1,15 @@
-//! A color-accurate software frame buffer.
+//! An opinionated in-memory buffer for image data.
 //!
-//! Please note, color is a work-in-progress with spotty support. See all locations marked with
-//! `FIXME(color):` for progress. See `FIXME(perf)` for known suboptimal performance.
+//! # General Usage
 //!
-//! Separately, planar support is also a work-in-progress. See `FIXME(planar)` for progress.
+//! Let us start by creating a simple RgbA buffer. For this we need to:
 //!
-//! # Usage
+//! 1. Specify the texel type with the right depth and channels.
+//! 2. Define the layout, a plain matrix with width and height
+//! 3. Allocate the frame with the layout
 //!
-//! Creating a simple RgbA frame buffer is as a easy as:
-//! 1. Specifying a texel with the right depth and channels
-//! 2. Defining the layout, with width and height
-//! 3. Allocating the frame utilizing the layout
+//! [1]: https://crates.io/crates/rgb
+//! [2]: https://crates.io/crates/palette
 //!
 //! ```
 //! use image_canvas::Canvas;

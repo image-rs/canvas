@@ -1,8 +1,8 @@
 use image_texel::texels::{AtomicBuffer, U32};
 use std::{mem, thread};
 
-#[test]
-#[cfg(not(miri))]
+#[cfg_attr(not(miri), test)]
+#[cfg_attr(miri, allow(unused))]
 fn mapping_atomics_parallel() {
     const LEN: usize = 128;
     let buffer = AtomicBuffer::new(LEN * mem::size_of::<u32>());

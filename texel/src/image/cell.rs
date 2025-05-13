@@ -21,7 +21,7 @@ use core::cell::Cell;
 ///
 /// ```
 /// use image_texel::{image::CellImage, layout::Matrix};
-/// let matrix = Matrix::<u8>::width_and_height(400, 400).unwrap();
+/// let matrix = Matrix::<u8>::width_and_height(16, 16).unwrap();
 /// let image: CellImage<_> = CellImage::new(matrix);
 ///
 /// let another_reference = image.clone();
@@ -75,14 +75,21 @@ impl<L: Layout> CellImage<L> {
     /// original image if the buffer does not fit the new layout. Returns `Ok` with the new image
     /// if the buffer does fit. Never reallocates the buffer, the new image will always alias any
     /// other image sharing the buffer.
-    pub fn try_with_layout<M>(self, layout: M) -> Result<CellImage<M>, Self>
+    ///
+    /// This returns a [`BufferReuseError`] with information about the exceeded limits. If you need
+    /// the prior value then you can make a [`CellImage::clone`]` of it, it is cheap.
+    pub fn try_with_layout<M>(self, layout: M) -> Result<CellImage<M>, BufferReuseError>
     where
         M: Layout,
     {
-        self.inner
-            .try_reinterpret(layout)
-            .map(Into::into)
-            .map_err(Into::into)
+        let requested = layout.byte_len();
+        match self.inner.try_reinterpret(layout) {
+            Ok(raw) => Ok(raw.into()),
+            Err(err) => Err(BufferReuseError {
+                capacity: err.as_capacity_cell_buf().len(),
+                requested: Some(requested),
+            }),
+        }
     }
 
     /// Attempt to modify the layout to a new value, without modifying its type.
@@ -108,13 +115,13 @@ impl<L: Layout> CellImage<L> {
     ///
     /// ```
     /// # use image_texel::{image::CellImage, layout::Matrix, layout};
-    /// let matrix = Matrix::<u8>::width_and_height(400, 400).unwrap();
+    /// let matrix = Matrix::<u8>::width_and_height(32, 32).unwrap();
     /// let image: CellImage<layout::Matrix<u8>> = CellImage::new(matrix);
     ///
     /// // to turn hide the `u8` type but keep width, height, texel layout
     /// let as_bytes: CellImage<layout::MatrixBytes> = image.clone().decay();
-    /// assert_eq!(as_bytes.layout().width(), 400);
-    /// assert_eq!(as_bytes.layout().height(), 400);
+    /// assert_eq!(as_bytes.layout().width(), 32);
+    /// assert_eq!(as_bytes.layout().height(), 32);
     /// ```
     ///
     /// See also [`CellImage::mend`] and [`CellImage::try_mend`] for operations that reverse
@@ -125,7 +132,7 @@ impl<L: Layout> CellImage<L> {
     ///
     /// ```
     /// # use image_texel::{image::CellImage, layout::Matrix, layout};
-    /// let matrix = Matrix::<u8>::width_and_height(400, 400).unwrap();
+    /// let matrix = Matrix::<u8>::width_and_height(32, 32).unwrap();
     ///
     /// // Can always decay to a byte buffer.
     /// let bytes: CellImage = CellImage::new(matrix).decay();

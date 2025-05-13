@@ -113,6 +113,6 @@ fn pow3([a, b, c]: [f32; 3]) -> [f32; 3] {
 #[test]
 fn inverse() {
     const XYZA: [f32; 4] = [1.0, 0.0, 0.0, 1.0];
-    let xyza = oklab_to_xyz(oklab_from_xyz(XYZA));
+    let _xyza = oklab_to_xyz(oklab_from_xyz(XYZA));
     // FIXME: assert component-wise up to some expected diff.
 }
