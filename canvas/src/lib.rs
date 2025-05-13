@@ -82,8 +82,8 @@ pub use self::frame::{Canvas, Plane};
 
 pub mod canvas {
     pub use crate::frame::{
-        BytePlaneMut, BytePlaneRef, BytePlaneRef as BytePlane, ChannelsMut, ChannelsRef, PlaneMut,
-        PlaneRef,
+        ArcCanvas, BytePlaneAtomics, BytePlaneCells, BytePlaneMut, BytePlaneRef,
+        BytePlaneRef as BytePlane, ChannelsMut, ChannelsRef, PlaneMut, PlaneRef, RcCanvas,
     };
 }
 

@@ -1,5 +1,4 @@
 use crate::layout::{SampleBits, SampleParts};
-use image_texel::AsTexel;
 use image_texel::Texel;
 
 /// Specifies which bits a channel comes from, within a `TexelKind` aggregate.

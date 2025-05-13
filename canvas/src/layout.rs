@@ -5,8 +5,8 @@ use alloc::boxed::Box;
 
 use image_texel::image::{Coord, ImageRef};
 use image_texel::layout::{
-    Decay, Layout as ImageLayout, MatrixBytes, Raster, SliceLayout, StrideSpec, StridedBytes,
-    Strides, TexelLayout,
+    AlignedOffset, Decay, Layout as ImageLayout, MatrixBytes, PlaneOf, Raster, Relocate,
+    SliceLayout, StrideSpec, StridedBytes, Strides, TexelLayout,
 };
 
 use crate::color::{Color, ColorChannel, ColorChannelModel};
@@ -44,6 +44,10 @@ pub struct CanvasLayout {
     /// Additional color planes, if any.
     pub(crate) planes: Box<[Plane]>,
 }
+
+/// …
+#[derive(Clone, Copy, Debug)]
+pub(crate) struct PlaneIdx(pub(crate) u8);
 
 /// The layout of a single color plane, internal.
 ///
@@ -1181,6 +1185,14 @@ impl<T> ChannelLayout<T> {
     }
 }
 
+impl PlaneOf<CanvasLayout> for PlaneIdx {
+    type Plane = PlaneBytes;
+
+    fn get_plane(self, layout: &CanvasLayout) -> Option<Self::Plane> {
+        layout.plane(self.0)
+    }
+}
+
 impl LayoutError {
     const NO_INFO: Self = LayoutError {
         inner: LayoutErrorInner::NoInfo,
@@ -1385,5 +1397,20 @@ impl From<&'_ PlaneBytes> for CanvasLayout {
             color: None,
             planes: Box::default(),
         }
+    }
+}
+
+impl Relocate for PlaneBytes {
+    fn byte_offset(&self) -> usize {
+        self.matrix.spec().offset
+    }
+
+    fn relocate(&mut self, offset: AlignedOffset) {
+        let mut spec = self.matrix.spec();
+        spec.offset = offset.get();
+        self.matrix = match StridedBytes::new(spec) {
+            Err(_) => panic!("Relocated offset out-of-bounds"),
+            Ok(m) => m,
+        };
     }
 }
