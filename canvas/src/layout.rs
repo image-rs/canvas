@@ -1,4 +1,5 @@
 //! Defines layout and buffer of our images.
+mod upsampling;
 
 use alloc::boxed::Box;
 

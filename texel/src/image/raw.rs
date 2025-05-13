@@ -1,7 +1,7 @@
 use core::ops;
 
 use crate::buf::{atomic_buf, buf, cell_buf, AtomicBuffer, Buffer, CellBuffer};
-use crate::layout::{Decay, DynLayout, Layout, SliceLayout, Take};
+use crate::layout::{Decay, Layout, SliceLayout, Take};
 use crate::{BufferReuseError, TexelBuffer};
 
 /// Inner buffer implementation.
@@ -118,24 +118,6 @@ impl<B: BufferLike, L> RawImage<B, L> {
         RawImage {
             buffer: BufferLike::into_owned(self.buffer),
             layout: self.layout,
-        }
-    }
-}
-
-/// Methods specifically with a dynamic layout.
-impl<B> RawImage<B, DynLayout> {
-    pub(crate) fn try_from_dynamic<Other>(self, layout: Other) -> Result<RawImage<B, Other>, Self>
-    where
-        Other: Into<DynLayout> + Clone,
-    {
-        let reference = layout.clone().into();
-        if self.layout == reference {
-            Ok(RawImage {
-                buffer: self.buffer,
-                layout,
-            })
-        } else {
-            Err(self)
         }
     }
 }
