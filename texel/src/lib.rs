@@ -26,7 +26,7 @@
 //!
 //! 1. [General Usage](#general-usage)
 //!     1. [Planar layouts](#planar-layouts)
-//!     22 [Concurrent editing](#concurrent-editing)
+//!     2. [Concurrent editing](#concurrent-editing)
 //! 2. [Image data transfer](#image-data-transfer)
 //!
 //! # General Usage
@@ -36,7 +36,8 @@
 //! to the `netpbm` implementation. Note how we can convert quite freely between different ways of
 //! viewing the data.
 //!
-//! ```
+#![cfg_attr(not(miri), doc = "```")]
+#![cfg_attr(miri, doc = "```no_run")] // too expensive and pointless
 //! use image_texel::{Matrix, Image, texels::U16};
 //! // Editing is simpler with the `Matrix` type.
 //! let mut matrix = Matrix::<[u16; 4]>::with_width_and_height(400, 400);
@@ -70,7 +71,8 @@
 //! encouraged for reusing buffers. However, of course when you do you may be a little surprised
 //! with the data you find—the data is not zeroed.
 //!
-//! ```
+#![cfg_attr(not(miri), doc = "```")]
+#![cfg_attr(miri, doc = "```no_run")] // too expensive and pointless
 //! use image_texel::{Image, layout, texels};
 //! let matrix_u8 = layout::Matrix::from_width_height(texels::U8, 32, 32).unwrap();
 //! let mut image = Image::new(matrix_u8);
@@ -115,7 +117,8 @@
 //! and layout value that is chooses. This buffer behaves very similar to an [`Image`] except that
 //! its operations do not reallocate the buffer as this would remove the sharing.
 //!
-//! ```
+#![cfg_attr(not(miri), doc = "```")]
+#![cfg_attr(miri, doc = "```no_run")] // too expensive and pointless
 //! use image_texel::{image::CellImage, layout, texels};
 //!
 //! let matrix = layout::Matrix::from_width_height(texels::U32, 32, 32).unwrap();
@@ -125,11 +128,56 @@
 //! // Another way to refer to that image may be interpreting each u32 as 4 channels.
 //! let matrix = layout::Matrix::from_width_height(texels::U8.array::<4>(), 32, 32).unwrap();
 //! let image_rgba = image_u32.clone().try_with_layout(matrix)?;
+//!
+//! // Let's pretend we have some async thread pool that reads into the image and works on it:
+//! # fn spawn_local<T>(_: T) {} // hey this is just for show. The types are not accurate
+//!
+//! // We do not care about the component type in this function.
+//! async fn fill_image(matrix: CellImage<layout::MatrixBytes>) {
+//!     loop {
+//!       // .. refill the buffer by reads whenever we are signalled.
+//!     }
+//! }
+//!
+//! async fn consume_buffer(matrix: CellImage<layout::Matrix<[u8; 4]>>) {
+//!  // do some work on each new image.
+//! }
+//!
+//! spawn_local(fill_image(image_u32.decay()));
+//! spawn_local(consume_buffer(image_rgba));
+//!
 //! # Ok::<_, image_texel::BufferReuseError>(())
 //! ```
 //!
-//! An [`AtomicImage`][`image::AtomicImage`] can be shared between threads but its buffer modifications
-//! but is shared
+//! An [`AtomicImage`][`image::AtomicImage`] can be shared between threads but its buffer
+//! modifications are not straightforward. In simplistic terms, it allows modifying disjunct parts
+//! of images concurrently but you should synchronize all modifications on the same part, e.g. via
+//! a lock, when the result values of those modifications is important. It always maintains
+//! soundness guarantees with such modifications.
+//!
+#![cfg_attr(not(miri), doc = "```")]
+#![cfg_attr(miri, doc = "```no_run")] // too expensive and pointless
+//! use image_texel::{image::AtomicImage, layout, texels};
+//!
+//! let matrix = layout::Matrix::from_width_height(texels::U8.array::<4>(), 1920, 1080).unwrap();
+//! let image = AtomicImage::new(matrix);
+//!
+//! # struct PretendThisDefinesABlock;
+//! # fn matrix_tiles(_: &impl layout::MatrixLayout) -> Vec<PretendThisDefinesABlock> { vec![] }
+//! # fn fill_block(_: AtomicImage<layout::Matrix<[u8; 4]>>, _: PretendThisDefinesABlock) {}
+//!
+//! std::thread::scope(|s| {
+//!     // Decouple our work into tiles of the original image.
+//!     for tile in matrix_tiles(image.layout()) {
+//!         let work_image = image.clone();
+//!         s.spawn(move || {
+//!             fill_block(work_image, tile);
+//!         });
+//!     }
+//! });
+//!
+//! # Ok::<_, image_texel::BufferReuseError>(())
+//! ```
 //!
 //! # Image data transfer
 //!

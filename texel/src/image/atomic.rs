@@ -31,7 +31,7 @@ use crate::{BufferReuseError, Texel, TexelBuffer};
 ///
 /// ```
 /// use image_texel::{image::AtomicImage, layout::Matrix};
-/// let matrix = Matrix::<u8>::width_and_height(400, 400).unwrap();
+/// let matrix = Matrix::<u8>::width_and_height(32, 32).unwrap();
 /// let image: AtomicImage<_> = AtomicImage::new(matrix);
 ///
 /// let another_reference = image.clone();
@@ -125,13 +125,13 @@ impl<L: Layout> AtomicImage<L> {
     ///
     /// ```
     /// # use image_texel::{image::AtomicImage, layout::Matrix, layout};
-    /// let matrix = Matrix::<u8>::width_and_height(400, 400).unwrap();
+    /// let matrix = Matrix::<u8>::width_and_height(32, 32).unwrap();
     /// let image: AtomicImage<layout::Matrix<u8>> = AtomicImage::new(matrix);
     ///
     /// // to turn hide the `u8` type but keep width, height, texel layout
     /// let as_bytes: AtomicImage<layout::MatrixBytes> = image.clone().checked_decay().unwrap();
-    /// assert_eq!(as_bytes.layout().width(), 400);
-    /// assert_eq!(as_bytes.layout().height(), 400);
+    /// assert_eq!(as_bytes.layout().width(), 32);
+    /// assert_eq!(as_bytes.layout().height(), 32);
     /// ```
     ///
     /// See also [`AtomicImage::mend`] and [`AtomicImage::try_mend`] for operations that reverse
@@ -142,7 +142,7 @@ impl<L: Layout> AtomicImage<L> {
     ///
     /// ```
     /// # use image_texel::{image::AtomicImage, layout::Matrix, layout};
-    /// let matrix = Matrix::<u8>::width_and_height(400, 400).unwrap();
+    /// let matrix = Matrix::<u8>::width_and_height(16, 16).unwrap();
     ///
     /// // Can always decay to a byte buffer.
     /// let bytes: AtomicImage = AtomicImage::new(matrix).checked_decay().unwrap();
