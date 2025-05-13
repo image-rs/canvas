@@ -107,6 +107,7 @@ impl Differencing {
 struct Bt407MPal;
 struct Bt407MPalPrecise;
 struct Pal525;
+#[expect(dead_code)]
 struct Pal625;
 struct Bt601;
 struct Bt601Quantized;
@@ -118,6 +119,7 @@ struct Bt2020;
 struct Bt2100;
 struct YDbDr;
 struct YCoCg;
+#[expect(dead_code)]
 struct YCoCgR;
 
 // We derive the coefficients from scratch, from their definition.

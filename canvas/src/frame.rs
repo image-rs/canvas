@@ -22,6 +22,7 @@ pub struct Plane {
     inner: Image<PlaneBytes>,
 }
 
+#[expect(dead_code)]
 #[doc(hidden)]
 #[deprecated = "Use BytePlaneRef"]
 pub type BytePlane<'data> = BytePlaneRef<'data>;

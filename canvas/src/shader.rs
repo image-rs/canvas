@@ -1232,6 +1232,7 @@ impl CommonPixel {
         )
     }
 
+    #[expect(dead_code)]
     fn expand_yuy2(info: &Info, in_texel: &TexelBuffer, pixel_buf: &mut TexelBuffer) {
         struct ExpandYuy2;
 
