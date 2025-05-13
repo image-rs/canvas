@@ -1,5 +1,4 @@
 use crate::layout::{SampleBits, SampleParts};
-#[expect(unused_imports)]
 use image_texel::AsTexel;
 use image_texel::Texel;
 

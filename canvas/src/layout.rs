@@ -378,7 +378,6 @@ pub enum SampleBits {
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub(crate) enum BitEncoding {
-    #[expect(dead_code)]
     Opaque,
     UInt,
     Int,
