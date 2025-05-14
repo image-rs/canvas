@@ -490,7 +490,53 @@ impl<L: SliceLayout> Image<L> {
     }
 }
 
+impl<'data> ImageRef<'data, Bytes> {
+    /// Wrap aligned data as an image.
+    ///
+    /// # Examples
+    ///
+    /// You can create a reference without an allocated buffer underneath:
+    ///
+    /// ```
+    /// use image_texel::{image::ImageRef, texels};
+    /// let mut data = [texels::MAX.zeroed(); 16];
+    /// // … somehow initialize that data, for instance through its bytes.
+    /// let _ = texels::MAX.to_mut_bytes(&mut data);
+    ///
+    /// // Convert into an image buffer:
+    /// let image = ImageRef::new(texels::buf::new(&data));
+    /// ```
+    pub fn new(data: &'data buf) -> Self {
+        RawImage::from_buffer(Bytes(data.len()), data).into()
+    }
+}
+
 impl<'data, L> ImageRef<'data, L> {
+    /// Construct an image over a buffer, with a specific layout.
+    ///
+    /// # Examples
+    ///
+    /// You can create an image on the stack:
+    ///
+    /// ```
+    /// use image_texel::{image::ImageRef, layout, texels};
+    ///
+    /// const LEN: usize = 256usize.div_ceil(texels::MAX.size());
+    /// let mut data = [texels::MAX.zeroed(); LEN];
+    /// // … somehow initialize that data, for instance through its bytes.
+    /// let _ = texels::MAX.to_mut_bytes(&mut data);
+    ///
+    /// let layout = layout::Matrix::from_width_height(texels::U8, 16, 16).unwrap();
+    /// // Convert into an image buffer:
+    /// let image = ImageRef::from_layout(texels::buf::new(&data), layout);
+    /// ```
+    pub fn from_layout(data: &'data buf, layout: L) -> Self
+    where
+        L: Layout,
+    {
+        RawImage::from_buffer(layout, data).into()
+    }
+
     /// Get a reference to those bytes used by the layout.
     pub fn as_bytes(&self) -> &[u8]
     where
@@ -787,7 +833,65 @@ impl<'data, L> ImageRef<'data, L> {
     }
 }
 
+impl<'data> ImageMut<'data, Bytes> {
+    /// Wrap aligned data as a buffer for an image.
+    ///
+    /// # Examples
+    ///
+    /// You can create a buffer, then later transfer data and layout through [`data`].
+    ///
+    /// ```
+    /// use image_texel::{image::ImageMut, image::data, layout, texels};
+    ///
+    /// // Create our stack based image buffer.
+    /// let mut data = [texels::MAX.zeroed(); 16];
+    /// let image = ImageMut::new(texels::buf::new_mut(&mut data));
+    ///
+    /// # fn somewhere() -> data::DataRef<'static, layout::Matrix<u8>> {
+    /// #     let l = layout::Matrix::from_width_height(texels::U8, 4, 4).unwrap();
+    /// #     data::DataRef::with_layout_at(&[0; 16], l, 0).unwrap()
+    /// # }
+    /// // Now assume we have data from somewhere:
+    /// let data: data::DataRef<'_, layout::Matrix<u8>> = somewhere();
+    ///
+    /// let Some(image) = data.as_source().write_to_mut(image) else {
+    ///     return; // Okay, our stack buffer was too small..
+    /// };
+    ///
+    /// // We now have a typed image buffer on the stack.
+    /// let image: ImageMut<layout::Matrix<u8>> = image;
+    /// ```
+    pub fn new(data: &'data mut buf) -> Self {
+        RawImage::from_buffer(Bytes(data.len()), data).into()
+    }
+}
+
 impl<'data, L> ImageMut<'data, L> {
+    /// Construct an image over a buffer, with a specific layout.
+    ///
+    /// # Examples
+    ///
+    /// You can create an image on the stack:
+    ///
+    /// ```
+    /// use image_texel::{image::ImageMut, layout, texels};
+    ///
+    /// const LEN: usize = 256usize.div_ceil(texels::MAX.size());
+    /// let mut data = [texels::MAX.zeroed(); LEN];
+    /// // … somehow initialize that data, for instance through its bytes.
+    /// let _ = texels::MAX.to_mut_bytes(&mut data);
+    ///
+    /// let layout = layout::Matrix::from_width_height(texels::U8, 16, 16).unwrap();
+    /// // Convert into an image buffer:
+    /// let image = ImageMut::from_layout(texels::buf::new_mut(&mut data), layout);
+    /// ```
+    pub fn from_layout(data: &'data mut buf, layout: L) -> Self
+    where
+        L: Layout,
+    {
+        RawImage::from_buffer(layout, data).into()
+    }
+
     /// Get a reference to those bytes used by the layout.
     pub fn as_bytes(&self) -> &[u8]
     where
