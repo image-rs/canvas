@@ -500,6 +500,15 @@ impl atomic_buf {
         }
     }
 
+    /// Wrap aligned bytes in an atomic buffer.
+    ///
+    /// This is similar to [`Self::from_bytes_mut`] but guaranteed to work. Values of the
+    /// `MaxAligned` type always fulfills the preconditions required by the call.
+    pub fn from_max_mut(bytes: &mut [MaxAligned]) -> &Self {
+        let bytes = constants::MAX.to_mut_bytes(bytes);
+        Self::from_bytes_mut(bytes).expect("this is surely aligned")
+    }
+
     /// Wrapper around the unstable `<Atomic*>::get_mut_slice`.
     pub(crate) fn part_mut_slice(slice: &mut [AtomicPart]) -> &mut [u8] {
         let len = core::mem::size_of_val(slice);
@@ -559,6 +568,16 @@ impl cell_buf {
     pub fn from_bytes_mut(bytes: &mut [u8]) -> Option<&Self> {
         let slice = Cell::from_mut(bytes).as_slice_of_cells();
         Self::from_bytes(slice)
+    }
+
+    /// Wrap aligned bytes in an unsynchronized shared `cell_buf`.
+    ///
+    /// This is similar to [`Self::from_bytes_mut`] but guaranteed to work. Values of the
+    /// `MaxAligned` type always fulfills the preconditions required by the call.
+    pub fn from_max_mut(bytes: &mut [MaxAligned]) -> &Self {
+        let bytes = constants::MAX.to_mut_bytes(bytes);
+        let slice = Cell::from_mut(bytes).as_slice_of_cells();
+        Self::from_bytes(slice).expect("this is surely aligned")
     }
 }
 

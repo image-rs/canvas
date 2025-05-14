@@ -390,7 +390,66 @@ impl<L> CellImage<L> {
     */
 }
 
+impl<'data> CellImageRef<'data, Bytes> {
+    /// Wrap aligned data as a buffer for an image.
+    ///
+    /// # Examples
+    ///
+    /// You can create a buffer, then later transfer data and layout through [`data`].
+    ///
+    /// ```
+    /// use core::cell::Cell;
+    /// use image_texel::{image::CellImageRef, image::data, layout, texels};
+    ///
+    /// // Create our stack based image buffer.
+    /// let mut data = [texels::MAX.zeroed(); 16];
+    /// let cells = texels::cell_buf::from_max_mut(&mut data);
+    /// let image = CellImageRef::new(cells);
+    ///
+    /// # fn somewhere() -> data::DataRef<'static, layout::Matrix<u8>> {
+    /// #     let l = layout::Matrix::from_width_height(texels::U8, 4, 4).unwrap();
+    /// #     data::DataRef::with_layout_at(&[0; 16], l, 0).unwrap()
+    /// # }
+    /// // Now assume we have data from somewhere:
+    /// let data: data::DataRef<'_, layout::Matrix<u8>> = somewhere();
+    ///
+    /// let Some(image) = data.as_source().write_to_cell_ref(image) else {
+    ///     return; // Okay, our stack buffer was too small..
+    /// };
+    ///
+    /// // We now have a typed image buffer on the stack.
+    /// let image: CellImageRef<layout::Matrix<u8>> = image;
+    /// ```
+    pub fn new(data: &'data cell_buf) -> Self {
+        RawImage::from_buffer(Bytes(data.len()), data).into()
+    }
+}
+
 impl<'data, L> CellImageRef<'data, L> {
+    /// Wrap an aligned buffer, with a specified layout.
+    ///
+    /// # Examples
+    ///
+    /// You can create an image on the stack:
+    ///
+    /// ```
+    /// use image_texel::{image::CellImageRef, layout, texels};
+    ///
+    /// const LEN: usize = 256usize.div_ceil(texels::MAX.size());
+    /// let mut data = [texels::MAX.zeroed(); LEN];
+    /// let cells = texels::cell_buf::from_max_mut(&mut data);
+    ///
+    /// let layout = layout::Matrix::from_width_height(texels::U8, 16, 16).unwrap();
+    /// // Convert into an image buffer:
+    /// let image = CellImageRef::from_layout(cells, layout);
+    /// ```
+    pub fn from_layout(data: &'data cell_buf, layout: L) -> Self
+    where
+        L: Layout,
+    {
+        RawImage::from_buffer(layout, data).into()
+    }
+
     /// Get a reference to the underlying buffer.
     pub fn as_cell_buf(&self) -> &cell_buf
     where
