@@ -182,13 +182,17 @@ def_max_align! {
     /// Atomic equivalence of [`MaxAligned`].
     ///
     /// This contains some instance of [`core::sync::atomic::AtomicU8`].
+    #[repr(C)]
     struct MaxAtomic(..);
 
     /// A cell of a byte array equivalent to [`MaxAligned`].
+    #[repr(C)]
     struct MaxCell(..);
 }
 
+// Safety: MaxAligned is fundamentally an array of `u8`.
 unsafe impl bytemuck::Zeroable for MaxAligned {}
+// Safety: MaxAligned is fundamentally an array of `u8`.
 unsafe impl bytemuck::Pod for MaxAligned {}
 
 /// Wraps a type by value but removes its alignment requirement.
@@ -197,7 +201,11 @@ unsafe impl bytemuck::Pod for MaxAligned {}
 #[derive(Clone, Copy)]
 pub struct Unaligned<T>(pub T);
 
+// Safety: The inner type can be any bytes. This has the same layout except for having smaller
+// alignment and exactly a value of the field as types.
 unsafe impl<T: bytemuck::Zeroable> bytemuck::Zeroable for Unaligned<T> {}
+// Safety: The inner type can be any bytes. This has the same layout except for having smaller
+// alignment and exactly a value of the field as types. There is no padding due to packed(1).
 unsafe impl<T: bytemuck::Pod> bytemuck::Pod for Unaligned<T> {}
 
 impl<T> From<T> for Unaligned<T> {
@@ -220,10 +228,16 @@ macro_rules! builtin_texel {
     ( $name:ty ) => {
         impl AsTexel for $name {
             fn texel() -> Texel<Self> {
+                #[allow(dead_code)]
+                const fn must_be_pod<T: bytemuck::Pod>() {}
+
                 const _: () = {
+                    must_be_pod::<$name>();
                     assert!(Texel::<$name>::check_invariants());
                 };
 
+                // SAFETY: We have checked pod and layout invariants above. This is sufficient, see
+                // documentation in `Texel::new`.
                 unsafe { Texel::new_unchecked() }
             }
         }
@@ -1173,6 +1187,7 @@ impl<P> Texel<P> {
         if bytes.as_ptr() as usize % mem::align_of::<P>() == 0 {
             let len = bytes.len() / mem::size_of::<P>();
             let ptr = ptr::slice_from_raw_parts(bytes.as_ptr() as *const P, len);
+            // Safety: documented on the if block.
             Some(unsafe { &*(ptr as *const Cell<[P]>) })
         } else {
             None
