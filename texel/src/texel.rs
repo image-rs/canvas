@@ -182,13 +182,17 @@ def_max_align! {
     /// Atomic equivalence of [`MaxAligned`].
     ///
     /// This contains some instance of [`core::sync::atomic::AtomicU8`].
+    #[repr(C)]
     struct MaxAtomic(..);
 
     /// A cell of a byte array equivalent to [`MaxAligned`].
+    #[repr(C)]
     struct MaxCell(..);
 }
 
+// Safety: MaxAligned is fundamentally an array of `u8`.
 unsafe impl bytemuck::Zeroable for MaxAligned {}
+// Safety: MaxAligned is fundamentally an array of `u8`.
 unsafe impl bytemuck::Pod for MaxAligned {}
 
 /// Wraps a type by value but removes its alignment requirement.
@@ -197,7 +201,11 @@ unsafe impl bytemuck::Pod for MaxAligned {}
 #[derive(Clone, Copy)]
 pub struct Unaligned<T>(pub T);
 
+// Safety: The inner type can be any bytes. This has the same layout except for having smaller
+// alignment and exactly a value of the field as types.
 unsafe impl<T: bytemuck::Zeroable> bytemuck::Zeroable for Unaligned<T> {}
+// Safety: The inner type can be any bytes. This has the same layout except for having smaller
+// alignment and exactly a value of the field as types. There is no padding due to packed(1).
 unsafe impl<T: bytemuck::Pod> bytemuck::Pod for Unaligned<T> {}
 
 impl<T> From<T> for Unaligned<T> {
@@ -217,17 +225,33 @@ impl<T> Unaligned<T> {
 }
 
 macro_rules! builtin_texel {
-    ( $name:ty ) => {
+    ( $(#[$justification:meta] unsafe)? $name:ty ) => {
         impl AsTexel for $name {
             fn texel() -> Texel<Self> {
+                $(
+                    builtin_texel!(@justify_unsafe $justification);
+                )*
+
                 const _: () = {
                     assert!(Texel::<$name>::check_invariants());
                 };
 
+                // SAFETY: We have checked pod and layout invariants above. This is sufficient, see
+                // documentation in `Texel::new`.
                 unsafe { Texel::new_unchecked() }
             }
         }
     };
+    // If we do not have an unsafe justification, we must be `Pod`.
+    (@justify_unsafe) => {
+        #[allow(dead_code)]
+        const fn must_be_pod<T: bytemuck::Pod>() {}
+        const _: () = {
+            must_be_pod::<$name>();
+        };
+    };
+    // If we do have a justification, alright. That is our `Pod`.
+    (@justify_unsafe $justification:meta) => {};
 }
 
 pub(crate) mod constants {
@@ -357,14 +381,22 @@ mod arm {
     use super::{AsTexel, Texel};
     use core::arch::aarch64;
 
-    builtin_texel!(aarch64::float64x1_t);
-    builtin_texel!(aarch64::float64x1x2_t);
-    builtin_texel!(aarch64::float64x1x3_t);
-    builtin_texel!(aarch64::float64x1x4_t);
-    builtin_texel!(aarch64::float64x2_t);
-    builtin_texel!(aarch64::float64x2x2_t);
-    builtin_texel!(aarch64::float64x2x3_t);
-    builtin_texel!(aarch64::float64x2x4_t);
+    builtin_texel!(/// SAFETY: 1 repr-c 64 bit unit.
+        unsafe aarch64::float64x1_t);
+    builtin_texel!(/// SAFETY: 2 repr-c 64 bit unit.
+        unsafe aarch64::float64x1x2_t);
+    builtin_texel!(/// SAFETY: 3 repr-c 64 bit unit.
+        unsafe aarch64::float64x1x3_t);
+    builtin_texel!(/// SAFETY: 4 repr-c 64 bit unit.
+        unsafe aarch64::float64x1x4_t);
+    builtin_texel!(/// SAFETY: 2 repr-c 64 bit unit.
+        unsafe aarch64::float64x2_t);
+    builtin_texel!(/// SAFETY: 4 repr-c 64 bit unit.
+        unsafe aarch64::float64x2x2_t);
+    builtin_texel!(/// SAFETY: 6 repr-c 64 bit unit.
+        unsafe aarch64::float64x2x3_t);
+    builtin_texel!(/// SAFETY: 8 repr-c 64 bit unit.
+        unsafe aarch64::float64x2x4_t);
 }
 
 #[cfg(target_arch = "wasm32")]
@@ -372,7 +404,8 @@ mod arm {
     use super::{AsTexel, Texel};
     use core::arch::wasm32;
 
-    builtin_texel!(wasm32::v128);
+    builtin_texel!(/// SAFETY: 128-bits consisting of exactly 16 arbitrary bytes.
+        unsafe wasm32::v128);
 }
 
 impl<P: bytemuck::Pod> Texel<P> {
@@ -1173,6 +1206,7 @@ impl<P> Texel<P> {
         if bytes.as_ptr() as usize % mem::align_of::<P>() == 0 {
             let len = bytes.len() / mem::size_of::<P>();
             let ptr = ptr::slice_from_raw_parts(bytes.as_ptr() as *const P, len);
+            // Safety: documented on the if block.
             Some(unsafe { &*(ptr as *const Cell<[P]>) })
         } else {
             None
