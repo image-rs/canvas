@@ -225,14 +225,14 @@ impl<T> Unaligned<T> {
 }
 
 macro_rules! builtin_texel {
-    ( $name:ty ) => {
+    ( $(#[$justification:meta] unsafe)? $name:ty ) => {
         impl AsTexel for $name {
             fn texel() -> Texel<Self> {
-                #[allow(dead_code)]
-                const fn must_be_pod<T: bytemuck::Pod>() {}
+                $(
+                    builtin_texel!(@justify_unsafe $justification);
+                )*
 
                 const _: () = {
-                    must_be_pod::<$name>();
                     assert!(Texel::<$name>::check_invariants());
                 };
 
@@ -242,6 +242,16 @@ macro_rules! builtin_texel {
             }
         }
     };
+    // If we do not have an unsafe justification, we must be `Pod`.
+    (@justify_unsafe) => {
+        #[allow(dead_code)]
+        const fn must_be_pod<T: bytemuck::Pod>() {}
+        const _: () = {
+            must_be_pod::<$name>();
+        };
+    };
+    // If we do have a justification, alright. That is our `Pod`.
+    (@justify_unsafe $justification:meta) => {};
 }
 
 pub(crate) mod constants {
@@ -371,14 +381,22 @@ mod arm {
     use super::{AsTexel, Texel};
     use core::arch::aarch64;
 
-    builtin_texel!(aarch64::float64x1_t);
-    builtin_texel!(aarch64::float64x1x2_t);
-    builtin_texel!(aarch64::float64x1x3_t);
-    builtin_texel!(aarch64::float64x1x4_t);
-    builtin_texel!(aarch64::float64x2_t);
-    builtin_texel!(aarch64::float64x2x2_t);
-    builtin_texel!(aarch64::float64x2x3_t);
-    builtin_texel!(aarch64::float64x2x4_t);
+    builtin_texel!(/// SAFETY: 1 repr-c 64 bit unit.
+        unsafe aarch64::float64x1_t);
+    builtin_texel!(/// SAFETY: 2 repr-c 64 bit unit.
+        unsafe aarch64::float64x1x2_t);
+    builtin_texel!(/// SAFETY: 3 repr-c 64 bit unit.
+        unsafe aarch64::float64x1x3_t);
+    builtin_texel!(/// SAFETY: 4 repr-c 64 bit unit.
+        unsafe aarch64::float64x1x4_t);
+    builtin_texel!(/// SAFETY: 2 repr-c 64 bit unit.
+        unsafe aarch64::float64x2_t);
+    builtin_texel!(/// SAFETY: 4 repr-c 64 bit unit.
+        unsafe aarch64::float64x2x2_t);
+    builtin_texel!(/// SAFETY: 6 repr-c 64 bit unit.
+        unsafe aarch64::float64x2x3_t);
+    builtin_texel!(/// SAFETY: 8 repr-c 64 bit unit.
+        unsafe aarch64::float64x2x4_t);
 }
 
 #[cfg(target_arch = "wasm32")]
@@ -386,7 +404,8 @@ mod arm {
     use super::{AsTexel, Texel};
     use core::arch::wasm32;
 
-    builtin_texel!(wasm32::v128);
+    builtin_texel!(/// SAFETY: 128-bits consisting of exactly 16 arbitrary bytes.
+        unsafe wasm32::v128);
 }
 
 impl<P: bytemuck::Pod> Texel<P> {
