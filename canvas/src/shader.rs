@@ -2,7 +2,7 @@
 //!
 //! Takes quite a lot of inspiration from how GPUs work. We have a primitive sampler unit, a
 //! fragment unit, and pipeline multiple texels in parallel.
-use alloc::{vec::Vec, boxed::Box};
+use alloc::{boxed::Box, vec::Vec};
 use core::ops::Range;
 use image_texel::image::{AtomicImageRef, CellImageRef, ImageMut, ImageRef};
 use image_texel::{AsTexel, Texel, TexelBuffer};
@@ -14,9 +14,43 @@ use crate::layout::{
 };
 use crate::Canvas;
 
-/// A buffer for conversion.
+/// State for converting colors between canvas.
 pub struct Converter {
     inner: Box<ConverterRt>,
+}
+
+/// A planner / builder for converting frame colors.
+///
+/// This does the computation of [`Converter::run_to_completion`] step-by-step. You begin by
+/// supplying the layouts and can then alter the buffers on which it is run, make choices between
+/// alternative conversion routes introspect the plan, before executing it.
+pub struct ConverterRun<'data> {
+    /// The runtime state of the converter.
+    rt: &'data mut ConverterRt,
+    /// The layout of the input frame.
+    in_layout: CanvasLayout,
+    /// The layout of the output frame.
+    out_layout: CanvasLayout,
+    /// The computed choices of layout and color space information.
+    info: ConvertInfo,
+    /// The computed method by which to convert colors.
+    recolor: Option<RecolorOps>,
+    /// Additional parameters when the recoloring happens by int/bit shuffling.
+    int_shuffle_params: IntShuffleParameter,
+    /// Data selector that will be called when doing color transform.
+    convert_with: TexelConvertWith,
+    /// An owned collection of buffers to use.
+    buffers: ConverterBuffer<'data>,
+}
+
+#[derive(Default)]
+struct ConverterBuffer<'data> {
+    in_plane: Vec<PlaneSource<'data>>,
+    in_cell: Vec<CellSource<'data>>,
+    in_atomic: Vec<AtomicSource<'data>>,
+    out_plane: Vec<PlaneTarget<'data>>,
+    out_cell: Vec<CellTarget<'data>>,
+    out_atomic: Vec<AtomicTarget<'data>>,
 }
 
 /// Runtime state utilized by operations.
@@ -196,7 +230,15 @@ struct ConvertOps<'rt> {
     /// Well-define bit/byte/channel shuffle operations on common texel combinations.
     shuffle: ShuffleOps,
 
-    // Parameter of ops that are available, dynamically.
+    /** Parameter of ops that are available, dynamically. **/
+    /// The plane where we load data from. There may be other planes involved that are not color
+    /// data.
+    ///
+    /// FIXME: this should be an array for multi-planar data.
+    color_in_plane: usize,
+    /// The plane we write into.
+    color_out_plane: usize,
+
     /// The parameters to an integer shuffle that replaces texel conversion.
     int_shuffle_params: IntShuffleParameter,
 
@@ -284,10 +326,22 @@ impl Converter {
         }
     }
 
-    pub fn run_on(&mut self, frame_in: &Canvas, frame_out: &mut Canvas) {
+    /// Convert the color information of a whole frame into the colors of another.
+    ///
+    /// This is a combined operation that plans the internal operation for conversion, how to
+    /// schedule them across texels, how to read and write the data, and then runs all of it on
+    /// two owned canvases.
+    pub fn run_to_completion(&mut self, frame_in: &Canvas, frame_out: &mut Canvas) {
+        let mut plan = self.plan(frame_in.layout().clone(), frame_out.layout().clone());
+        plan.push_io(frame_in, frame_out);
+        plan.run();
+    }
+
+    /// Build a converter of color information from one frame into another.
+    pub fn plan(&mut self, in_layout: CanvasLayout, out_layout: CanvasLayout) -> ConverterRun<'_> {
         let info = ConvertInfo {
-            in_layout: frame_in.layout().clone(),
-            out_layout: frame_out.layout().clone(),
+            in_layout: in_layout.clone(),
+            out_layout: out_layout.clone(),
             // FIXME(perf): not optimal in all cases, but necessary for accurate conversion.
             // allow configuration / detect trivial conversion.
             common_pixel: CommonPixel::F32x4,
@@ -296,11 +350,11 @@ impl Converter {
             common_color: CommonColor::CieXyz,
             // FIXME(perf): optimal order? Or require block join to implement arbitrary reorder.
             common_blocks: CommonPixelOrder::PixelsInRowOrder,
-            in_kind: TexelKind::from(frame_in.layout().texel.bits),
-            out_kind: TexelKind::from(frame_out.layout().texel.bits),
+            in_kind: TexelKind::from(in_layout.texel.bits),
+            out_kind: TexelKind::from(out_layout.texel.bits),
         };
 
-        let recolor = Self::recolor_ops(frame_in.layout(), frame_out.layout());
+        let recolor = Self::recolor_ops(&in_layout, &out_layout);
 
         let int_shuffle = self
             .inner
@@ -331,36 +385,72 @@ impl Converter {
             }
         };
 
+        ConverterRun {
+            rt: &mut self.inner,
+            in_layout,
+            out_layout,
+            info,
+            recolor,
+            int_shuffle_params,
+            convert_with,
+            buffers: ConverterBuffer::default(),
+        }
+    }
+}
+
+impl<'data> ConverterRun<'data> {
+    /// Define a pair of input / output frames.
+    ///
+    /// Note on design: Calling this twice is pointless at the moment. There will be a method added
+    /// to choose the frames after adding them to the converter. Then the panic will be delayed to
+    /// runtime with methods of verifying your choice is appropriate to the color of the layouts,
+    /// such as one plane for rgb, two planes for separate alpha, three planes when yuv420
+    /// sub-sampling and so on.
+    ///
+    /// # Panics
+    ///
+    /// The frames must have the layout with which the converter was initialized. This is not
+    /// guaranteed to panic in future versions!
+    pub fn push_io(&mut self, frame_in: &'data Canvas, frame_out: &'data mut Canvas) {
+        assert!(frame_in.layout() == &self.in_layout);
+        assert!(frame_out.layout() == &self.out_layout);
+
+        let frame_in = frame_in.as_ref();
+        let frame_out = frame_out.as_mut();
+
+        self.buffers.in_plane.push(frame_in);
+        self.buffers.out_plane.push(frame_out);
+    }
+
+    fn run(mut self) {
         let ops = ConvertOps {
             fill_in_index: ConverterRt::index_from_in_info,
             fill_out_index: ConverterRt::index_from_out_info,
             expand: CommonPixel::expand_from_info,
-            recolor,
+            recolor: self.recolor,
             join: CommonPixel::join_from_info,
             shuffle: ShuffleOps::default().with_arch(),
-            int_shuffle_params,
-            texel: convert_with,
-            info: &info,
+            color_in_plane: 0,
+            color_out_plane: 0,
+            int_shuffle_params: self.int_shuffle_params,
+            texel: self.convert_with,
+            info: &self.info,
         };
-
-        use core::slice::{from_mut, from_ref};
-        let frame_in = frame_in.as_ref();
-        let mut frame_out = frame_out.as_mut();
 
         let plane_io = PlaneIo {
             sources: Sources {
-                sync: from_ref(&frame_in),
-                cell: &[],
-                atomic: &[],
+                sync: &self.buffers.in_plane,
+                cell: &self.buffers.in_cell,
+                atomic: &self.buffers.in_atomic,
             },
             targets: Targets {
-                sync: from_mut(&mut frame_out),
-                cell: &[],
-                atomic: &[],
+                sync: &mut self.buffers.out_plane,
+                cell: &self.buffers.out_cell,
+                atomic: &self.buffers.out_atomic,
             },
         };
 
-        self.inner.with_filled_texels(&info, &ops, plane_io)
+        self.rt.with_filled_texels(&self.info, &ops, plane_io)
     }
 }
 
@@ -477,8 +567,11 @@ impl ConverterRt {
             let in_texel = T::texel().array::<N>();
             let out_texel = T::texel().array::<M>();
 
-            let source_texels = io.sources.sync[0].as_texels(in_texel);
-            let target_texels = io.targets.sync[0].as_mut_texels(out_texel);
+            let i_idx = ops.color_in_plane;
+            let o_idx = ops.color_out_plane;
+
+            let source_texels = io.sources.sync[i_idx].as_texels(in_texel);
+            let target_texels = io.targets.sync[o_idx].as_mut_texels(out_texel);
 
             let in_texels = that.in_texels.as_texels(in_texel);
             let out_texels = that.out_texels.as_mut_texels(out_texel);
@@ -876,7 +969,7 @@ impl ConverterRt {
                 // the indicate that no texels are available from the layout.
                 *available = 0;
                 info.in_kind.action(ReadUnit {
-                    from: &from.sources.sync[0],
+                    from: &from.sources.sync[ops.color_in_plane],
                     idx: &self.in_index_list,
                     into: &mut self.in_texels,
                     range: start..start + indexes.len(),
@@ -884,7 +977,7 @@ impl ConverterRt {
             }
         } else {
             info.in_kind.action(ReadUnit {
-                from: &from.sources.sync[0],
+                from: &from.sources.sync[ops.color_in_plane],
                 idx: &self.in_index_list,
                 into: &mut self.in_texels,
                 range: 0..self.in_index_list.len(),
@@ -956,7 +1049,7 @@ impl ConverterRt {
 
                 let offset = indexes.len() - unwritten;
                 info.out_kind.action(WriteUnit {
-                    into: &mut into.targets.sync[0],
+                    into: &mut into.targets.sync[ops.color_out_plane],
                     idx: &self.out_index_list,
                     from: &self.out_texels,
                     range: start + offset..start + indexes.len(),
@@ -964,7 +1057,7 @@ impl ConverterRt {
             }
         } else {
             info.out_kind.action(WriteUnit {
-                into: &mut into.targets.sync[0],
+                into: &mut into.targets.sync[ops.color_out_plane],
                 idx: &self.out_index_list,
                 from: &self.out_texels,
                 range: 0..self.out_index_list.len(),

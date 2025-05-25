@@ -352,7 +352,7 @@ impl Canvas {
 impl Canvas {
     /// Write into another frame, converting color representation between.
     pub fn convert(&self, into: &mut Self) {
-        Converter::new().run_on(self, into)
+        Converter::new().run_to_completion(self, into)
     }
 }
 
