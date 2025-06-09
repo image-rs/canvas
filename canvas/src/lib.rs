@@ -80,6 +80,8 @@ mod tests;
 
 pub use self::frame::{Canvas, Plane};
 
+pub use self::shader::{Converter, ConverterRun, ConverterPlaneHandle};
+
 pub mod canvas {
     pub use crate::frame::{
         ArcCanvas, BytePlaneAtomics, BytePlaneCells, BytePlaneMut, BytePlaneRef,

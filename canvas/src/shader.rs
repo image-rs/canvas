@@ -41,6 +41,13 @@ pub struct ConverterRun<'data> {
     convert_with: TexelConvertWith,
     /// An owned collection of buffers to use.
     buffers: ConverterBuffer<'data>,
+    /// The planes with the primary color information in this run.
+    color_planes: PlaneConfiguration,
+}
+
+struct PlaneConfiguration {
+    in_idx: PlaneIdx,
+    out_idx: PlaneIdx,
 }
 
 #[derive(Default)]
@@ -51,6 +58,23 @@ struct ConverterBuffer<'data> {
     out_plane: Vec<PlaneTarget<'data>>,
     out_cell: Vec<CellTarget<'data>>,
     out_atomic: Vec<AtomicTarget<'data>>,
+}
+
+#[derive(Clone, Copy, Debug)]
+enum PlaneIdx {
+    Sync(u16),
+    Cell(u16),
+    Atomic(u16),
+}
+
+/// An entry of data in a `ConverterRun`.
+pub struct ConverterPlaneHandle<'run> {
+    /// The index of the plane in the converter.
+    idx: PlaneIdx,
+    /// Does this configure an in or out plane, when writing into the handle.
+    direction_in: bool,
+    /// Back reference to the run we are configuring.
+    hdl: &'run mut PlaneConfiguration,
 }
 
 /// Runtime state utilized by operations.
@@ -154,6 +178,14 @@ pub enum TexelKind {
     F32x6,
 }
 
+#[derive(Clone, Debug)]
+pub enum ConversionError {
+    InputLayoutDoesNotMatchPlan,
+    OutputLayoutDoesNotMatchPlan,
+    InputColorDoesNotMatchPlanes,
+    OutputColorDoesNotMatchPlanes,
+}
+
 pub(crate) trait GenericTexelAction<R = ()> {
     fn run<T>(self, texel: Texel<T>) -> R;
 }
@@ -235,9 +267,9 @@ struct ConvertOps<'rt> {
     /// data.
     ///
     /// FIXME: this should be an array for multi-planar data.
-    color_in_plane: usize,
+    color_in_plane: PlaneIdx,
     /// The plane we write into.
-    color_out_plane: usize,
+    color_out_plane: PlaneIdx,
 
     /// The parameters to an integer shuffle that replaces texel conversion.
     int_shuffle_params: IntShuffleParameter,
@@ -333,8 +365,9 @@ impl Converter {
     /// two owned canvases.
     pub fn run_to_completion(&mut self, frame_in: &Canvas, frame_out: &mut Canvas) {
         let mut plan = self.plan(frame_in.layout().clone(), frame_out.layout().clone());
-        plan.push_io(frame_in, frame_out);
-        plan.run();
+        plan.use_input(frame_in);
+        plan.use_output(frame_out);
+        let _ = plan.run();
     }
 
     /// Build a converter of color information from one frame into another.
@@ -394,12 +427,18 @@ impl Converter {
             int_shuffle_params,
             convert_with,
             buffers: ConverterBuffer::default(),
+            color_planes: PlaneConfiguration {
+                in_idx: PlaneIdx::Sync(0),
+                out_idx: PlaneIdx::Sync(0),
+            },
         }
     }
 }
 
 impl<'data> ConverterRun<'data> {
-    /// Define a pair of input / output frames.
+    /// Define a canvas of input color data.
+    ///
+    /// This replaces any existing input data.
     ///
     /// Note on design: Calling this twice is pointless at the moment. There will be a method added
     /// to choose the frames after adding them to the converter. Then the panic will be delayed to
@@ -411,18 +450,126 @@ impl<'data> ConverterRun<'data> {
     ///
     /// The frames must have the layout with which the converter was initialized. This is not
     /// guaranteed to panic in future versions!
-    pub fn push_io(&mut self, frame_in: &'data Canvas, frame_out: &'data mut Canvas) {
-        assert!(frame_in.layout() == &self.in_layout);
-        assert!(frame_out.layout() == &self.out_layout);
-
+    pub fn use_input(&mut self, frame_in: &'data Canvas) {
         let frame_in = frame_in.as_ref();
-        let frame_out = frame_out.as_mut();
-
+        let idx = self.buffers.in_plane.len() as u16;
         self.buffers.in_plane.push(frame_in);
-        self.buffers.out_plane.push(frame_out);
+        self.color_planes.in_idx = PlaneIdx::Sync(idx);
     }
 
-    fn run(mut self) {
+    /// Define an owned output frame to write to.
+    ///
+    /// See [`Self::use_input`] for design and details and panics.
+    pub fn use_output(&mut self, frame_out: &'data mut Canvas) {
+        let frame_out = frame_out.as_mut();
+        let idx = self.buffers.out_plane.len() as u16;
+        self.buffers.out_plane.push(frame_out);
+        self.color_planes.out_idx = PlaneIdx::Sync(idx);
+    }
+
+    /// Add a read-only slice plane to the input.
+    pub fn add_plane_in(&mut self, plane: PlaneSource<'data>) -> ConverterPlaneHandle<'_> {
+        let idx = self.buffers.in_plane.len() as u16;
+        self.buffers.in_plane.push(plane);
+        ConverterPlaneHandle {
+            idx: PlaneIdx::Cell(idx),
+            direction_in: true,
+            hdl: &mut self.color_planes,
+        }
+    }
+
+    /// Add a cell plane to the input.
+    ///
+    /// Note that this plane may overlap be the same as planes added as an output, or overlap. This
+    /// will fail at runtime when there is no algorithm to map the color data between the two.
+    pub fn add_cell_in(&mut self, plane: CellSource<'data>) -> ConverterPlaneHandle<'_> {
+        let idx = self.buffers.in_cell.len() as u16;
+        self.buffers.in_cell.push(plane);
+        ConverterPlaneHandle {
+            idx: PlaneIdx::Cell(idx),
+            direction_in: true,
+            hdl: &mut self.color_planes,
+        }
+    }
+
+    /// Add an atomic plane to the input.
+    pub fn add_atomic_in(&mut self, plane: AtomicSource<'data>) -> ConverterPlaneHandle<'_> {
+        let idx = self.buffers.in_atomic.len() as u16;
+        self.buffers.in_atomic.push(plane);
+        ConverterPlaneHandle {
+            idx: PlaneIdx::Atomic(idx),
+            direction_in: true,
+            hdl: &mut self.color_planes,
+        }
+    }
+
+    pub fn add_plane_out(&mut self, plane: PlaneTarget<'data>) -> ConverterPlaneHandle<'_> {
+        let idx = self.buffers.out_plane.len() as u16;
+        self.buffers.out_plane.push(plane);
+        ConverterPlaneHandle {
+            idx: PlaneIdx::Cell(idx),
+            direction_in: false,
+            hdl: &mut self.color_planes,
+        }
+    }
+
+    pub fn add_cell_out(&mut self, plane: CellTarget<'data>) -> ConverterPlaneHandle<'_> {
+        let idx = self.buffers.out_cell.len() as u16;
+        self.buffers.out_cell.push(plane);
+        ConverterPlaneHandle {
+            idx: PlaneIdx::Cell(idx),
+            direction_in: false,
+            hdl: &mut self.color_planes,
+        }
+    }
+
+    pub fn add_atomic_out(&mut self, plane: AtomicTarget<'data>) -> ConverterPlaneHandle<'_> {
+        let idx = self.buffers.out_atomic.len() as u16;
+        self.buffers.out_atomic.push(plane);
+        ConverterPlaneHandle {
+            idx: PlaneIdx::Atomic(idx),
+            direction_in: false,
+            hdl: &mut self.color_planes,
+        }
+    }
+
+    /// Run on the first frames in input and output.
+    ///
+    /// This chooses the image planes based on colors. (With current design rationale this is
+    /// always a single plane but we'll stay forward compatible here, I think).
+    pub fn run(self) -> Result<(), ConversionError> {
+        let (ii, oi) = (self.color_planes.in_idx, self.color_planes.out_idx);
+        self.run_between(ii, oi)
+    }
+
+    /// Run on a chosen set of planes.
+    fn run_between(
+        mut self,
+        color_in_plane: PlaneIdx,
+        color_out_plane: PlaneIdx,
+    ) -> Result<(), ConversionError> {
+        if *self.layout_in(color_in_plane)? != self.in_layout {
+            return Err(ConversionError::InputColorDoesNotMatchPlanes);
+        }
+
+        if *self.layout_out(color_out_plane)? != self.out_layout {
+            return Err(ConversionError::OutputColorDoesNotMatchPlanes);
+        }
+
+        // We can not use this optimization with non-slice planes. FIXME: we really should be able
+        // to as it is a simple specialization of the implementation to read and write to different
+        // data. Indeed for atomic we could even take care to load texel units efficiently and to
+        // match the underlying atomic size as best we can.
+        if !matches!(color_in_plane, PlaneIdx::Sync(_))
+            || !matches!(color_out_plane, PlaneIdx::Sync(_))
+        {
+            self.convert_with = TexelConvertWith {
+                ops: ConverterRt::convert_texelbuf_with_ops,
+                should_defer_texel_read: false,
+                should_defer_texel_write: false,
+            };
+        }
+
         let ops = ConvertOps {
             fill_in_index: ConverterRt::index_from_in_info,
             fill_out_index: ConverterRt::index_from_out_info,
@@ -430,8 +577,8 @@ impl<'data> ConverterRun<'data> {
             recolor: self.recolor,
             join: CommonPixel::join_from_info,
             shuffle: ShuffleOps::default().with_arch(),
-            color_in_plane: 0,
-            color_out_plane: 0,
+            color_in_plane,
+            color_out_plane,
             int_shuffle_params: self.int_shuffle_params,
             texel: self.convert_with,
             info: &self.info,
@@ -450,7 +597,70 @@ impl<'data> ConverterRun<'data> {
             },
         };
 
-        self.rt.with_filled_texels(&self.info, &ops, plane_io)
+        // FIXME: texel errors?
+        Ok(self.rt.with_filled_texels(&self.info, &ops, plane_io))
+    }
+
+    fn layout_in(&self, color_in_plane: PlaneIdx) -> Result<&CanvasLayout, ConversionError> {
+        Ok(match color_in_plane {
+            PlaneIdx::Sync(idx) => *self
+                .buffers
+                .in_plane
+                .get(usize::from(idx))
+                .ok_or(ConversionError::InputLayoutDoesNotMatchPlan)?
+                .layout(),
+            PlaneIdx::Cell(idx) => *self
+                .buffers
+                .in_cell
+                .get(usize::from(idx))
+                .ok_or(ConversionError::InputLayoutDoesNotMatchPlan)?
+                .layout(),
+            PlaneIdx::Atomic(idx) => *self
+                .buffers
+                .in_atomic
+                .get(usize::from(idx))
+                .ok_or(ConversionError::InputLayoutDoesNotMatchPlan)?
+                .layout(),
+        })
+    }
+
+    fn layout_out(&self, color_out_plane: PlaneIdx) -> Result<&CanvasLayout, ConversionError> {
+        Ok(match color_out_plane {
+            PlaneIdx::Sync(idx) => *self
+                .buffers
+                .out_plane
+                .get(usize::from(idx))
+                .ok_or(ConversionError::OutputLayoutDoesNotMatchPlan)?
+                .layout(),
+            PlaneIdx::Cell(idx) => *self
+                .buffers
+                .out_cell
+                .get(usize::from(idx))
+                .ok_or(ConversionError::OutputLayoutDoesNotMatchPlan)?
+                .layout(),
+            PlaneIdx::Atomic(idx) => *self
+                .buffers
+                .out_atomic
+                .get(usize::from(idx))
+                .ok_or(ConversionError::OutputLayoutDoesNotMatchPlan)?
+                .layout(),
+        })
+    }
+}
+
+impl ConverterPlaneHandle<'_> {
+    /// Define that this plane is the input (or output) color of the conversion.
+    ///
+    /// The last modification performed through a [`PlaneHandle`] overrules any previous
+    /// definition. This function should only be called if the color information is supplied by a
+    /// single plane. If the color information in the layout disagrees, running will return an
+    /// error.
+    pub fn set_as_color(self) {
+        if self.direction_in {
+            self.hdl.in_idx = self.idx;
+        } else {
+            self.hdl.out_idx = self.idx;
+        }
     }
 }
 
@@ -567,8 +777,8 @@ impl ConverterRt {
             let in_texel = T::texel().array::<N>();
             let out_texel = T::texel().array::<M>();
 
-            let i_idx = ops.color_in_plane;
-            let o_idx = ops.color_out_plane;
+            let i_idx = ops.color_in_plane.into_index();
+            let o_idx = ops.color_out_plane.into_index();
 
             let source_texels = io.sources.sync[i_idx].as_texels(in_texel);
             let target_texels = io.targets.sync[o_idx].as_mut_texels(out_texel);
@@ -923,8 +1133,6 @@ impl ConverterRt {
             let idx = idx[range.clone()].iter();
             let texels = &mut into.as_mut_texels(texel)[range];
 
-            // FIXME(planar):
-            // FIXME(color): multi-planar texel fetch.
             let texel_slice = from.as_texels(texel);
             for (&index, into) in idx.zip(texels) {
                 if let Some(from) = texel_slice.get(index) {
@@ -946,7 +1154,42 @@ impl ConverterRt {
             }
         }
 
+        fn fetch_from_texel_cell<T>(
+            from: &CellSource,
+            idx: &[usize],
+            into: &mut TexelBuffer,
+            range: Range<usize>,
+            texel: Texel<T>,
+        ) {
+            into.resize_for_texel(idx.len(), texel);
+            let idx = idx[range.clone()].iter();
+            let texels = &mut into.as_mut_texels(texel)[range];
+
+            let texel_slice = from.as_texels(texel).as_slice_of_cells();
+            for (&index, into) in idx.zip(texels) {
+                if let Some(from) = texel_slice.get(index) {
+                    *into = texel.copy_cell(from);
+                }
+            }
+        }
+
+        struct ReadCell<'plane, 'data> {
+            from: &'plane CellSource<'data>,
+            idx: &'plane [usize],
+            into: &'plane mut TexelBuffer,
+            range: Range<usize>,
+        }
+
+        impl GenericTexelAction for ReadCell<'_, '_> {
+            fn run<T>(self, texel: Texel<T>) {
+                fetch_from_texel_cell(self.from, self.idx, self.into, self.range, texel)
+            }
+        }
+
         if ops.texel.should_defer_texel_read {
+            debug_assert!(matches!(ops.color_in_plane, PlaneIdx::Sync(_)));
+            // Also asserting that this isn't a multi-planar read. For now.
+
             /* For deferred reading, we expect some functions to do the transfer for us allowing us
              * to leave the source texel blank, uninitialized, or in an otherwise unreadable state.
              * We should skip them. The protocol here is that each chunk has two indices; the index
@@ -969,19 +1212,34 @@ impl ConverterRt {
                 // the indicate that no texels are available from the layout.
                 *available = 0;
                 info.in_kind.action(ReadUnit {
-                    from: &from.sources.sync[ops.color_in_plane],
+                    from: &from.sources.sync[ops.color_in_plane.into_index()],
                     idx: &self.in_index_list,
                     into: &mut self.in_texels,
                     range: start..start + indexes.len(),
                 });
             }
         } else {
-            info.in_kind.action(ReadUnit {
-                from: &from.sources.sync[ops.color_in_plane],
-                idx: &self.in_index_list,
-                into: &mut self.in_texels,
-                range: 0..self.in_index_list.len(),
-            });
+            // FIXME(planar):
+            // FIXME(color): multi-planar texel fetch.
+            match ops.color_in_plane {
+                PlaneIdx::Sync(_) => {
+                    info.in_kind.action(ReadUnit {
+                        from: &from.sources.sync[ops.color_in_plane.into_index()],
+                        idx: &self.in_index_list,
+                        into: &mut self.in_texels,
+                        range: 0..self.in_index_list.len(),
+                    });
+                }
+                PlaneIdx::Cell(_) => {
+                    info.in_kind.action(ReadCell {
+                        from: &from.sources.cell[ops.color_in_plane.into_index()],
+                        idx: &self.in_index_list,
+                        into: &mut self.in_texels,
+                        range: 0..self.in_index_list.len(),
+                    });
+                }
+                _ => todo!(),
+            }
         }
     }
 
@@ -1025,6 +1283,8 @@ impl ConverterRt {
         }
 
         if ops.texel.should_defer_texel_write {
+            debug_assert!(matches!(ops.color_out_plane, PlaneIdx::Sync(_)));
+
             /* For deferred writing, we expect some functions to have already done the transfer for
              * us and left the source texel blank, uninitialized, or in an otherwise unreadable
              * state. We must skip them. The protocol here is that each chunk has two indices; the
@@ -1049,19 +1309,24 @@ impl ConverterRt {
 
                 let offset = indexes.len() - unwritten;
                 info.out_kind.action(WriteUnit {
-                    into: &mut into.targets.sync[ops.color_out_plane],
+                    into: &mut into.targets.sync[ops.color_out_plane.into_index()],
                     idx: &self.out_index_list,
                     from: &self.out_texels,
                     range: start + offset..start + indexes.len(),
                 });
             }
         } else {
-            info.out_kind.action(WriteUnit {
-                into: &mut into.targets.sync[ops.color_out_plane],
-                idx: &self.out_index_list,
-                from: &self.out_texels,
-                range: 0..self.out_index_list.len(),
-            });
+            match ops.color_out_plane {
+                PlaneIdx::Sync(_) => {
+                    info.out_kind.action(WriteUnit {
+                        into: &mut into.targets.sync[ops.color_out_plane.into_index()],
+                        idx: &self.out_index_list,
+                        from: &self.out_texels,
+                        range: 0..self.out_index_list.len(),
+                    });
+                }
+                _ => todo!(),
+            }
         }
     }
 
@@ -1911,6 +2176,16 @@ impl TexelKind {
         }
 
         TexelKind::from(self).action(ToSize)
+    }
+}
+
+impl PlaneIdx {
+    fn into_index(self) -> usize {
+        match self {
+            PlaneIdx::Sync(i) => i.into(),
+            PlaneIdx::Cell(i) => i.into(),
+            PlaneIdx::Atomic(i) => i.into(),
+        }
     }
 }
 
