@@ -2,7 +2,10 @@ use brunch::Bench;
 
 use image_canvas::color::{Color, Whitepoint};
 use image_canvas::layout::{CanvasLayout, LayoutError, SampleParts, Texel};
-use image_canvas::Canvas;
+use image_canvas::{
+    canvas::{ArcCanvas, RcCanvas},
+    Canvas, Converter,
+};
 
 #[derive(Debug)]
 struct Convert {
@@ -31,6 +34,23 @@ impl Convert {
         into.set_color(self.color_out.clone())?;
 
         Ok(move || from.convert(&mut into))
+    }
+
+    fn prepare_atomic(&self) -> Result<impl FnMut(), LayoutError> {
+        let layout_from = CanvasLayout::with_texel(&self.texel_in, self.sz, self.sz)?;
+        let mut from = Canvas::new(layout_from.clone());
+        from.set_color(self.color_in.clone())?;
+
+        let layout_into = CanvasLayout::with_texel(&self.texel_out, self.sz, self.sz)?;
+        let mut into = Canvas::new(layout_into.clone());
+        into.set_color(self.color_out.clone())?;
+        let into = ArcCanvas::from(into);
+
+        Ok(move || {
+            let mut converter = Converter::new();
+            let mut plan = converter.plan(layout_from.clone(), layout_into.clone());
+            plan.add_plane_in(from.plane(0).unwrap());
+        })
     }
 }
 

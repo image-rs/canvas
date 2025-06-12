@@ -26,7 +26,7 @@ fn simple_conversion() -> Result<(), LayoutError> {
         .for_each(|b| *b = [0x7f, 0xff, 0x0, 0xff]);
 
     // Expecting conversion [0xff, 0xff, 0x0, 0xff] to 0–ff—ff
-    from.convert(&mut into);
+    from.convert(&mut into).unwrap();
 
     into.as_texels_mut(<[u8; 2] as image_texel::AsTexel>::texel())
         .iter()
@@ -72,7 +72,7 @@ fn color_no_conversion() -> Result<(), LayoutError> {
     let mut into = Canvas::new(layout);
     into.set_color(Color::SRGB)?;
 
-    from.convert(&mut into);
+    from.convert(&mut into).unwrap();
 
     into.as_texels(<[u8; 3] as image_texel::AsTexel>::texel())
         .iter()
@@ -101,15 +101,15 @@ fn color_conversion() -> Result<(), LayoutError> {
             .iter_mut()
             .for_each(|b| *b = rgb);
 
-        from.convert(&mut into);
+        from.convert(&mut into).unwrap();
 
         into.as_texels_mut(<[u8; 3] as image_texel::AsTexel>::texel())
             .iter()
             .enumerate()
             .for_each(|(idx, b)| assert_eq!(*b, lab, "at {}", idx));
 
-        from.convert(&mut rt);
-        rt.convert(&mut from);
+        from.convert(&mut rt).unwrap();
+        rt.convert(&mut from).unwrap();
 
         from.as_texels_mut(<[u8; 3] as image_texel::AsTexel>::texel())
             .iter()
@@ -150,7 +150,7 @@ fn non_rectantular() -> Result<(), LayoutError> {
         pixels.by_ref().take(32 * 32).for_each(|b| *b = rgb0);
         pixels.for_each(|b| *b = rgb1);
 
-        from.convert(&mut into);
+        from.convert(&mut into).unwrap();
 
         let mut pixels = into
             .as_texels_mut(<[u8; 3] as image_texel::AsTexel>::texel())
@@ -188,7 +188,7 @@ fn shuffled_samples() -> Result<(), LayoutError> {
         .iter_mut()
         .for_each(|b| *b = [0x40, 0x41, 0x42, 0x43]);
 
-    from.convert(&mut into);
+    from.convert(&mut into).unwrap();
 
     into.as_texels(<[u8; 4] as image_texel::AsTexel>::texel())
         .iter()
@@ -214,7 +214,7 @@ fn drop_shuffled_samples() -> Result<(), LayoutError> {
         .iter_mut()
         .for_each(|b| *b = [0x40, 0x41, 0x42, 0x43]);
 
-    from.convert(&mut into);
+    from.convert(&mut into).unwrap();
 
     into.as_texels(<[u8; 3] as image_texel::AsTexel>::texel())
         .iter()
@@ -240,7 +240,7 @@ fn expand_shuffled_samples() -> Result<(), LayoutError> {
         .iter_mut()
         .for_each(|b| *b = [0x40, 0x41, 0x42]);
 
-    from.convert(&mut into);
+    from.convert(&mut into).unwrap();
 
     into.as_texels(<[u8; 4] as image_texel::AsTexel>::texel())
         .iter()
@@ -294,7 +294,7 @@ fn expand_bits() -> Result<(), LayoutError> {
         .iter_mut()
         .for_each(|b| *b = [0x40, 0x41, 0x42]);
 
-    from.convert(&mut into);
+    from.convert(&mut into).unwrap();
 
     into.as_texels(<[u8; 4] as image_texel::AsTexel>::texel())
         .iter()
@@ -334,7 +334,7 @@ fn unpack_bits() -> Result<(), LayoutError> {
         .iter_mut()
         .for_each(|b| *b = 0x44);
 
-    from.convert(&mut into);
+    from.convert(&mut into).unwrap();
 
     into.as_texels(<[u8; 8] as image_texel::AsTexel>::texel())
         .iter()
@@ -381,7 +381,7 @@ fn pack_bits() -> Result<(), LayoutError> {
         .iter_mut()
         .for_each(|b| *b = [0x00, 0xff, 0xff, 0xff, 0x00, 0xff, 0x00, 0xff]);
 
-    from.convert(&mut into);
+    from.convert(&mut into).unwrap();
 
     into.as_texels(<u8 as image_texel::AsTexel>::texel())
         .iter()
@@ -410,15 +410,15 @@ fn yuv_conversion() -> Result<(), LayoutError> {
             .iter_mut()
             .for_each(|b| *b = rgb);
 
-        from.convert(&mut into);
+        from.convert(&mut into).unwrap();
 
         into.as_texels_mut(<[u8; 3] as image_texel::AsTexel>::texel())
             .iter()
             .enumerate()
             .for_each(|(idx, b)| assert_eq!(*b, yuv, "at {}", idx));
 
-        from.convert(&mut rt);
-        rt.convert(&mut from);
+        from.convert(&mut rt).unwrap();
+        rt.convert(&mut from).unwrap();
 
         from.as_texels_mut(<[u8; 3] as image_texel::AsTexel>::texel())
             .iter()
@@ -495,7 +495,7 @@ fn a_bitpack_dilemma_wrapped() {
     ];
 
     from.as_bytes_mut().copy_from_slice(IMG_BW_LUMA);
-    from.convert(&mut into);
+    from.convert(&mut into).unwrap();
 
     assert_eq!(into.as_bytes(), IMG_BW_PACKED);
 }
@@ -545,7 +545,7 @@ fn a_bitpack_dilemma_unwrapped() {
     ];
 
     from.as_bytes_mut().copy_from_slice(IMG_BW_LUMA);
-    from.convert(&mut into);
+    from.convert(&mut into).unwrap();
 
     assert_eq!(into.as_bytes(), IMG_BW_PACKED);
 
@@ -555,7 +555,7 @@ fn a_bitpack_dilemma_unwrapped() {
         let i = i as usize;
 
         from.as_bytes_mut()[24 * i..].copy_from_slice(IMG_BW_LUMA);
-        from.convert(&mut into);
+        from.convert(&mut into).unwrap();
 
         assert_eq!(&into.as_bytes()[3 * i..], IMG_BW_PACKED, "{i}");
     }

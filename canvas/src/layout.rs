@@ -96,14 +96,14 @@ pub struct ChannelLayout<T> {
 #[derive(Clone, PartialEq)]
 pub struct PlaneBytes {
     /// The texel in this plane.
-    texel: Texel,
+    pub(crate) texel: Texel,
     // FIXME: we could store merely the diff to the block-width.
     /// The actual pixel width of this plane.
-    width: u32,
+    pub(crate) width: u32,
     /// The actual pixel height of this plane.
-    height: u32,
+    pub(crate) height: u32,
     /// The matrix descriptor of this plane.
-    matrix: StridedBytes,
+    pub(crate) matrix: StridedBytes,
 }
 
 /// The typed matrix layout of a single plane of the image.
@@ -849,74 +849,6 @@ impl CanvasLayout {
         byte_index / u64::from(bytes_per_texel)
     }
 
-    pub(crate) fn fill_texel_indices_impl(
-        &self,
-        idx: &mut [usize],
-        iter: &[[u32; 2]],
-        chunk: ChunkSpec,
-    ) {
-        debug_assert_eq!(idx.len(), iter.len());
-
-        if self.texel.bits.bytes() == 0 {
-            unreachable!("No texel with zero bytes");
-        }
-
-        if self.bytes.bytes_per_row % self.texel.bits.bytes() as u32 == 0 {
-            let pitch = self.bytes.bytes_per_row / self.texel.bits.bytes() as u32;
-            return Self::fill_indices_constant_size(idx, iter, pitch, chunk);
-        }
-
-        // FIXME(perf): do we need common divisors? perf shows that a significant time is spent
-        // on division by `bytes_per_texel` but the common cases (1, 2, 3, 4, 8, etc) should
-        // all optimize a lot better.
-
-        // Fallback, actually generate everything by hard.
-        for (&[x, y], idx) in iter.iter().zip(idx) {
-            *idx = self.texel_index(x, y) as usize;
-        }
-    }
-
-    fn fill_indices_constant_size(
-        idx: &mut [usize],
-        iter: &[[u32; 2]],
-        pitch: u32,
-        spec: ChunkSpec,
-    ) {
-        debug_assert_eq!(iter.len(), idx.len());
-
-        let pitch = u64::from(pitch);
-        let mut index_chunks = idx.chunks_mut(spec.chunk_size);
-        let mut iter = iter.chunks(spec.chunk_size);
-
-        for _ in &mut spec.chunks[..] {
-            let (idx, iter) = match (index_chunks.next(), iter.next()) {
-                (Some(idx), Some(iter)) => (idx, iter),
-                _ => break,
-            };
-
-            for (&[x, y], idx) in iter.iter().zip(&mut idx[..]) {
-                let texindex = u64::from(x) * pitch + u64::from(y);
-                *idx = texindex as usize;
-            }
-        }
-
-        if spec.should_defer_texel_ops {
-            for (idx, chunk_spec) in idx.chunks_mut(spec.chunk_size).zip(spec.chunks) {
-                let mut contig = true;
-                for wnd in idx.windows(2) {
-                    if wnd[1].saturating_sub(wnd[0]) != 1 {
-                        contig = false;
-                    }
-                }
-
-                let contiguous_start = idx[0];
-                if contig {
-                    *chunk_spec = [contiguous_start, idx.len()];
-                }
-            }
-        }
-    }
-
     /// Returns a matrix descriptor that can store all bytes.
     ///
     /// Note: for the moment, all layouts are row-wise matrices. This will be relaxed in the future
@@ -1111,6 +1043,85 @@ impl PlaneBytes {
 
     pub(crate) fn offset_in_texels(&self) -> usize {
         self.matrix.spec().offset / self.matrix.spec().element.size()
+    }
+
+    pub(crate) fn fill_texel_indices_impl(
+        &self,
+        idx: &mut [usize],
+        iter: &[[u32; 2]],
+        chunk: ChunkSpec,
+    ) {
+        debug_assert_eq!(idx.len(), iter.len());
+
+        if self.texel.bits.bytes() == 0 {
+            unreachable!("No texel with zero bytes");
+        }
+
+        if self.matrix.spec().height_stride % usize::from(self.texel.bits.bytes()) == 0 {
+            let pitch = self.matrix.spec().height_stride / usize::from(self.texel.bits.bytes());
+            return Self::fill_indices_constant_size(idx, iter, pitch, chunk);
+        }
+
+        // FIXME(perf): do we need common divisors? perf shows that a significant time is spent
+        // on division by `bytes_per_texel` but the common cases (1, 2, 3, 4, 8, etc) should
+        // all optimize a lot better.
+
+        // Fallback, actually generate everything by hard.
+        for (&[x, y], idx) in iter.iter().zip(idx) {
+            *idx = self.texel_index(x, y) as usize;
+        }
+    }
+
+    /// Returns the index of a texel in a slice of planar image data.
+    ///
+    /// This is hidden since it supposes that every plane can be treated like a matrix, but we do
+    /// not want to advertise our representation of 'opaque' data. Indeed we haven't really chosen
+    /// one so assume it is some `(1, len)` pseudo-matrix of register- or byte-sized values.
+    fn texel_index(&self, x: u32, y: u32) -> u64 {
+        let bytes_per_texel = self.texel.bits.bytes();
+        let byte_index = u64::from(x) * (self.matrix.spec().height_stride as u64)
+            + u64::from(y) * u64::from(bytes_per_texel);
+        byte_index / u64::from(bytes_per_texel)
+    }
+
+    fn fill_indices_constant_size(
+        idx: &mut [usize],
+        iter: &[[u32; 2]],
+        pitch: usize,
+        spec: ChunkSpec,
+    ) {
+        debug_assert_eq!(iter.len(), idx.len());
+
+        let mut index_chunks = idx.chunks_mut(spec.chunk_size);
+        let mut iter = iter.chunks(spec.chunk_size);
+
+        for _ in &mut spec.chunks[..] {
+            let (idx, iter) = match (index_chunks.next(), iter.next()) {
+                (Some(idx), Some(iter)) => (idx, iter),
+                _ => break,
+            };
+
+            for (&[x, y], idx) in iter.iter().zip(&mut idx[..]) {
+                let texindex = (x as usize) * pitch + (y as usize);
+                *idx = texindex as usize;
+            }
+        }
+
+        if spec.should_defer_texel_ops {
+            for (idx, chunk_spec) in idx.chunks_mut(spec.chunk_size).zip(spec.chunks) {
+                let mut contig = true;
+                for wnd in idx.windows(2) {
+                    if wnd[1].saturating_sub(wnd[0]) != 1 {
+                        contig = false;
+                    }
+                }
+
+                let contiguous_start = idx[0];
+                if contig {
+                    *chunk_spec = [contiguous_start, idx.len()];
+                }
+            }
+        }
     }
 }
 

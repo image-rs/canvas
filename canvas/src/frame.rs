@@ -36,64 +36,70 @@ pub struct Plane {
     inner: Image<PlaneBytes>,
 }
 
-#[doc(hidden)]
-#[deprecated = "Use BytePlaneRef"]
-pub type BytePlane<'data> = BytePlaneRef<'data>;
-
 /// Represents a single matrix like layer of an image.
 ///
 /// Created from [`Canvas::plane`].
 pub struct BytePlaneRef<'data> {
-    inner: ImageRef<'data, PlaneBytes>,
+    pub(crate) inner: ImageRef<'data, PlaneBytes>,
 }
 
 /// Represents a single matrix like layer of an image.
 ///
 /// Created from [`Canvas::plane_mut`].
 pub struct BytePlaneMut<'data> {
-    inner: ImageMut<'data, PlaneBytes>,
+    pub(crate) inner: ImageMut<'data, PlaneBytes>,
 }
 
 /// Represents a single matrix like layer of a shared image.
 ///
 /// Created from [`Canvas::plane_mut`].
 pub struct BytePlaneCells<'data> {
-    inner: CellImageRef<'data, PlaneBytes>,
+    pub(crate) inner: CellImageRef<'data, PlaneBytes>,
 }
 
 /// Represents a single matrix like layer of a shared image.
 ///
 /// Created from [`Canvas::plane_mut`].
 pub struct BytePlaneAtomics<'data> {
-    inner: AtomicImageRef<'data, PlaneBytes>,
+    pub(crate) inner: AtomicImageRef<'data, PlaneBytes>,
 }
 
 /// Represents a single matrix like layer of an image.
 ///
 /// Created from [`BytePlaneRef::as_texels`].
 pub struct PlaneRef<'data, T> {
-    inner: ImageRef<'data, PlanarLayout<T>>,
+    pub(crate) inner: ImageRef<'data, PlanarLayout<T>>,
 }
 
 /// Represents a single mutable matrix like layer of an image.
 ///
 /// Created from [`BytePlaneMut::as_texels`].
 pub struct PlaneMut<'data, T> {
-    inner: ImageMut<'data, PlanarLayout<T>>,
+    pub(crate) inner: ImageMut<'data, PlanarLayout<T>>,
+}
+
+/// Represents an intra-thread shared portion of an image.
+pub struct PlaneCells<'data, T> {
+    pub(crate) inner: CellImageRef<'data, PlanarLayout<T>>,
+}
+
+/// Represents a cross-thread shared portion of an image.
+pub struct PlaneAtomics<'data, T> {
+    pub(crate) inner: AtomicImageRef<'data, PlanarLayout<T>>,
 }
 
 /// Represent a single matrix with uniform channel type.
 ///
 /// Created from [`Canvas::channels_u8`] and related methods.
 pub struct ChannelsRef<'data, C> {
-    inner: ImageRef<'data, ChannelLayout<C>>,
+    pub(crate) inner: ImageRef<'data, ChannelLayout<C>>,
 }
 
 /// Represent a single matrix with uniform channel type.
 ///
 /// Created from [`Canvas::channels_u8_mut`] and related methods.
 pub struct ChannelsMut<'data, C> {
-    inner: ImageMut<'data, ChannelLayout<C>>,
+    pub(crate) inner: ImageMut<'data, ChannelLayout<C>>,
 }
 
 impl Canvas {
@@ -339,10 +345,6 @@ impl Canvas {
         self.inner.layout_mut_unguarded().set_color(color)
     }
 
-    pub(crate) fn as_ref(&self) -> ImageRef<'_, &'_ CanvasLayout> {
-        self.inner.as_ref()
-    }
-
     pub(crate) fn as_mut(&mut self) -> ImageMut<'_, &'_ mut CanvasLayout> {
         self.inner.as_mut()
     }
@@ -351,7 +353,15 @@ impl Canvas {
 /// Conversion related methods.
 impl Canvas {
     /// Write into another frame, converting color representation between.
-    pub fn convert(&self, into: &mut Self) {
+    ///
+    /// # Design notes
+    ///
+    /// The intention is that we can convert between any canvases through some common connection
+    /// color space. In debug builds we assert that the conversion ran to completion. However,
+    /// consider this a bit finicky. We want to represent canvases that have not yet had their
+    /// conversion implemented, for instance certain planar combinations, or certain ICC profile
+    /// combinations if we get around to it.
+    pub fn convert(&self, into: &mut Self) -> Result<(), crate::shader::ConversionError> {
         Converter::new().run_to_completion(self, into)
     }
 }
