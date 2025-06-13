@@ -1,3 +1,17 @@
+## 0.5.0
+
+Add support for shared canvases, both `!Sync` and `Sync`.
+- Added `canvas::RcCanvas` and `canvas::ArcCanvas`.
+- Both can be constructed with the same layouts as an owned `Canvas` and
+  converted between owned and shared.
+  with multi-planar layouts.
+- More modifications to shared canvas (planes) are planned and will be released
+  with `0.5.1`.
+
+The conversion interface is now explicitly available:
+- Expose `Converter` and `ConverterRun` to fill any canvas' plane with color
+  data from another canvas. The interface is intended to be forward compatible
+
 ## 0.4.3
 
 Bug fixes:
