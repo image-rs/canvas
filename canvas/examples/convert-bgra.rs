@@ -25,7 +25,7 @@ fn main() -> Result<(), LayoutError> {
         }
     }
 
-    canvas.convert(&mut output);
+    canvas.convert(&mut output).unwrap();
 
     if std::env::var_os("IMAGE_CANVAS_SKIP_IO").is_none() {
         let container = output.as_texels(u8::texel()).to_owned();

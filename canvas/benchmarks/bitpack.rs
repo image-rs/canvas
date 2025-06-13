@@ -30,7 +30,7 @@ impl Convert {
         let mut into = Canvas::new(layout);
         into.set_color(self.color_out.clone())?;
 
-        Ok(move || from.convert(&mut into))
+        Ok(move || from.convert(&mut into).unwrap())
     }
 }
 

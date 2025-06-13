@@ -3,11 +3,13 @@
 use alloc::borrow::ToOwned;
 use alloc::vec::Vec;
 
-use image_texel::image::{ImageMut, ImageRef};
-use image_texel::Image;
+use image_texel::image::{
+    AtomicImage, AtomicImageRef, CellImage, CellImageRef, Image, ImageMut, ImageRef,
+};
+use image_texel::texels::U8;
 
 use crate::color::Color;
-use crate::layout::{CanvasLayout, ChannelLayout, LayoutError, PlanarLayout, PlaneBytes};
+use crate::layout::{CanvasLayout, ChannelLayout, LayoutError, PlanarLayout, PlaneBytes, PlaneIdx};
 use crate::shader::Converter;
 
 /// A byte buffer with dynamic color contents.
@@ -16,56 +18,88 @@ pub struct Canvas {
     inner: Image<CanvasLayout>,
 }
 
+/// An image buffer that can be shared within a thread.
+#[derive(Clone)]
+pub struct RcCanvas {
+    inner: CellImage<CanvasLayout>,
+}
+
+/// An image buffer that can be shared across threads..
+#[derive(Clone)]
+pub struct ArcCanvas {
+    inner: AtomicImage<CanvasLayout>,
+}
+
 /// A byte buffer containing a single plane.
 #[derive(Clone)]
 pub struct Plane {
     inner: Image<PlaneBytes>,
 }
 
-#[doc(hidden)]
-#[deprecated = "Use BytePlaneRef"]
-pub type BytePlane<'data> = BytePlaneRef<'data>;
-
 /// Represents a single matrix like layer of an image.
 ///
 /// Created from [`Canvas::plane`].
 pub struct BytePlaneRef<'data> {
-    inner: ImageRef<'data, PlaneBytes>,
+    pub(crate) inner: ImageRef<'data, PlaneBytes>,
 }
 
 /// Represents a single matrix like layer of an image.
 ///
 /// Created from [`Canvas::plane_mut`].
 pub struct BytePlaneMut<'data> {
-    inner: ImageMut<'data, PlaneBytes>,
+    pub(crate) inner: ImageMut<'data, PlaneBytes>,
+}
+
+/// Represents a single matrix like layer of a shared image.
+///
+/// Created from [`Canvas::plane_mut`].
+pub struct BytePlaneCells<'data> {
+    pub(crate) inner: CellImageRef<'data, PlaneBytes>,
+}
+
+/// Represents a single matrix like layer of a shared image.
+///
+/// Created from [`Canvas::plane_mut`].
+pub struct BytePlaneAtomics<'data> {
+    pub(crate) inner: AtomicImageRef<'data, PlaneBytes>,
 }
 
 /// Represents a single matrix like layer of an image.
 ///
 /// Created from [`BytePlaneRef::as_texels`].
 pub struct PlaneRef<'data, T> {
-    inner: ImageRef<'data, PlanarLayout<T>>,
+    pub(crate) inner: ImageRef<'data, PlanarLayout<T>>,
 }
 
 /// Represents a single mutable matrix like layer of an image.
 ///
 /// Created from [`BytePlaneMut::as_texels`].
 pub struct PlaneMut<'data, T> {
-    inner: ImageMut<'data, PlanarLayout<T>>,
+    pub(crate) inner: ImageMut<'data, PlanarLayout<T>>,
+}
+
+/// Represents an intra-thread shared portion of an image.
+pub struct PlaneCells<'data, T> {
+    pub(crate) inner: CellImageRef<'data, PlanarLayout<T>>,
+}
+
+/// Represents a cross-thread shared portion of an image.
+pub struct PlaneAtomics<'data, T> {
+    pub(crate) inner: AtomicImageRef<'data, PlanarLayout<T>>,
 }
 
 /// Represent a single matrix with uniform channel type.
 ///
 /// Created from [`Canvas::channels_u8`] and related methods.
 pub struct ChannelsRef<'data, C> {
-    inner: ImageRef<'data, ChannelLayout<C>>,
+    pub(crate) inner: ImageRef<'data, ChannelLayout<C>>,
 }
 
 /// Represent a single matrix with uniform channel type.
 ///
 /// Created from [`Canvas::channels_u8_mut`] and related methods.
 pub struct ChannelsMut<'data, C> {
-    inner: ImageMut<'data, ChannelLayout<C>>,
+    pub(crate) inner: ImageMut<'data, ChannelLayout<C>>,
 }
 
 impl Canvas {
@@ -311,10 +345,6 @@ impl Canvas {
         self.inner.layout_mut_unguarded().set_color(color)
     }
 
-    pub(crate) fn as_ref(&self) -> ImageRef<'_, &'_ CanvasLayout> {
-        self.inner.as_ref()
-    }
-
     pub(crate) fn as_mut(&mut self) -> ImageMut<'_, &'_ mut CanvasLayout> {
         self.inner.as_mut()
     }
@@ -323,8 +353,62 @@ impl Canvas {
 /// Conversion related methods.
 impl Canvas {
     /// Write into another frame, converting color representation between.
-    pub fn convert(&self, into: &mut Self) {
-        Converter::new().run_on(self, into)
+    ///
+    /// # Design notes
+    ///
+    /// The intention is that we can convert between any canvases through some common connection
+    /// color space. In debug builds we assert that the conversion ran to completion. However,
+    /// consider this a bit finicky. We want to represent canvases that have not yet had their
+    /// conversion implemented, for instance certain planar combinations, or certain ICC profile
+    /// combinations if we get around to it.
+    pub fn convert(&self, into: &mut Self) -> Result<(), crate::shader::ConversionError> {
+        Converter::new().run_to_completion(self, into)
+    }
+}
+
+impl RcCanvas {
+    pub fn new(layout: CanvasLayout) -> Self {
+        RcCanvas {
+            inner: CellImage::new(layout),
+        }
+    }
+
+    /// Get the untyped descriptor of a texel matrix.
+    ///
+    /// Returns `None` if the image contains data that can not be described as a single texel
+    /// plane, e.g. multiple planes or if the plane is not a matrix.
+    pub fn plane(&self, idx: u8) -> Option<BytePlaneCells<'_>> {
+        let [plane] = self.inner.as_ref().into_planes([PlaneIdx(idx)]).ok()?;
+        Some(BytePlaneCells { inner: plane })
+    }
+
+    pub fn to_canvas(&self) -> Canvas {
+        Canvas {
+            inner: self.inner.clone().into_owned(),
+        }
+    }
+}
+
+impl ArcCanvas {
+    pub fn new(layout: CanvasLayout) -> Self {
+        ArcCanvas {
+            inner: AtomicImage::new(layout),
+        }
+    }
+
+    /// Get the untyped descriptor of a texel matrix.
+    ///
+    /// Returns `None` if the image contains data that can not be described as a single texel
+    /// plane, e.g. multiple planes or if the plane is not a matrix.
+    pub fn plane(&self, idx: u8) -> Option<BytePlaneAtomics<'_>> {
+        let [plane] = self.inner.as_ref().into_planes([PlaneIdx(idx)]).ok()?;
+        Some(BytePlaneAtomics { inner: plane })
+    }
+
+    pub fn to_canvas(&self) -> Canvas {
+        Canvas {
+            inner: self.inner.clone().into_owned(),
+        }
     }
 }
 
@@ -409,6 +493,38 @@ impl<'data> BytePlaneMut<'data> {
     }
 }
 
+impl<'data> BytePlaneCells<'data> {
+    pub fn layout(&self) -> &PlaneBytes {
+        self.inner.layout()
+    }
+
+    pub fn to_owned(&self) -> Plane {
+        Plane {
+            inner: self.inner.clone().into_owned(),
+        }
+    }
+
+    pub fn to_canvas(&self) -> Canvas {
+        self.to_owned().into()
+    }
+}
+
+impl<'data> BytePlaneAtomics<'data> {
+    pub fn layout(&self) -> &PlaneBytes {
+        self.inner.layout()
+    }
+
+    pub fn to_owned(&self) -> Plane {
+        Plane {
+            inner: self.inner.clone().into_owned(),
+        }
+    }
+
+    pub fn to_canvas(&self) -> Canvas {
+        self.to_owned().into()
+    }
+}
+
 impl<'data, C> ChannelsRef<'data, C> {
     pub fn layout(&self) -> &ChannelLayout<C> {
         self.inner.layout()
@@ -466,5 +582,66 @@ impl From<Plane> for Canvas {
         Canvas {
             inner: plane.inner.decay(),
         }
+    }
+}
+
+impl From<Canvas> for RcCanvas {
+    fn from(canvas: Canvas) -> Self {
+        RcCanvas {
+            inner: CellImage::with_bytes(canvas.layout().clone(), canvas.as_bytes()),
+        }
+    }
+}
+
+impl From<Canvas> for ArcCanvas {
+    fn from(canvas: Canvas) -> Self {
+        ArcCanvas {
+            inner: AtomicImage::with_bytes(canvas.layout().clone(), canvas.as_bytes()),
+        }
+    }
+}
+
+impl From<RcCanvas> for Canvas {
+    fn from(canvas: RcCanvas) -> Self {
+        Canvas {
+            inner: canvas.inner.into_owned(),
+        }
+    }
+}
+
+impl From<ArcCanvas> for Canvas {
+    fn from(canvas: ArcCanvas) -> Self {
+        Canvas {
+            inner: canvas.inner.into_owned(),
+        }
+    }
+}
+
+impl From<RcCanvas> for ArcCanvas {
+    fn from(canvas: RcCanvas) -> Self {
+        // Here we would want to allocate an Arc buffer straight from the Rc buffer. This is unsafe
+        // code has yet to be written and verified. Instead, we allocate a zeroed buffer under the
+        // assumption that this is conveniently fast, then copy data over.
+        let inner = canvas.inner;
+
+        let mut out = AtomicImage::new(inner.layout().clone());
+        let target = out.get_mut().expect("Still the sole owner");
+        U8.load_cell_slice(inner.as_texels(U8).as_slice_of_cells(), target.as_buf_mut());
+
+        ArcCanvas { inner: out }
+    }
+}
+
+impl From<ArcCanvas> for RcCanvas {
+    fn from(canvas: ArcCanvas) -> Self {
+        // Same choice as the inverse.
+        let inner = canvas.inner;
+
+        let out = CellImage::new(inner.layout().clone());
+        // That copy should be the same as filling mutable byte memory. Feel free to contradict
+        // this with benchmarks especially considering inlining.
+        U8.load_atomic_to_cells(inner.as_texels(U8), out.as_texels(U8).as_slice_of_cells());
+
+        RcCanvas { inner: out }
     }
 }

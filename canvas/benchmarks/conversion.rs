@@ -2,9 +2,12 @@ use brunch::Bench;
 
 use image_canvas::color::{Color, Whitepoint};
 use image_canvas::layout::{CanvasLayout, LayoutError, SampleParts, Texel};
-use image_canvas::Canvas;
+use image_canvas::{
+    canvas::{ArcCanvas, RcCanvas},
+    Canvas, Converter,
+};
 
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 struct Convert {
     texel_in: Texel,
     color_in: Color,
@@ -30,7 +33,49 @@ impl Convert {
         let mut into = Canvas::new(layout);
         into.set_color(self.color_out.clone())?;
 
-        Ok(move || from.convert(&mut into))
+        Ok(move || from.convert(&mut into).unwrap())
+    }
+
+    fn prepare_rc(&self) -> Result<impl FnMut(), LayoutError> {
+        let layout_from = CanvasLayout::with_texel(&self.texel_in, self.sz, self.sz)?;
+        let mut from = Canvas::new(layout_from.clone());
+        from.set_color(self.color_in.clone())?;
+
+        let layout_into = CanvasLayout::with_texel(&self.texel_out, self.sz, self.sz)?;
+        let mut into = Canvas::new(layout_into.clone());
+        into.set_color(self.color_out.clone())?;
+        let into = RcCanvas::from(into);
+
+        Ok(move || {
+            let mut converter = Converter::new();
+            let mut plan = converter
+                .plan(layout_from.clone(), layout_into.clone())
+                .unwrap();
+            plan.add_plane_in(from.plane(0).unwrap()).set_as_color();
+            plan.add_cell_out(into.plane(0).unwrap()).set_as_color();
+            plan.run().unwrap();
+        })
+    }
+
+    fn prepare_atomic(&self) -> Result<impl FnMut(), LayoutError> {
+        let layout_from = CanvasLayout::with_texel(&self.texel_in, self.sz, self.sz)?;
+        let mut from = Canvas::new(layout_from.clone());
+        from.set_color(self.color_in.clone())?;
+
+        let layout_into = CanvasLayout::with_texel(&self.texel_out, self.sz, self.sz)?;
+        let mut into = Canvas::new(layout_into.clone());
+        into.set_color(self.color_out.clone())?;
+        let into = ArcCanvas::from(into);
+
+        Ok(move || {
+            let mut converter = Converter::new();
+            let mut plan = converter
+                .plan(layout_from.clone(), layout_into.clone())
+                .unwrap();
+            plan.add_plane_in(from.plane(0).unwrap()).set_as_color();
+            plan.add_atomic_out(into.plane(0).unwrap()).set_as_color();
+            plan.run().unwrap();
+        })
     }
 }
 
@@ -133,26 +178,26 @@ fn main() {
             color_out: Color::SRGB,
             sz: 128,
         },
-        /* conversion to oklab with different depths */
+        /* conversion from oklab with different depths */
         Convert {
-            texel_in: Texel::new_u8(SampleParts::Rgb),
-            color_in: Color::SRGB,
-            texel_out: Texel::new_u8(SampleParts::Lab),
-            color_out: Color::Oklab,
+            texel_in: Texel::new_u8(SampleParts::Lab),
+            color_in: Color::Oklab,
+            texel_out: Texel::new_u8(SampleParts::Rgb),
+            color_out: Color::SRGB,
             sz: 128,
         },
         Convert {
-            texel_in: Texel::new_u16(SampleParts::Rgb),
-            color_in: Color::SRGB,
-            texel_out: Texel::new_u16(SampleParts::Lab),
-            color_out: Color::Oklab,
+            texel_in: Texel::new_u16(SampleParts::Lab),
+            color_in: Color::Oklab,
+            texel_out: Texel::new_u16(SampleParts::Rgb),
+            color_out: Color::SRGB,
             sz: 128,
         },
         Convert {
-            texel_in: Texel::new_f32(SampleParts::Rgb),
-            color_in: Color::SRGB,
-            texel_out: Texel::new_f32(SampleParts::Lab),
-            color_out: Color::Oklab,
+            texel_in: Texel::new_f32(SampleParts::Lab),
+            color_in: Color::Oklab,
+            texel_out: Texel::new_f32(SampleParts::Rgb),
+            color_out: Color::SRGB,
             sz: 128,
         },
         /* conversion to SRLAB2 */
@@ -214,7 +259,8 @@ fn main() {
     ];
 
     let mut benches = brunch::Benches::default();
-    benches.extend(tests.map(|convert| {
+
+    benches.extend(tests.clone().map(|convert| {
         let bench = match convert.prepare() {
             Ok(bench) => bench,
             Err(err) => panic!("Failed to setup benchmark {:?}: {:?}", convert, err),
@@ -222,5 +268,24 @@ fn main() {
 
         Bench::new(format!("framebuf::conversion::main::{}", convert.name())).run(bench)
     }));
+
+    benches.extend(tests.clone().map(|convert| {
+        let bench = match convert.prepare_rc() {
+            Ok(bench) => bench,
+            Err(err) => panic!("Failed to setup benchmark {:?}: {:?}", convert, err),
+        };
+
+        Bench::new(format!("framebuf::conversion::rc::{}", convert.name())).run(bench)
+    }));
+
+    benches.extend(tests.clone().map(|convert| {
+        let bench = match convert.prepare_atomic() {
+            Ok(bench) => bench,
+            Err(err) => panic!("Failed to setup benchmark {:?}: {:?}", convert, err),
+        };
+
+        Bench::new(format!("framebuf::conversion::arc::{}", convert.name())).run(bench)
+    }));
+
     benches.finish();
 }
