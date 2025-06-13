@@ -486,7 +486,7 @@ impl<'data> ConverterRun<'data> {
         let idx = self.buffers.in_plane.len() as u16;
         self.buffers.in_plane.push(plane.inner);
         ConverterPlaneHandle {
-            idx: PlaneIdx::Cell(idx),
+            idx: PlaneIdx::Sync(idx),
             direction_in: true,
             hdl: &mut self.color_planes,
         }
@@ -521,7 +521,7 @@ impl<'data> ConverterRun<'data> {
         let idx = self.buffers.out_plane.len() as u16;
         self.buffers.out_plane.push(plane.inner);
         ConverterPlaneHandle {
-            idx: PlaneIdx::Cell(idx),
+            idx: PlaneIdx::Sync(idx),
             direction_in: false,
             hdl: &mut self.color_planes,
         }
@@ -1155,6 +1155,44 @@ impl ConverterRt {
             }
         }
 
+        fn fetch_from_texel_cell<T>(
+            from: &CellSource,
+            idx: &[usize],
+            into: &mut TexelBuffer,
+            range: Range<usize>,
+            texel: Texel<T>,
+        ) {
+            into.resize_for_texel(idx.len(), texel);
+            let idx = idx[range.clone()].iter();
+            let texels = &mut into.as_mut_texels(texel)[range];
+            let texel_slice = from.as_texels(texel).as_slice_of_cells();
+
+            for (&index, into) in idx.zip(texels) {
+                if let Some(from) = texel_slice.get(index) {
+                    *into = texel.copy_cell(from);
+                }
+            }
+        }
+
+        fn fetch_from_texel_atomics<T>(
+            from: &AtomicSource,
+            idx: &[usize],
+            into: &mut TexelBuffer,
+            range: Range<usize>,
+            texel: Texel<T>,
+        ) {
+            into.resize_for_texel(idx.len(), texel);
+            let idx = idx[range.clone()].iter();
+            let texels = &mut into.as_mut_texels(texel)[range];
+            let texel_slice = from.as_texels(texel);
+
+            for (&index, into) in idx.zip(texels) {
+                if let Some(from) = texel_slice.get(index..index + 1) {
+                    from.write_to_slice(core::slice::from_mut(into));
+                }
+            }
+        }
+
         struct ReadUnit<'plane, 'data> {
             from: &'plane PlaneSource<'data>,
             idx: &'plane [usize],
@@ -1168,25 +1206,6 @@ impl ConverterRt {
             }
         }
 
-        fn fetch_from_texel_cell<T>(
-            from: &CellSource,
-            idx: &[usize],
-            into: &mut TexelBuffer,
-            range: Range<usize>,
-            texel: Texel<T>,
-        ) {
-            into.resize_for_texel(idx.len(), texel);
-            let idx = idx[range.clone()].iter();
-            let texels = &mut into.as_mut_texels(texel)[range];
-
-            let texel_slice = from.as_texels(texel).as_slice_of_cells();
-            for (&index, into) in idx.zip(texels) {
-                if let Some(from) = texel_slice.get(index) {
-                    *into = texel.copy_cell(from);
-                }
-            }
-        }
-
         struct ReadCell<'plane, 'data> {
             from: &'plane CellSource<'data>,
             idx: &'plane [usize],
@@ -1197,6 +1216,19 @@ impl ConverterRt {
         impl GenericTexelAction for ReadCell<'_, '_> {
             fn run<T>(self, texel: Texel<T>) {
                 fetch_from_texel_cell(self.from, self.idx, self.into, self.range, texel)
+            }
+        }
+
+        struct ReadAtomic<'plane, 'data> {
+            from: &'plane AtomicSource<'data>,
+            idx: &'plane [usize],
+            into: &'plane mut TexelBuffer,
+            range: Range<usize>,
+        }
+
+        impl GenericTexelAction for ReadAtomic<'_, '_> {
+            fn run<T>(self, texel: Texel<T>) {
+                fetch_from_texel_atomics(self.from, self.idx, self.into, self.range, texel)
             }
         }
 
@@ -1252,14 +1284,21 @@ impl ConverterRt {
                         range: 0..self.in_index_list.len(),
                     });
                 }
-                _ => todo!(),
+                PlaneIdx::Atomic(_) => {
+                    info.in_kind.action(ReadAtomic {
+                        from: &from.sources.atomic[ops.color_in_plane.into_index()],
+                        idx: &self.in_index_list,
+                        into: &mut self.in_texels,
+                        range: 0..self.in_index_list.len(),
+                    });
+                }
             }
         }
     }
 
     /// The job of this function is transferring texel information onto the target plane.
     fn write_texels(&mut self, info: &ConvertInfo, ops: &ConvertOps, into: PlaneIo) {
-        fn write_from_texel_array<T>(
+        fn write_for_texel_array<T>(
             into: &mut PlaneTarget,
             idx: &[usize],
             from: &TexelBuffer,
@@ -1282,6 +1321,54 @@ impl ConverterRt {
             }
         }
 
+        fn write_for_texel_cells<T>(
+            into: &CellTarget,
+            idx: &[usize],
+            from: &TexelBuffer,
+            range: Range<usize>,
+            texel: Texel<T>,
+        ) {
+            // FIXME(planar):
+            // FIXME(color): multi-planar texel write.
+            let idx = idx[range.clone()].iter();
+            let texels = &from.as_texels(texel)[range];
+            let texel_slice = into.as_texels(texel).as_slice_of_cells();
+
+            // The index structure and used texel type should match.
+            debug_assert_eq!(idx.len(), texels.len());
+            // FIXME: we can do this much faster as range copies or swizzled copies.
+
+            for (&index, from) in idx.zip(texels) {
+                if let Some(into) = texel_slice.get(index) {
+                    into.set(texel.copy_val(from));
+                }
+            }
+        }
+
+        fn write_for_texel_atomics<T>(
+            into: &AtomicTarget,
+            idx: &[usize],
+            from: &TexelBuffer,
+            range: Range<usize>,
+            texel: Texel<T>,
+        ) {
+            // FIXME(planar):
+            // FIXME(color): multi-planar texel write.
+            let idx = idx[range.clone()].iter();
+            let texels = &from.as_texels(texel)[range];
+            let texel_slice = into.as_texels(texel);
+
+            // The index structure and used texel type should match.
+            debug_assert_eq!(idx.len(), texels.len());
+            // FIXME: we can do this much faster as range copies or swizzled copies.
+
+            for (&index, from) in idx.zip(texels) {
+                if let Some(into) = texel_slice.get(index..index + 1) {
+                    into.read_from_slice(core::slice::from_ref(&from));
+                }
+            }
+        }
+
         struct WriteUnit<'plane, 'data> {
             into: &'plane mut PlaneTarget<'data>,
             idx: &'plane [usize],
@@ -1291,7 +1378,33 @@ impl ConverterRt {
 
         impl GenericTexelAction for WriteUnit<'_, '_> {
             fn run<T>(self, texel: Texel<T>) {
-                write_from_texel_array(self.into, self.idx, self.from, self.range, texel)
+                write_for_texel_array(self.into, self.idx, self.from, self.range, texel)
+            }
+        }
+
+        struct WriteCell<'plane, 'data> {
+            into: &'plane CellTarget<'data>,
+            idx: &'plane [usize],
+            from: &'plane TexelBuffer,
+            range: Range<usize>,
+        }
+
+        impl GenericTexelAction for WriteCell<'_, '_> {
+            fn run<T>(self, texel: Texel<T>) {
+                write_for_texel_cells(self.into, self.idx, self.from, self.range, texel)
+            }
+        }
+
+        struct WriteAtomic<'plane, 'data> {
+            into: &'plane AtomicTarget<'data>,
+            idx: &'plane [usize],
+            from: &'plane TexelBuffer,
+            range: Range<usize>,
+        }
+
+        impl GenericTexelAction for WriteAtomic<'_, '_> {
+            fn run<T>(self, texel: Texel<T>) {
+                write_for_texel_atomics(self.into, self.idx, self.from, self.range, texel)
             }
         }
 
@@ -1338,7 +1451,22 @@ impl ConverterRt {
                         range: 0..self.out_index_list.len(),
                     });
                 }
-                _ => todo!(),
+                PlaneIdx::Cell(_) => {
+                    info.out_kind.action(WriteCell {
+                        into: &into.targets.cell[ops.color_out_plane.into_index()],
+                        idx: &self.out_index_list,
+                        from: &self.out_texels,
+                        range: 0..self.out_index_list.len(),
+                    });
+                }
+                PlaneIdx::Atomic(_) => {
+                    info.out_kind.action(WriteAtomic {
+                        into: &into.targets.atomic[ops.color_out_plane.into_index()],
+                        idx: &self.out_index_list,
+                        from: &self.out_texels,
+                        range: 0..self.out_index_list.len(),
+                    });
+                }
             }
         }
     }

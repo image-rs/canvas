@@ -367,6 +367,12 @@ impl Canvas {
 }
 
 impl RcCanvas {
+    pub fn new(layout: CanvasLayout) -> Self {
+        RcCanvas {
+            inner: CellImage::new(layout),
+        }
+    }
+
     /// Get the untyped descriptor of a texel matrix.
     ///
     /// Returns `None` if the image contains data that can not be described as a single texel
@@ -375,9 +381,21 @@ impl RcCanvas {
         let [plane] = self.inner.as_ref().into_planes([PlaneIdx(idx)]).ok()?;
         Some(BytePlaneCells { inner: plane })
     }
+
+    pub fn to_canvas(&self) -> Canvas {
+        Canvas {
+            inner: self.inner.clone().into_owned(),
+        }
+    }
 }
 
 impl ArcCanvas {
+    pub fn new(layout: CanvasLayout) -> Self {
+        ArcCanvas {
+            inner: AtomicImage::new(layout),
+        }
+    }
+
     /// Get the untyped descriptor of a texel matrix.
     ///
     /// Returns `None` if the image contains data that can not be described as a single texel
@@ -385,6 +403,12 @@ impl ArcCanvas {
     pub fn plane(&self, idx: u8) -> Option<BytePlaneAtomics<'_>> {
         let [plane] = self.inner.as_ref().into_planes([PlaneIdx(idx)]).ok()?;
         Some(BytePlaneAtomics { inner: plane })
+    }
+
+    pub fn to_canvas(&self) -> Canvas {
+        Canvas {
+            inner: self.inner.clone().into_owned(),
+        }
     }
 }
 

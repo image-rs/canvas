@@ -39,7 +39,7 @@ fn main() -> Result<(), LayoutError> {
         }
 
         // Simply convert.
-        canvas.convert(&mut output);
+        canvas.convert(&mut output).unwrap();
 
         // And copy the memory to a buffer that image expects. We could do something zero-copy here but
         // that's needlessly complicated to handle the size checks or encoding ourselves.

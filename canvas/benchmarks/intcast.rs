@@ -28,7 +28,7 @@ impl Convert {
         let mut into = Canvas::new(layout);
         into.set_color(Color::SRGB)?;
 
-        Ok(move || from.convert(&mut into))
+        Ok(move || from.convert(&mut into).unwrap())
     }
 }
 
