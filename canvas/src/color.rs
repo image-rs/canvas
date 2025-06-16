@@ -55,6 +55,9 @@ pub enum Color {
     ///
     /// This library does not reliably implement all optimizations that are possible. Please refer
     /// to test and benchmark coverage.
+    ///
+    /// Standards that define such a lightness scheme typically do so through a `Yuv` scheme. This
+    /// color model only has an `L` component.
     LumaDigital {
         primary: Primaries,
         transfer: Transfer,
@@ -62,6 +65,12 @@ pub enum Color {
         luminance: Luminance,
     },
     /// A lightness, chroma difference scheme.
+    ///
+    /// For the `L` component, this is equivalent to either a `Luma` or `LumaDigital` model
+    /// depending on the `Differencing` scheme used.
+    ///
+    /// This library does not reliably implement all conversion optimizations that are possible.
+    /// Please refer to test and benchmark coverage.
     Yuv {
         primary: Primaries,
         whitepoint: Whitepoint,
@@ -436,6 +445,12 @@ impl Color {
         whitepoint: Whitepoint::D65,
     };
 
+    pub const SRGB_LUMA: Color = Color::Luma {
+        luminance: Luminance::Sdr,
+        transfer: Transfer::Srgb,
+        whitepoint: Whitepoint::D65,
+    };
+
     pub const BT709_RGB: Color = Color::Rgb {
         luminance: Luminance::Sdr,
         primary: Primaries::Bt709,
@@ -553,24 +568,21 @@ impl Color {
             return;
         } else if let Color::Luma {
             transfer,
-            whitepoint,
+            whitepoint: _,
             luminance: _,
         } = self
         {
-            let [fx, fy, fz] = whitepoint.to_xyz();
-
             if let Some(oe_transfer) = transfer.from_optical_display_slice() {
                 for (target_pix, src_xyz) in pixel.iter_mut().zip(xyz) {
-                    let [x, y, z, a] = *src_xyz;
-                    *target_pix = [x * fx, y * fy, z * fz, a];
+                    let [_, y, _, a] = *src_xyz;
+                    *target_pix = [y, 0.0, 0.0, a];
                 }
 
                 oe_transfer(pixel);
             } else {
                 for (target_pix, src_xyz) in pixel.iter_mut().zip(xyz) {
-                    let [x, y, z, a] = *src_xyz;
-                    let value = [x * fx, y * fy, z * fz, a];
-                    *target_pix = transfer.from_optical_display(value);
+                    let [_, y, _, a] = *src_xyz;
+                    *target_pix = transfer.from_optical_display([y, 0.0, 0.0, a]);
                 }
             }
         } else if let Color::Oklab {} = self {
@@ -661,14 +673,11 @@ impl Color {
             }
             Color::Luma {
                 transfer,
-                whitepoint,
+                whitepoint: _,
                 luminance: _,
             } => {
-                let [x, y, z, a] = value;
-                let [fx, fy, fz] = whitepoint.to_xyz();
-                let value = [x * fx, y * fy, z * fz, a];
-                let [l, _, _, a] = transfer.from_optical_display(value);
-                [l, 0.0, 0.0, a]
+                let [_, y, _, a] = value;
+                transfer.from_optical_display([y, 0.0, 0.0, a])
             }
             Color::LumaDigital {
                 primary,
