@@ -383,7 +383,6 @@ pub enum SampleBits {
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub(crate) enum BitEncoding {
-    Opaque,
     UInt,
     Int,
     Float,
@@ -492,7 +491,7 @@ impl ColorChannel {
     /// The color model of the channel.
     ///
     /// Returns `None` if it does not belong to any singular color model.
-    pub fn in_model(self, model: ColorChannelModel) -> bool {
+    pub const fn in_model(self, model: ColorChannelModel) -> bool {
         self.canonical_index_in(model).is_some()
     }
 
@@ -505,12 +504,15 @@ impl ColorChannel {
             (R | X, Rgb) => 0,
             (G | Y, Rgb) => 1,
             (B | Z, Rgb) => 2,
-            (Luma, Yuv) => 0,
+            (ColorChannel::Luma, Yuv) => 0,
+            (ColorChannel::Luma, ColorChannelModel::Luma) => 0,
             (Cb, Yuv) => 1,
             (Cr, Yuv) => 2,
             (L, Lab) => 0,
             (LABa | C, Lab) => 1,
             (LABb | LABh, Lab) => 2,
+            // Alpha represented here as no ink.
+            (Alpha, Cmyk) => return None,
             // Alpha allowed anywhere, as the last component.
             (Alpha, _) => 3,
             // FIXME: Scalar0, Scalar1, Scalar2
@@ -518,7 +520,17 @@ impl ColorChannel {
         })
     }
 
+    /// Infallible version of `canonical_index_in` which should be used only when a previous call
+    /// has validated that the color channel is allowed in the model. That check may be done by a
+    /// call to `canonical_index_in` or by source validation.
+    ///
+    /// The return value is arbitrarily wrong when this validation failed.
     const fn canonical_index_in_surely(self, model: ColorChannelModel) -> u8 {
+        debug_assert!(
+            Self::canonical_index_in(self, model).is_some(),
+            "you had one job, to validate the channels for the model"
+        );
+
         match Self::canonical_index_in(self, model) {
             Some(idx) => idx,
             None => 0,

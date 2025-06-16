@@ -33,6 +33,34 @@ pub enum Color {
         whitepoint: Whitepoint,
         luminance: Luminance,
     },
+    /// A pure lightness color based on linear stimulus interpolation.
+    ///
+    /// This is a `Yuv` without reference to any particular differencing scheme for the two chroma
+    /// channels.
+    Luma {
+        transfer: Transfer,
+        whitepoint: Whitepoint,
+        luminance: Luminance,
+    },
+    /// A lightness color based on transferred primary values.
+    ///
+    /// The advantage of this scheme is, in theory, we can convert between such a luma and its RGB
+    /// representation efficiently in its encoded form. This made its use appealing in older
+    /// television signals where the non-linearity conversion would have to be achieved by
+    /// expensive processing while the mixing is a much simpler, even analog, possibility.
+    ///
+    /// In quantized signals you can also approximate the coefficients in this processing and still
+    /// get correctly quantized results across the whole domain, without the non-linearity
+    /// necessitating some form of splitting.
+    ///
+    /// This library does not reliably implement all optimizations that are possible. Please refer
+    /// to test and benchmark coverage.
+    LumaDigital {
+        primary: Primaries,
+        transfer: Transfer,
+        whitepoint: Whitepoint,
+        luminance: Luminance,
+    },
     /// A lightness, chroma difference scheme.
     Yuv {
         primary: Primaries,
@@ -109,6 +137,11 @@ pub enum ColorChannelModel {
     ///
     /// Example: sRGB, CIE XYZ.
     Rgb,
+    /// A lightness model without any color representations.
+    ///
+    /// This is a one-dimensional color where all representable colors fall on the line segment
+    /// between full darkness and the whitepoint. Any Rgb and Yuv can be reduced to this.
+    Luma,
     /// A lightness, and two color difference components.
     ///
     /// Also sometimes called YUV but that is easily confused is the specific color model called
@@ -252,6 +285,15 @@ pub enum Transfer {
     /// treated as `Linear`. You might always transmute.
     /// FIXME(color): not yet supported, panics on use.
     Bt2100Scene,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+#[non_exhaustive]
+pub enum LightnessModel {
+    /// Lightness is calculated in linear color space, then transferred.
+    Linear,
+    /// Lightness is calculated in transferred ('electrical') values.
+    Digital,
 }
 
 /// The reference brightness of the color specification.
@@ -510,6 +552,28 @@ impl Color {
                 let [x, y, z] = to_xyz.mul_vec([r, g, b]);
                 [x, y, z, a]
             }
+            Color::Luma {
+                transfer,
+                whitepoint,
+                luminance: _,
+            } => {
+                let [l, _, _, a] = transfer.to_optical_display(value);
+                let [x, y, z] = whitepoint.to_xyz();
+                [l * x, l * y, l * z, a]
+            }
+            Color::LumaDigital {
+                primary,
+                transfer,
+                whitepoint,
+                luminance: _,
+            } => {
+                let [l, _, _, a] = value;
+                let to_xyz = primary.to_xyz(*whitepoint);
+                let [r, g, b] = to_xyz.mul_vec([l, l, l]);
+                let [r, g, b, a] = transfer.to_optical_display([r, g, b, a]);
+                let [x, y, z] = to_xyz.mul_vec([r, g, b]);
+                [x, y, z, a]
+            }
             Color::Yuv {
                 primary,
                 transfer,
@@ -549,6 +613,30 @@ impl Color {
                 let [r, g, b] = from_xyz.mul_vec([x, y, z]);
                 transfer.from_optical_display([r, g, b, a])
             }
+            Color::Luma {
+                transfer,
+                whitepoint,
+                luminance: _,
+            } => {
+                let [x, y, z, a] = value;
+                let [fx, fy, fz] = whitepoint.to_xyz();
+                let value = [x * fx, y * fy, z * fz, a];
+                let [l, _, _, a] = transfer.from_optical_display(value);
+                [l, 0.0, 0.0, a]
+            }
+            Color::LumaDigital {
+                primary,
+                transfer,
+                whitepoint,
+                luminance: _,
+            } => {
+                let [x, y, z, a] = value;
+                let from_xyz = primary.to_xyz(*whitepoint).inv();
+                let [r, g, b] = from_xyz.mul_vec([x, y, z]);
+                let [r, g, b, a] = transfer.from_optical_display([r, g, b, a]);
+                let [_, l, _] = primary.to_xyz(*whitepoint).mul_vec([r, g, b]);
+                [l, 0.0, 0.0, a]
+            }
             Color::Yuv {
                 primary,
                 transfer,
@@ -577,11 +665,84 @@ impl Color {
     pub fn model(&self) -> Option<ColorChannelModel> {
         Some(match self {
             Color::Rgb { .. } => ColorChannelModel::Rgb,
+            Color::Luma { .. } => ColorChannelModel::Luma,
+            Color::LumaDigital { .. } => ColorChannelModel::Luma,
             Color::Oklab | Color::SrLab2 { .. } => ColorChannelModel::Lab,
             Color::Yuv { .. } => ColorChannelModel::Yuv,
             Color::Scalars { .. } => return None,
         })
     }
+}
+
+impl ColorChannelModel {
+    pub const fn contains(self, channel: ColorChannel) -> bool {
+        channel.in_model(self)
+    }
+
+    const _STATIC_ASSERTIONS: () = {
+        fn _all_models(model: ColorChannelModel) {
+            use ColorChannelModel::*;
+
+            // Makes it obvious we have statically tested all models. At least assuming we didn't
+            // fail to copy and paste.
+            match model {
+                Rgb => {
+                    const _: () = {
+                        assert!(Rgb.contains(ColorChannel::R));
+                        assert!(Rgb.contains(ColorChannel::G));
+                        assert!(Rgb.contains(ColorChannel::B));
+                        assert!(Rgb.contains(ColorChannel::Alpha));
+                    };
+                }
+                Luma => {
+                    const _: () = {
+                        assert!(Luma.contains(ColorChannel::Luma));
+                        assert!(Luma.contains(ColorChannel::Alpha));
+                    };
+                }
+                Yuv => {
+                    const _: () = {
+                        assert!(Yuv.contains(ColorChannel::Luma));
+                        assert!(Yuv.contains(ColorChannel::Cb));
+                        assert!(Yuv.contains(ColorChannel::Cr));
+                        assert!(Yuv.contains(ColorChannel::Alpha));
+                    };
+                }
+                Lab => {
+                    const _: () = {
+                        assert!(Lab.contains(ColorChannel::L));
+                        assert!(Lab.contains(ColorChannel::LABa));
+                        assert!(Lab.contains(ColorChannel::LABb));
+                        assert!(Lab.contains(ColorChannel::Alpha));
+                    };
+                }
+                ColorChannelModel::Lch => {
+                    const _: () = {
+                        // No other channels handled yet.
+                        assert!(Lch.contains(ColorChannel::Alpha));
+                    };
+                }
+                ColorChannelModel::Cmyk => {
+                    const _: () = {
+                        // No other channels handled yet.
+                        assert!(!Cmyk.contains(ColorChannel::Alpha));
+                    };
+                }
+                ColorChannelModel::Hsv => {
+                    const _: () = {
+                        // No other channels handled yet.
+                        assert!(Lch.contains(ColorChannel::Alpha));
+                    };
+                }
+                ColorChannelModel::Hsl => {
+                    const _: () = {
+                        // No other channels handled yet.
+                        assert!(Lch.contains(ColorChannel::Alpha));
+                    };
+                }
+            }
+        }
+    };
 }
 
 impl Transfer {
