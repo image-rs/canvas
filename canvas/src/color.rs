@@ -484,6 +484,30 @@ impl Color {
             }
 
             return;
+        } else if let Color::Luma {
+            transfer,
+            whitepoint,
+            luminance: _,
+        } = self
+        {
+            let [x, y, z] = whitepoint.to_xyz();
+
+            // FIXME: really we'd like to only transfer idx 0 and 4.
+            if let Some(eo_transfer) = transfer.to_optical_display_slice() {
+                eo_transfer(pixel, xyz);
+
+                for target_xyz in xyz {
+                    let [l, _, _, a] = *target_xyz;
+                    *target_xyz = [l * x, l * y, l * z, a];
+                }
+            } else {
+                for (target_xyz, src_pix) in xyz.iter_mut().zip(pixel) {
+                    let [l, _, _, a] = transfer.to_optical_display(*src_pix);
+                    *target_xyz = [l * x, l * y, l * z, a];
+                }
+            }
+
+            return;
         } else if let Color::Oklab {} = self {
             return oklab::to_xyz_slice(pixel, xyz);
         } else if let Color::SrLab2 { whitepoint } = self {
@@ -527,6 +551,28 @@ impl Color {
             }
 
             return;
+        } else if let Color::Luma {
+            transfer,
+            whitepoint,
+            luminance: _,
+        } = self
+        {
+            let [fx, fy, fz] = whitepoint.to_xyz();
+
+            if let Some(oe_transfer) = transfer.from_optical_display_slice() {
+                for (target_pix, src_xyz) in pixel.iter_mut().zip(xyz) {
+                    let [x, y, z, a] = *src_xyz;
+                    *target_pix = [x * fx, y * fy, z * fz, a];
+                }
+
+                oe_transfer(pixel);
+            } else {
+                for (target_pix, src_xyz) in pixel.iter_mut().zip(xyz) {
+                    let [x, y, z, a] = *src_xyz;
+                    let value = [x * fx, y * fy, z * fz, a];
+                    *target_pix = transfer.from_optical_display(value);
+                }
+            }
         } else if let Color::Oklab {} = self {
             return oklab::from_xyz_slice(xyz, pixel);
         } else if let Color::SrLab2 { whitepoint } = self {
