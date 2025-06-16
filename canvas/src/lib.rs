@@ -80,7 +80,7 @@ mod tests;
 
 pub use self::frame::{Canvas, Plane};
 
-pub use self::shader::{Converter, ConverterPlaneHandle, ConverterRun};
+pub use self::shader::{Converter, ConverterPlaneHandle, ConverterRun, ConversionError};
 
 pub mod canvas {
     pub use crate::frame::{
