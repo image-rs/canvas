@@ -3,7 +3,7 @@
 //! Takes quite a lot of inspiration from how GPUs work. We have a primitive sampler unit, a
 //! fragment unit, and pipeline multiple texels in parallel.
 use alloc::{boxed::Box, vec::Vec};
-use core::ops::Range;
+use core::{fmt, ops::Range};
 use image_texel::image::{AtomicImageRef, CellImageRef, ImageMut, ImageRef};
 use image_texel::{AsTexel, Texel, TexelBuffer};
 
@@ -2397,6 +2397,48 @@ impl From<SampleBits> for TexelKind {
         }
     }
 }
+
+impl fmt::Display for ConversionError {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            ConversionError::InputLayoutDoesNotMatchPlan => {
+                write!(
+                    f,
+                    "the planned input layout does not match the actual input"
+                )
+            }
+            ConversionError::OutputLayoutDoesNotMatchPlan => {
+                write!(
+                    f,
+                    "the planned output layout does not match the actual output"
+                )
+            }
+            ConversionError::InputColorDoesNotMatchPlanes => {
+                write!(f, "the planned input color does not match the actual color")
+            }
+            ConversionError::OutputColorDoesNotMatchPlanes => {
+                write!(
+                    f,
+                    "the planned output color does not match the actual color"
+                )
+            }
+            ConversionError::UnsupportedInputLayout => {
+                write!(f, "conversion from the input layout is not supported")
+            }
+            ConversionError::UnsupportedInputColor => {
+                write!(f, "conversion from the input color is not supported")
+            }
+            ConversionError::UnsupportedOutputLayout => {
+                write!(f, "conversion into the output layout is not supported")
+            }
+            ConversionError::UnsupportedOutputColor => {
+                write!(f, "conversion into the output color is not supported")
+            }
+        }
+    }
+}
+
+impl core::error::Error for ConversionError {}
 
 #[test]
 fn from_bits() {

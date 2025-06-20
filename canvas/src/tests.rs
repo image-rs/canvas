@@ -1,6 +1,6 @@
 use crate::{
     canvas::{ArcCanvas, RcCanvas},
-    color::Color,
+    color::{self, Color},
     layout::{
         Block, CanvasLayout, LayoutError, RowLayoutDescription, SampleBits, SampleParts, Texel,
     },
@@ -435,6 +435,95 @@ fn yuv_conversion() -> Result<(), LayoutError> {
     check_color_pair([0, 0, 0], [0, 0, 0]);
     // full white is only Luma, no chroma
     check_color_pair([255, 255, 255], [255, 0, 0]);
+
+    Ok(())
+}
+
+#[test]
+fn luma_conversion() -> Result<(), LayoutError> {
+    let layout = CanvasLayout::with_texel(&Texel::new_u8(SampleParts::Rgb), 32, 32)?;
+    let mut from = Canvas::new(layout.clone());
+    from.set_color(Color::SRGB)?;
+
+    let layout = CanvasLayout::with_texel(&Texel::new_u8(SampleParts::Luma), 32, 32)?;
+    let mut into = Canvas::new(layout);
+    into.set_color(Color::SRGB_LUMA)?;
+
+    let mut check_color_pair = |rgb: [u8; 3], luma: u8| {
+        from.as_texels_mut(<[u8; 3] as image_texel::AsTexel>::texel())
+            .iter_mut()
+            .for_each(|b| *b = rgb);
+
+        from.convert(&mut into).unwrap();
+
+        into.as_texels_mut(<[u8; 1] as image_texel::AsTexel>::texel())
+            .iter()
+            .enumerate()
+            .for_each(|(idx, b)| assert_eq!(*b, [luma], "at {}", idx));
+    };
+
+    check_color_pair([255, 255, 0], 247);
+    check_color_pair([128, 0, 80], 64);
+    // easy check, full black is full black
+    check_color_pair([0, 0, 0], 0);
+    // full white is only Luma, no chroma
+    check_color_pair([255, 255, 255], 255);
+    // sRGB whitepoint D65 is close enough to equal weight on all channels.
+    check_color_pair([30, 30, 30], 30);
+
+    // Primary lightnesses for reference.
+    check_color_pair([255, 0, 0], 127);
+    check_color_pair([0, 255, 0], 220);
+    check_color_pair([0, 0, 255], 76);
+
+    Ok(())
+}
+
+#[test]
+#[cfg(any())] // Disabled until better test coverage and reference.
+fn luma_digital_conversion() -> Result<(), LayoutError> {
+    let layout = CanvasLayout::with_texel(&Texel::new_u8(SampleParts::Rgb), 32, 32)?;
+    let mut from = Canvas::new(layout.clone());
+    from.set_color(Color::SRGB)?;
+
+    let layout = CanvasLayout::with_texel(&Texel::new_u8(SampleParts::Luma), 32, 32)?;
+    let mut into = Canvas::new(layout);
+    into.set_color(Color::LumaDigital {
+        primary: color::Primaries::Bt709,
+        luminance: color::Luminance::Sdr,
+        transfer: color::Transfer::Srgb,
+        whitepoint: color::Whitepoint::D65,
+    })?;
+
+    let mut check_color_pair = |rgb: [u8; 3], luma: u8| {
+        from.as_texels_mut(<[u8; 3] as image_texel::AsTexel>::texel())
+            .iter_mut()
+            .for_each(|b| *b = rgb);
+
+        from.convert(&mut into).unwrap();
+
+        into.as_texels_mut(<[u8; 1] as image_texel::AsTexel>::texel())
+            .iter()
+            .enumerate()
+            .for_each(|(idx, b)| assert_eq!(*b, [luma], "at {}", idx));
+    };
+
+    // Compare to the `luma_conversion` test. These are different values due to different mix but
+    // only slightly. Most affected are colors with one or more very dark channel which is
+    // improperly high weighted from the transform.
+    check_color_pair([255, 255, 0], 237);
+    check_color_pair([128, 0, 80], 33);
+    // easy check, full black is full black
+    check_color_pair([0, 0, 0], 0);
+    // full white is only Luma, no chroma
+    check_color_pair([255, 255, 255], 255);
+    // sRGB whitepoint D65 is close enough to equal weight on all channels.
+    check_color_pair([30, 30, 30], 30);
+
+    // Primary lightnesses for reference.
+    check_color_pair([255, 0, 0], 54);
+    check_color_pair([0, 255, 0], 182);
+    check_color_pair([0, 0, 255], 18);
 
     Ok(())
 }
