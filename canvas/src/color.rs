@@ -58,11 +58,16 @@ pub enum Color {
     ///
     /// Standards that define such a lightness scheme typically do so through a `Yuv` scheme. This
     /// color model only has an `L` component.
+    #[cfg(any())] // Disabled until better test coverage and reference.
     LumaDigital {
         primary: Primaries,
         transfer: Transfer,
         whitepoint: Whitepoint,
         luminance: Luminance,
+        // FIXME: do we need an argument describing how to derive coefficients from the given
+        // primaries? We use the xYz transfer matrix directly but there may be a compensation for
+        // the inaccurate dark colors from the transfer function. Uncertain how to represent this
+        // in the type system. This question must be resolved before enabling.
     },
     /// A lightness, chroma difference scheme.
     ///
@@ -619,6 +624,7 @@ impl Color {
                 let [x, y, z] = whitepoint.to_xyz();
                 [l * x, l * y, l * z, a]
             }
+            #[cfg(any())]
             Color::LumaDigital {
                 primary,
                 transfer,
@@ -679,6 +685,7 @@ impl Color {
                 let [_, y, _, a] = value;
                 transfer.from_optical_display([y, 0.0, 0.0, a])
             }
+            #[cfg(any())]
             Color::LumaDigital {
                 primary,
                 transfer,
@@ -721,6 +728,7 @@ impl Color {
         Some(match self {
             Color::Rgb { .. } => ColorChannelModel::Rgb,
             Color::Luma { .. } => ColorChannelModel::Luma,
+            #[cfg(any())]
             Color::LumaDigital { .. } => ColorChannelModel::Luma,
             Color::Oklab | Color::SrLab2 { .. } => ColorChannelModel::Lab,
             Color::Yuv { .. } => ColorChannelModel::Yuv,
