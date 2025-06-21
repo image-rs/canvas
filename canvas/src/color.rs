@@ -269,7 +269,15 @@ pub enum ColorChannel {
 pub enum Transfer {
     /// Non-linear electrical data of Bt.709
     Bt709,
+    /// Non-linear electrical data of Bt.470 M/NTSC.
+    ///
+    /// Check if you meant to use BT.470 M/PAL instead, which is the more commonly used RGB color
+    /// space 'ITU-R BT.470 - 625'. A pure gamma of `2.2`.
     Bt470M,
+    /// Non-linear electrical data of Bt.470 PAL, SECAM, ….
+    ///
+    /// A pure gamma of `2.8`.
+    Bt470,
     /// Non-linear electrical data of Bt.601
     Bt601,
     /// Non-linear electrical data of Smpte-240
@@ -453,6 +461,27 @@ impl Color {
     pub const SRGB_LUMA: Color = Color::Luma {
         luminance: Luminance::Sdr,
         transfer: Transfer::Srgb,
+        whitepoint: Whitepoint::D65,
+    };
+
+    pub const RGB_ITU_BT2020: Color = Color::Rgb {
+        luminance: Luminance::Sdr,
+        primary: Primaries::Bt2020,
+        transfer: Transfer::Bt2020_10bit,
+        whitepoint: Whitepoint::D65,
+    };
+
+    pub const RGB_ITU_BT470_525: Color = Color::Rgb {
+        luminance: Luminance::Sdr,
+        primary: Primaries::Bt601_525,
+        transfer: Transfer::Bt470,
+        whitepoint: Whitepoint::D65,
+    };
+
+    pub const RGB_ITU_BT470_625: Color = Color::Rgb {
+        luminance: Luminance::Sdr,
+        primary: Primaries::Bt601_625,
+        transfer: Transfer::Bt470,
         whitepoint: Whitepoint::D65,
     };
 
@@ -822,6 +851,7 @@ impl Transfer {
         let [r, g, b] = match self {
             Transfer::Bt709 => rgb.map(transfer_eo_bt709),
             Transfer::Bt470M => rgb.map(transfer_eo_bt470m),
+            Transfer::Bt470 => rgb.map(transfer_eo_bt470),
             Transfer::Bt601 => rgb.map(transfer_eo_bt601),
             Transfer::Smpte240 => rgb.map(transfer_eo_smpte240),
             Transfer::Linear => rgb,
@@ -858,6 +888,7 @@ impl Transfer {
         let [r, g, b] = match self {
             Transfer::Bt709 => rgb.map(transfer_oe_bt709),
             Transfer::Bt470M => rgb.map(transfer_oe_bt470m),
+            Transfer::Bt470 => rgb.map(transfer_oe_bt470),
             Transfer::Bt601 => rgb.map(transfer_oe_bt601),
             Transfer::Smpte240 => rgb.map(transfer_oe_smpte240),
             Transfer::Linear => rgb,
@@ -912,6 +943,7 @@ impl Transfer {
         optical_by_display!(self:
             Transfer::Bt709 => transfer_eo_bt709,
             Transfer::Bt470M => transfer_eo_bt470m,
+            Transfer::Bt470 => transfer_eo_bt470,
             Transfer::Bt601 => transfer_eo_bt601,
             Transfer::Smpte240 => transfer_eo_smpte240,
             Transfer::Srgb => transfer_eo_srgb,
@@ -946,6 +978,7 @@ impl Transfer {
         optical_by_display!(self:
             Transfer::Bt709 => transfer_eo_bt709,
             Transfer::Bt470M => transfer_eo_bt470m,
+            Transfer::Bt470 => transfer_eo_bt470,
             Transfer::Bt601 => transfer_eo_bt601,
             Transfer::Smpte240 => transfer_eo_smpte240,
             Transfer::Srgb => transfer_eo_srgb,
