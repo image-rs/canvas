@@ -111,42 +111,43 @@ pub fn transfer_eo_srgb(val: f32) -> f32 {
 }
 
 // Used Reference: https://www.kernel.org/doc/html/v4.11/media/uapi/v4l/pixfmt-007.html#colorspace-bt-2020-v4l2-colorspace-bt2020
+//
+// Validated in `colour_test_vectors`.
 pub fn transfer_oe_bt2020_10b(val: f32) -> f32 {
     transfer_oe_bt709(val)
 }
 
 // Used Reference: https://www.kernel.org/doc/html/v4.11/media/uapi/v4l/pixfmt-007.html#colorspace-bt-2020-v4l2-colorspace-bt2020
+//
+// Validated in `colour_test_vectors`.
 pub fn transfer_eo_bt2020_10b(val: f32) -> f32 {
     transfer_eo_bt709(val)
 }
 
 // Used Reference: BT.2100-2, Table 4, Reference PQ EOTF
 const SMPTE2084_M1: f32 = 2610.0 / 16384.0;
-const SMPTE2084_M2: f32 = 2523.0 / 4096.0;
+const SMPTE2084_M2: f32 = 2523.0 / 4096.0 * 128.;
 const SMPTE2084_C1: f32 = 3424.0 / 4096.0;
 const SMPTE2084_C2: f32 = 2413.0 / 128.0;
 const SMPTE2084_C3: f32 = 2392.0 / 128.0;
 
 // Used Reference: BT.2100-2, Table 4, Reference PQ EOTF
-// Note: the output is _display_ color value Y and _not_ scene luminance.
+// Note: the output is _display_ color value Y and _not_ display luminance.
 #[allow(non_snake_case)] // for conformity with reference.
 pub fn transfer_eo_smpte2084(val: f32) -> f32 {
     let N = pow(val, 1.0 / SMPTE2084_M2);
-    let nom = if N - SMPTE2084_C1 > 0.0 {
-        N - SMPTE2084_C1
-    } else {
-        0.0
-    };
+    let nom = (N - SMPTE2084_C1).max(0.0);
     let denom = SMPTE2084_C2 - SMPTE2084_C3 * N;
     pow(nom / denom, 1.0 / SMPTE2084_M1)
 }
+
 // Used Reference: BT.2100-2, Table 4, Reference PQ OETF
-// Note: the input is _display_ color value Y and _not_ scene luminance.
+// Note: the input is _display_ linear color value Y and _not_ luminance.
 #[allow(non_snake_case)] // for conformity with reference.
 pub fn transfer_eo_inv_smpte2084(val: f32) -> f32 {
-    let Y = pow(val, SMPTE2084_M1);
-    let nom = SMPTE2084_C1 + SMPTE2084_C2 * Y;
-    let denom = SMPTE2084_C3 * Y + 1.0;
+    let fraction = pow(val, SMPTE2084_M1);
+    let nom = SMPTE2084_C1 + SMPTE2084_C2 * fraction;
+    let denom = 1.0 + SMPTE2084_C3 * fraction;
     pow(nom / denom, SMPTE2084_M2)
 }
 
@@ -185,7 +186,18 @@ fn colour_test_vectors() {
         eotf: fn(f32) -> f32,
         oetf: fn(f32) -> f32,
         data: &'static [(f32, f32)],
+        abs_diff_oetf: f32,
+        abs_diff_eotf: f32,
     }
+
+    const DEFAULTS: TestVector = TestVector {
+        name: "none",
+        eotf: |x| x,
+        oetf: |x| x,
+        data: &[],
+        abs_diff_eotf: 1e-6,
+        abs_diff_oetf: 1e-6,
+    };
 
     // If you're contributing and you have an LLM available, give yourself the laugh of having it
     // try to autocomplete the floating point pairs in the data tables below. Well, in a few years
@@ -208,6 +220,7 @@ fn colour_test_vectors() {
                 (0.75, 0.52252155396839206),
                 (0.0031308, 0.00024232198142414861),
             ],
+            ..DEFAULTS
         },
         TestVector {
             // # colour-science    0.4.6
@@ -223,6 +236,7 @@ fn colour_test_vectors() {
                 (0.75, 0.56352229924287789),
                 (0.01, 0.0022222222222222222),
             ],
+            ..DEFAULTS
         },
         TestVector {
             // # colour-science    0.4.6
@@ -239,6 +253,7 @@ fn colour_test_vectors() {
                 (0.75, 0.56352229924287789),
                 (0.01, 0.0022222222222222222),
             ],
+            ..DEFAULTS
         },
         TestVector {
             // # colour-science    0.4.6
@@ -253,6 +268,7 @@ fn colour_test_vectors() {
                 (0.25, 0.082413320052187017),
                 (0.75, 0.56767766904658656),
             ],
+            ..DEFAULTS
         },
         TestVector {
             // # colour-science    0.4.6
@@ -271,6 +287,48 @@ fn colour_test_vectors() {
                 (0.78070918215571006, 0.5),
                 (0.60950682710223769, 0.25),
             ],
+            ..DEFAULTS
+        },
+        TestVector {
+            // # colour-science    0.4.6
+            name: "BT2020",
+            // Note that 10e6 threshold is more accurate than 12-bit
+            eotf: transfer_eo_bt2020_10b,
+            oetf: transfer_oe_bt2020_10b,
+            data: &[
+                // b = colour.RGB_COLOURSPACES['ITU-R BT.2020'].cctf_decoding(a)
+                (0.0, 0.0),
+                (1.0, 1.0),
+                (0.5, 0.25958940050628576),
+                (0.25, 0.07815387594543223),
+                (0.75, 0.56352229924287789),
+                // a = colour.RGB_COLOURSPACES['ITU-R BT.2020'].cctf_encoding(b)
+                (0.8665510955460799, 0.75),
+                (0.7055150899221212, 0.5),
+                (0.48993951766369304, 0.25),
+            ],
+            ..DEFAULTS
+        },
+        TestVector {
+            // # colour-science    0.4.6
+            name: "ST 2084",
+            // Note that 10e6 threshold is more accurate than 12-bit
+            eotf: transfer_eo_smpte2084,
+            oetf: transfer_eo_inv_smpte2084,
+            data: &[
+                // b = colour.EOTFS['ST 2084'](a)
+                (0.0, 0.0 / 10_000.0),
+                (1.0, 10_000.0 / 10_000.0),
+                (0.5, 92.245708994065268 / 10_000.0),
+                (0.25, 5.1541760098330069 / 10_000.0),
+                (0.75, 983.37785558702751 / 10_000.0),
+                (0.9, 3905.6446528344222 / 10_000.0),
+            ],
+            // There is no simple inverse and the reference can only be so accurate. This means we
+            // can do whole lot of 15 bits without any loss. The reference colour only implements
+            // the EOTF as such.
+            abs_diff_oetf: 1e-5,
+            ..DEFAULTS
         },
     ];
 
@@ -279,7 +337,7 @@ fn colour_test_vectors() {
             let eotf_result = (vector.eotf)(*a);
             let oetf_result = (vector.oetf)(*b);
             assert!(
-                (eotf_result - *b).abs() < 1e-6,
+                (eotf_result - *b).abs() < vector.abs_diff_eotf,
                 "{} failed for eotf {}: expected {}, got {}",
                 vector.name,
                 a,
@@ -287,7 +345,7 @@ fn colour_test_vectors() {
                 eotf_result
             );
             assert!(
-                (oetf_result - *a).abs() < 1e-6,
+                (oetf_result - *a).abs() < vector.abs_diff_oetf,
                 "{} failed for oetf {}: expected {}, got {}",
                 vector.name,
                 b,
