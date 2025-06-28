@@ -39,14 +39,14 @@ pub fn transfer_eo_bt470m(val: f32) -> f32 {
 //
 // Validated in `colour_test_vectors`.
 pub fn transfer_oe_bt470(val: f32) -> f32 {
-    pow(val, 1.0 / 2.800)
+    pow(val.abs(), 1.0 / 2.800).copysign(val)
 }
 
 // Used Reference: BT.470-5, Table 1, Item 5
 //
 // Validated in `colour_test_vectors`.
 pub fn transfer_eo_bt470(val: f32) -> f32 {
-    pow(val, 2.800)
+    pow(val.abs(), 2.800).copysign(val)
 }
 
 // Used Reference: BT.601-7, Section 2.6.4
