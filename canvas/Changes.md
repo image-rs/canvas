@@ -1,3 +1,15 @@
+## 0.5.1
+
+Improved color fidelity options
+- Added `Color::Luma` which is a pure luminance space based on a (transferred)
+  CIE-Y. The in-exact version used in TVs of old times, calculated within the
+  non-linear signal, will be provided at a later point. It's justification is
+  decreased computational effort which will have to be implemented.
+- Fixed coefficients in transfer functions `SMPTE ST 2048` and `BT470`.
+- Fixed `BT601` transfer function having its EOTF and inverse swapped.
+- Several color spaces are now compared against Python's `colour-science`
+  package as a reference to generate test vectors.
+
 ## 0.5.0
 
 Add support for shared canvases, both `!Sync` and `Sync`.
