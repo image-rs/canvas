@@ -4,7 +4,7 @@ use alloc::borrow::ToOwned;
 use alloc::vec::Vec;
 
 use image_texel::image::{
-    AtomicImage, AtomicImageRef, CellImage, CellImageRef, Image, ImageMut, ImageRef,
+    data, AtomicImage, AtomicImageRef, CellImage, CellImageRef, Image, ImageMut, ImageRef,
 };
 use image_texel::texels::U8;
 
@@ -40,8 +40,10 @@ pub struct Plane {
 ///
 /// This can be created from a [`Plane`] but also by validating an arbitrary slice of bytes against
 /// some of the known layouts. These layouts can be partially defined by the user.
+///
+/// The common use for values is to pass an outside buffer to [`ConverterRun::
 pub struct PlaneDataRef<'data> {
-    pub(crate) inner: ImageRef<'data, PlaneBytes>,
+    pub(crate) inner: data::DataRef<'data, PlaneBytes>,
 }
 
 /// A reference to mutable bytes containing data of a single plane.
@@ -49,7 +51,7 @@ pub struct PlaneDataRef<'data> {
 /// This can be created from a [`Plane`] but also by validating an arbitrary slice of bytes against
 /// some of the known layouts. These layouts can be partially defined by the user.
 pub struct PlaneDataMut<'data> {
-    pub(crate) inner: ImageMut<'data, PlaneBytes>,
+    pub(crate) inner: data::DataMut<'data, PlaneBytes>,
 }
 
 /// Represents a single matrix like layer of an image.
@@ -665,7 +667,7 @@ impl From<ArcCanvas> for RcCanvas {
 impl<'lt> From<&'lt Plane> for PlaneDataRef<'lt> {
     fn from(plane: &'_ Plane) -> PlaneDataRef<'_> {
         PlaneDataRef {
-            inner: plane.inner.as_ref().into_cloned_layout(),
+            inner: plane.inner.as_ref().into_cloned_layout().into_data(),
         }
     }
 }
@@ -673,7 +675,39 @@ impl<'lt> From<&'lt Plane> for PlaneDataRef<'lt> {
 impl<'lt> From<&'lt mut Plane> for PlaneDataMut<'lt> {
     fn from(plane: &'_ mut Plane) -> PlaneDataMut<'_> {
         PlaneDataMut {
-            inner: plane.inner.as_mut().into_cloned_layout(),
+            inner: plane.inner.as_mut().into_cloned_layout().into_data(),
         }
+    }
+}
+
+impl<'data> PlaneDataRef<'data> {
+    /// Create plane data from bytes and a layout.
+    ///
+    /// This returns `Some` if the data is long enough for the layout, and `None` otherwise.
+    /// Extraneous data is ignored.
+    pub fn new(data: &'data [u8], layout: PlaneBytes) -> Result<Self, LayoutError> {
+        let err = LayoutError::length_required(
+            data.len()..image_texel::layout::Layout::byte_len(&layout),
+        );
+
+        let inner = data::DataRef::with_layout_at(data, layout, 0).ok_or(err)?;
+
+        Ok(PlaneDataRef { inner })
+    }
+}
+
+impl<'data> PlaneDataMut<'data> {
+    /// Create mutable plane data from bytes and a layout.
+    ///
+    /// This returns `Some` if the data is long enough for the layout, and `None` otherwise.
+    /// Extraneous data is ignored.
+    pub fn new(data: &'data mut [u8], layout: PlaneBytes) -> Result<Self, LayoutError> {
+        let err = LayoutError::length_required(
+            data.len()..image_texel::layout::Layout::byte_len(&layout),
+        );
+
+        let inner = data::DataMut::with_layout_at(data, layout, 0).ok_or(err)?;
+
+        Ok(PlaneDataMut { inner })
     }
 }

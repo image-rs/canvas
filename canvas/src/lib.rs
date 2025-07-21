@@ -85,7 +85,8 @@ pub use self::shader::{ConversionError, Converter, ConverterPlaneHandle, Convert
 pub mod canvas {
     pub use crate::frame::{
         ArcCanvas, BytePlaneAtomics, BytePlaneCells, BytePlaneMut, BytePlaneRef,
-        BytePlaneRef as BytePlane, ChannelsMut, ChannelsRef, PlaneMut, PlaneRef, RcCanvas,
+        BytePlaneRef as BytePlane, ChannelsMut, ChannelsRef, PlaneDataMut, PlaneDataRef, PlaneMut,
+        PlaneRef, RcCanvas,
     };
 }
 

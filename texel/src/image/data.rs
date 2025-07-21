@@ -832,6 +832,23 @@ impl<L> ImageMut<'_, L> {
     }
 }
 
+impl<'data, L> ImageMut<'data, L> {
+    /// Interpret this reference to a mutable image as a view on a byte slice, discarding the
+    /// buffer's static alignment information.
+    pub fn into_data(self) -> DataMut<'data, L>
+    where
+        L: Layout,
+    {
+        let (data, layout) = self.inner.into_parts();
+
+        DataMut {
+            data,
+            layout,
+            offset: 0,
+        }
+    }
+}
+
 impl<L> ImageRef<'_, L> {
     /// An adapter reading from the data as one contiguous chunk.
     ///
@@ -843,6 +860,23 @@ impl<L> ImageRef<'_, L> {
         AsCopySource {
             inner: self.inner.get(),
             engine: RangeEngine::new(self.layout(), 0),
+        }
+    }
+}
+
+impl<'data, L> ImageRef<'data, L> {
+    /// Interpret this reference to an image as a view on a byte slice, discarding the buffer's
+    /// static alignment information.
+    pub fn into_data(self) -> DataRef<'data, L>
+    where
+        L: Layout,
+    {
+        let (data, layout) = self.inner.into_parts();
+
+        DataRef {
+            data,
+            layout,
+            offset: 0,
         }
     }
 }

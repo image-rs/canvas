@@ -11,7 +11,9 @@ use image_texel::{AsTexel, Texel, TexelBuffer};
 use crate::arch::ShuffleOps;
 use crate::bits::FromBits;
 use crate::color::Color;
-use crate::frame::{BytePlaneAtomics, BytePlaneCells, BytePlaneMut, BytePlaneRef};
+use crate::frame::{
+    BytePlaneAtomics, BytePlaneCells, BytePlaneMut, BytePlaneRef, PlaneDataMut, PlaneDataRef,
+};
 use crate::layout::{
     BitEncoding, Block, CanvasLayout, PlaneBytes, SampleBits, SampleParts, Texel as TexelBits,
 };
@@ -525,6 +527,17 @@ impl<'data> ConverterRun<'data> {
         }
     }
 
+    /// Add a read-only byte slice to the input.
+    pub fn add_data_in(&mut self, plane: PlaneDataRef<'data>) -> ConverterPlaneHandle<'_> {
+        let idx = self.buffers.in_data.len() as u16;
+        self.buffers.in_data.push(plane.inner);
+        ConverterPlaneHandle {
+            idx: PlaneIdx::Data(idx),
+            direction_in: true,
+            hdl: &mut self.color_planes,
+        }
+    }
+
     pub fn add_plane_out(&mut self, plane: BytePlaneMut<'data>) -> ConverterPlaneHandle<'_> {
         let idx = self.buffers.out_plane.len() as u16;
         self.buffers.out_plane.push(plane.inner);
@@ -555,6 +568,17 @@ impl<'data> ConverterRun<'data> {
         }
     }
 
+    /// Add a read-only byte slice to the input.
+    pub fn add_data_out(&mut self, plane: PlaneDataMut<'data>) -> ConverterPlaneHandle<'_> {
+        let idx = self.buffers.out_data.len() as u16;
+        self.buffers.out_data.push(plane.inner);
+        ConverterPlaneHandle {
+            idx: PlaneIdx::Data(idx),
+            direction_in: false,
+            hdl: &mut self.color_planes,
+        }
+    }
+
     /// Run on the first frames in input and output.
     ///
     /// This chooses the image planes based on colors. (With current design rationale this is
@@ -576,6 +600,34 @@ impl<'data> ConverterRun<'data> {
 
         if *self.layout_out(color_out_plane)? != self.info.layout.out_layout {
             return Err(ConversionError::OutputColorDoesNotMatchPlanes);
+        }
+
+        // Check that we did not overflow our index range for any plane indices.
+        if {
+            let ConverterBuffer {
+                in_plane,
+                in_cell,
+                in_atomic,
+                in_data,
+                out_plane,
+                out_cell,
+                out_atomic,
+                out_data,
+            } = &self.buffers;
+            [
+                in_plane.len(),
+                in_cell.len(),
+                in_atomic.len(),
+                in_data.len(),
+                out_plane.len(),
+                out_cell.len(),
+                out_atomic.len(),
+                out_data.len(),
+            ]
+            .iter()
+            .any(|&len| len >= usize::from(u16::MAX))
+        } {
+            return Err(ConversionError::UnsupportedInputLayout);
         }
 
         // We can not use this optimization with non-slice planes. FIXME: we really should be able

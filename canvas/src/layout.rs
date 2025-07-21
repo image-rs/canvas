@@ -405,6 +405,7 @@ enum LayoutErrorInner {
     StrideError,
     NoChannelIndex(ColorChannel),
     ValidationError(u32),
+    LengthRequired { actual: usize, expected: usize },
 }
 
 impl Texel {
@@ -1228,6 +1229,15 @@ impl LayoutError {
     const NO_MODEL: Self = LayoutError {
         inner: LayoutErrorInner::NoModel,
     };
+
+    pub(crate) fn length_required(bytes: core::ops::Range<usize>) -> Self {
+        LayoutError {
+            inner: LayoutErrorInner::LengthRequired {
+                actual: bytes.start,
+                expected: bytes.end,
+            },
+        }
+    }
 
     fn validation(num: u32) -> Self {
         LayoutError {
