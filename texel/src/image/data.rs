@@ -128,11 +128,12 @@ mod sealed {
 use core::{cell::Cell, ops::Range};
 use sealed::{Loadable, Storable};
 
-use crate::buf::{atomic_buf, buf, cell_buf, AtomicBuffer, Buffer, CellBuffer};
+use crate::buf::{atomic_buf, buf, cell_buf, AtomicBuffer, Buffer, CellBuffer, TexelRange};
 use crate::image::{
     AtomicImage, AtomicImageRef, CellImage, CellImageRef, Image, ImageMut, ImageRef,
 };
 use crate::layout::{AlignedOffset, Bytes, Layout, Relocated};
+use crate::texel::Unaligned;
 use crate::{texels, BufferReuseError};
 
 /// A buffer with layout, not aligned to any particular boundary.
@@ -218,6 +219,25 @@ impl<'lt, L> DataRef<'lt, L> {
             })
     }
 
+    /// Get the underlying layout.
+    pub fn layout(&self) -> &L
+    where
+        L: Layout,
+    {
+        &self.layout
+    }
+
+    /// Interpret the wrapped data as a particular texel.
+    pub fn as_texels<T>(&self, texel: crate::Texel<T>) -> &[Unaligned<T>] {
+        texel.to_unaligned_slice(self.data)
+    }
+
+    /// Interpret a range of the wrapped data as a particular texel.
+    pub fn get_texels_at<T>(&self, range: TexelRange<T>) -> Option<&'_ [Unaligned<T>]> {
+        let data = self.data.get(range.aligned_byte_range())?;
+        Some(range.texel().to_unaligned_slice(data))
+    }
+
     /// An adapter reading from the data as one contiguous chunk.
     ///
     /// See [`RangeEngine`] for more explanations.
@@ -289,6 +309,36 @@ impl<'lt, L> DataMut<'lt, L> {
                 layout,
                 offset: start,
             })
+    }
+
+    /// Get the underlying layout.
+    pub fn layout(&self) -> &L
+    where
+        L: Layout,
+    {
+        &self.layout
+    }
+
+    /// Interpret the wrapped data as a particular texel.
+    pub fn as_texels<T>(&self, texel: crate::Texel<T>) -> &[Unaligned<T>] {
+        texel.to_unaligned_slice(self.data)
+    }
+
+    /// Interpret a range of the wrapped data as a particular texel.
+    pub fn get_texels_at<T>(&self, range: TexelRange<T>) -> Option<&'_ [Unaligned<T>]> {
+        let data = self.data.get(range.aligned_byte_range())?;
+        Some(range.texel().to_unaligned_slice(data))
+    }
+
+    /// Interpret the wrapped data as a particular texel.
+    pub fn as_texels_mut<T>(&mut self, texel: crate::Texel<T>) -> &mut [Unaligned<T>] {
+        texel.to_unaligned_slice_mut(self.data)
+    }
+
+    /// Interpret a range of the wrapped data as a particular texel.
+    pub fn get_texels_at_mut<T>(&mut self, range: TexelRange<T>) -> Option<&'_ mut [Unaligned<T>]> {
+        let data = self.data.get_mut(range.aligned_byte_range())?;
+        Some(range.texel().to_unaligned_slice_mut(data))
     }
 
     /// An adapter reading from the data as one contiguous chunk.
@@ -399,6 +449,14 @@ impl<'lt, L> DataCells<'lt, L> {
                 layout,
                 offset: Default::default(),
             })
+    }
+
+    /// Get the underlying layout.
+    pub fn layout(&self) -> &L
+    where
+        L: Layout,
+    {
+        &self.layout
     }
 
     /// An adapter reading from the data as one contiguous chunk.
