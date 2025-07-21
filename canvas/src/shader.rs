@@ -4,13 +4,16 @@
 //! fragment unit, and pipeline multiple texels in parallel.
 use alloc::{boxed::Box, vec::Vec};
 use core::{fmt, ops::Range};
-use image_texel::image::{AtomicImageRef, CellImageRef, ImageMut, ImageRef};
+
+use image_texel::image::{AtomicImageRef, CellImageRef, DataMut, DataRef, ImageMut, ImageRef};
 use image_texel::{AsTexel, Texel, TexelBuffer};
 
 use crate::arch::ShuffleOps;
 use crate::bits::FromBits;
 use crate::color::Color;
-use crate::frame::{BytePlaneAtomics, BytePlaneCells, BytePlaneMut, BytePlaneRef};
+use crate::frame::{
+    BytePlaneAtomics, BytePlaneCells, BytePlaneMut, BytePlaneRef, PlaneDataMut, PlaneDataRef,
+};
 use crate::layout::{
     BitEncoding, Block, CanvasLayout, PlaneBytes, SampleBits, SampleParts, Texel as TexelBits,
 };
@@ -62,9 +65,11 @@ struct ConverterBuffer<'data> {
     in_plane: Vec<PlaneSource<'data>>,
     in_cell: Vec<CellSource<'data>>,
     in_atomic: Vec<AtomicSource<'data>>,
+    in_data: Vec<UnalignedSource<'data>>,
     out_plane: Vec<PlaneTarget<'data>>,
     out_cell: Vec<CellTarget<'data>>,
     out_atomic: Vec<AtomicTarget<'data>>,
+    out_data: Vec<UnalignedTarget<'data>>,
 }
 
 #[derive(Clone, Copy, Debug)]
@@ -72,6 +77,7 @@ enum PlaneIdx {
     Sync(u16),
     Cell(u16),
     Atomic(u16),
+    Data(u16),
 }
 
 /// An entry of data in a `ConverterRun`.
@@ -228,21 +234,25 @@ enum CommonPixelOrder {
 type PlaneSource<'data> = ImageRef<'data, PlaneBytes>;
 type CellSource<'data> = CellImageRef<'data, PlaneBytes>;
 type AtomicSource<'data> = AtomicImageRef<'data, PlaneBytes>;
+type UnalignedSource<'data> = DataRef<'data, PlaneBytes>;
 
 type PlaneTarget<'data> = ImageMut<'data, PlaneBytes>;
 type CellTarget<'data> = CellImageRef<'data, PlaneBytes>;
 type AtomicTarget<'data> = AtomicImageRef<'data, PlaneBytes>;
+type UnalignedTarget<'data> = DataMut<'data, PlaneBytes>;
 
 struct Sources<'re, 'data> {
     sync: &'re [PlaneSource<'data>],
     cell: &'re [CellSource<'data>],
     atomic: &'re [AtomicSource<'data>],
+    data: &'re [UnalignedSource<'data>],
 }
 
 struct Targets<'re, 'data> {
     sync: &'re mut [PlaneTarget<'data>],
     cell: &'re [CellTarget<'data>],
     atomic: &'re [AtomicTarget<'data>],
+    data: &'re mut [UnalignedTarget<'data>],
 }
 
 struct PlaneIo<'re, 'data> {
@@ -517,6 +527,17 @@ impl<'data> ConverterRun<'data> {
         }
     }
 
+    /// Add a read-only byte slice to the input.
+    pub fn add_data_in(&mut self, plane: PlaneDataRef<'data>) -> ConverterPlaneHandle<'_> {
+        let idx = self.buffers.in_data.len() as u16;
+        self.buffers.in_data.push(plane.inner);
+        ConverterPlaneHandle {
+            idx: PlaneIdx::Data(idx),
+            direction_in: true,
+            hdl: &mut self.color_planes,
+        }
+    }
+
     pub fn add_plane_out(&mut self, plane: BytePlaneMut<'data>) -> ConverterPlaneHandle<'_> {
         let idx = self.buffers.out_plane.len() as u16;
         self.buffers.out_plane.push(plane.inner);
@@ -547,6 +568,17 @@ impl<'data> ConverterRun<'data> {
         }
     }
 
+    /// Add a read-only byte slice to the input.
+    pub fn add_data_out(&mut self, plane: PlaneDataMut<'data>) -> ConverterPlaneHandle<'_> {
+        let idx = self.buffers.out_data.len() as u16;
+        self.buffers.out_data.push(plane.inner);
+        ConverterPlaneHandle {
+            idx: PlaneIdx::Data(idx),
+            direction_in: false,
+            hdl: &mut self.color_planes,
+        }
+    }
+
     /// Run on the first frames in input and output.
     ///
     /// This chooses the image planes based on colors. (With current design rationale this is
@@ -568,6 +600,34 @@ impl<'data> ConverterRun<'data> {
 
         if *self.layout_out(color_out_plane)? != self.info.layout.out_layout {
             return Err(ConversionError::OutputColorDoesNotMatchPlanes);
+        }
+
+        // Check that we did not overflow our index range for any plane indices.
+        if {
+            let ConverterBuffer {
+                in_plane,
+                in_cell,
+                in_atomic,
+                in_data,
+                out_plane,
+                out_cell,
+                out_atomic,
+                out_data,
+            } = &self.buffers;
+            [
+                in_plane.len(),
+                in_cell.len(),
+                in_atomic.len(),
+                in_data.len(),
+                out_plane.len(),
+                out_cell.len(),
+                out_atomic.len(),
+                out_data.len(),
+            ]
+            .iter()
+            .any(|&len| len >= usize::from(u16::MAX))
+        } {
+            return Err(ConversionError::UnsupportedInputLayout);
         }
 
         // We can not use this optimization with non-slice planes. FIXME: we really should be able
@@ -603,11 +663,13 @@ impl<'data> ConverterRun<'data> {
                 sync: &self.buffers.in_plane,
                 cell: &self.buffers.in_cell,
                 atomic: &self.buffers.in_atomic,
+                data: &self.buffers.in_data,
             },
             targets: Targets {
                 sync: &mut self.buffers.out_plane,
                 cell: &self.buffers.out_cell,
                 atomic: &self.buffers.out_atomic,
+                data: &mut self.buffers.out_data,
             },
         };
 
@@ -635,6 +697,12 @@ impl<'data> ConverterRun<'data> {
                 .get(usize::from(idx))
                 .ok_or(ConversionError::InputLayoutDoesNotMatchPlan)?
                 .layout(),
+            PlaneIdx::Data(idx) => self
+                .buffers
+                .in_data
+                .get(usize::from(idx))
+                .ok_or(ConversionError::InputLayoutDoesNotMatchPlan)?
+                .layout(),
         })
     }
 
@@ -655,6 +723,12 @@ impl<'data> ConverterRun<'data> {
             PlaneIdx::Atomic(idx) => self
                 .buffers
                 .out_atomic
+                .get(usize::from(idx))
+                .ok_or(ConversionError::OutputLayoutDoesNotMatchPlan)?
+                .layout(),
+            PlaneIdx::Data(idx) => self
+                .buffers
+                .out_data
                 .get(usize::from(idx))
                 .ok_or(ConversionError::OutputLayoutDoesNotMatchPlan)?
                 .layout(),
@@ -1193,6 +1267,25 @@ impl ConverterRt {
             }
         }
 
+        fn fetch_from_texel_unaligned<T>(
+            from: &UnalignedSource,
+            idx: &[usize],
+            into: &mut TexelBuffer,
+            range: Range<usize>,
+            texel: Texel<T>,
+        ) {
+            into.resize_for_texel(idx.len(), texel);
+            let idx = idx[range.clone()].iter();
+            let texels = &mut into.as_mut_texels(texel)[range];
+
+            let texel_slice = from.as_texels(texel);
+            for (&index, into) in idx.zip(texels) {
+                if let Some(from) = texel_slice.get(index) {
+                    *into = texel.unaligned().copy_val(from).0;
+                }
+            }
+        }
+
         struct ReadUnit<'plane, 'data> {
             from: &'plane PlaneSource<'data>,
             idx: &'plane [usize],
@@ -1229,6 +1322,19 @@ impl ConverterRt {
         impl GenericTexelAction for ReadAtomic<'_, '_> {
             fn run<T>(self, texel: Texel<T>) {
                 fetch_from_texel_atomics(self.from, self.idx, self.into, self.range, texel)
+            }
+        }
+
+        struct ReadData<'plane, 'data> {
+            from: &'plane UnalignedSource<'data>,
+            idx: &'plane [usize],
+            into: &'plane mut TexelBuffer,
+            range: Range<usize>,
+        }
+
+        impl GenericTexelAction for ReadData<'_, '_> {
+            fn run<T>(self, texel: Texel<T>) {
+                fetch_from_texel_unaligned(self.from, self.idx, self.into, self.range, texel)
             }
         }
 
@@ -1292,6 +1398,12 @@ impl ConverterRt {
                         range: 0..self.in_index_list.len(),
                     });
                 }
+                PlaneIdx::Data(_) => info.in_kind.action(ReadData {
+                    from: &from.sources.data[ops.color_in_plane.into_index()],
+                    idx: &self.in_index_list,
+                    into: &mut self.in_texels,
+                    range: 0..self.in_index_list.len(),
+                }),
             }
         }
     }
@@ -1369,6 +1481,29 @@ impl ConverterRt {
             }
         }
 
+        fn write_for_texel_data<T>(
+            into: &mut UnalignedTarget,
+            idx: &[usize],
+            from: &TexelBuffer,
+            range: Range<usize>,
+            texel: Texel<T>,
+        ) {
+            // FIXME(planar):
+            // FIXME(color): multi-planar texel write.
+            let idx = idx[range.clone()].iter();
+            let texels = &from.as_texels(texel)[range];
+            let texel_slice = into.as_texels_mut(texel);
+
+            // The index structure and used texel type should match.
+            debug_assert_eq!(idx.len(), texels.len());
+
+            for (&index, from) in idx.zip(texels) {
+                if let Some(into) = texel_slice.get_mut(index) {
+                    into.0 = texel.copy_val(from);
+                }
+            }
+        }
+
         struct WriteUnit<'plane, 'data> {
             into: &'plane mut PlaneTarget<'data>,
             idx: &'plane [usize],
@@ -1405,6 +1540,19 @@ impl ConverterRt {
         impl GenericTexelAction for WriteAtomic<'_, '_> {
             fn run<T>(self, texel: Texel<T>) {
                 write_for_texel_atomics(self.into, self.idx, self.from, self.range, texel)
+            }
+        }
+
+        struct WriteData<'plane, 'data> {
+            into: &'plane mut UnalignedTarget<'data>,
+            idx: &'plane [usize],
+            from: &'plane TexelBuffer,
+            range: Range<usize>,
+        }
+
+        impl GenericTexelAction for WriteData<'_, '_> {
+            fn run<T>(self, texel: Texel<T>) {
+                write_for_texel_data(self.into, self.idx, self.from, self.range, texel)
             }
         }
 
@@ -1467,6 +1615,12 @@ impl ConverterRt {
                         range: 0..self.out_index_list.len(),
                     });
                 }
+                PlaneIdx::Data(_) => info.out_kind.action(WriteData {
+                    into: &mut into.targets.data[ops.color_out_plane.into_index()],
+                    idx: &self.out_index_list,
+                    from: &self.out_texels,
+                    range: 0..self.out_index_list.len(),
+                }),
             }
         }
     }
@@ -1547,11 +1701,13 @@ impl<'re, 'data> PlaneIo<'re, 'data> {
                 sync: self.sources.sync,
                 cell: self.sources.cell,
                 atomic: self.sources.atomic,
+                data: self.sources.data,
             },
             targets: Targets {
                 sync: &mut *self.targets.sync,
                 cell: self.targets.cell,
                 atomic: self.targets.atomic,
+                data: &mut *self.targets.data,
             },
         }
     }
@@ -2362,6 +2518,7 @@ impl PlaneIdx {
             PlaneIdx::Sync(i) => i.into(),
             PlaneIdx::Cell(i) => i.into(),
             PlaneIdx::Atomic(i) => i.into(),
+            PlaneIdx::Data(i) => i.into(),
         }
     }
 }

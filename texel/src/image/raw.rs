@@ -395,6 +395,38 @@ impl<B, L> RawImage<B, L> {
     }
 }
 
+impl<B, L> RawImage<B, &'_ L> {
+    /// Clone the layout from a reference.
+    ///
+    /// These layouts are always compatible as our impl for shared references simply forwards to
+    /// the underlying type's `Layout` implementation.
+    pub fn into_cloned_layout(self) -> RawImage<B, L>
+    where
+        L: Layout + Clone,
+    {
+        RawImage {
+            buffer: self.buffer,
+            layout: self.layout.clone(),
+        }
+    }
+}
+
+impl<B, L> RawImage<B, &'_ mut L> {
+    /// Clone the layout from a mutable reference.
+    ///
+    /// These layouts are always compatible as our impl for mutable references simply forwards to
+    /// the underlying type's `Layout` implementation.
+    pub fn into_cloned_layout(self) -> RawImage<B, L>
+    where
+        L: Layout + Clone,
+    {
+        RawImage {
+            buffer: self.buffer,
+            layout: self.layout.clone(),
+        }
+    }
+}
+
 /// Methods for all `Layouts` (the trait).
 impl<B: BufferLike, L: Layout> RawImage<B, L> {
     /// Get a mutable reference to those bytes used by the layout.

@@ -1,5 +1,5 @@
 use crate::{
-    canvas::{ArcCanvas, RcCanvas},
+    canvas::{ArcCanvas, PlaneDataMut, RcCanvas},
     color::Color,
     layout::{
         Block, CanvasLayout, LayoutError, RowLayoutDescription, SampleBits, SampleParts, Texel,
@@ -828,6 +828,51 @@ fn to_arc_conversion() -> Result<(), LayoutError> {
     let into = into.to_canvas();
     into.as_texels(<[u8; 2] as image_texel::AsTexel>::texel())
         .iter()
+        .enumerate()
+        .for_each(|(idx, b)| assert_eq!(u16::from_be_bytes(*b), 0x07ef, "at {}", idx));
+
+    Ok(())
+}
+
+#[test]
+fn to_data_conversion() -> Result<(), LayoutError> {
+    let texel = Texel::new_u8(SampleParts::RgbA);
+
+    let source_layout = CanvasLayout::with_texel(&texel, 32, 32)?;
+    let target_layout = CanvasLayout::with_texel(
+        &Texel {
+            bits: SampleBits::UInt565,
+            parts: SampleParts::Bgr,
+            ..texel
+        },
+        32,
+        32,
+    )?;
+
+    let mut from = Canvas::new(source_layout.clone());
+
+    let into_plane = target_layout.plane(0).unwrap();
+    let mut data = vec![0; target_layout.byte_len()];
+    let into = PlaneDataMut::new(&mut data, into_plane).unwrap();
+
+    from.as_texels_mut(<[u8; 4] as image_texel::AsTexel>::texel())
+        .iter_mut()
+        .for_each(|b| *b = [0x7f, 0xff, 0x0, 0xff]);
+
+    // Expecting conversion [0xff, 0xff, 0x0, 0xff] to 0–ff—ff
+    {
+        let mut converter = Converter::new();
+        let mut plan = converter.plan(source_layout, target_layout).unwrap();
+        plan.add_plane_in(from.plane(0).unwrap()).set_as_color();
+        plan.add_data_out(into).set_as_color();
+        plan.run().unwrap();
+    }
+
+    let data = <[u8; 2] as image_texel::AsTexel>::texel()
+        .try_to_slice(&data[..])
+        .unwrap();
+
+    data.iter()
         .enumerate()
         .for_each(|(idx, b)| assert_eq!(u16::from_be_bytes(*b), 0x07ef, "at {}", idx));
 

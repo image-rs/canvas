@@ -452,6 +452,26 @@ impl<L> Image<L> {
     }
 }
 
+impl<L> Image<&'_ L> {
+    /// Convert this image into one with an owned layout by cloning it.
+    pub fn into_cloned_layout(self) -> Image<L>
+    where
+        L: Layout + Clone,
+    {
+        self.inner.into_cloned_layout().into()
+    }
+}
+
+impl<L> Image<&'_ mut L> {
+    /// Convert this image into one with an owned layout by cloning it.
+    pub fn into_cloned_layout(self) -> Image<L>
+    where
+        L: Layout + Clone,
+    {
+        self.inner.into_cloned_layout().into()
+    }
+}
+
 /// Image methods for layouts based on pod samples.
 impl<L: SliceLayout> Image<L> {
     /// Interpret an existing buffer as a pixel image.
@@ -830,6 +850,26 @@ impl<'data, L> ImageRef<'data, L> {
 
         let planes = IntoPlanesError::from_array(planes)?;
         Ok(planes.map(|(layout, buffer)| RawImage::from_buffer(layout, buffer).into()))
+    }
+}
+
+impl<'data, L> ImageRef<'data, &'_ L> {
+    /// Convert this image into one with an owned layout by cloning it.
+    pub fn into_cloned_layout(self) -> ImageRef<'data, L>
+    where
+        L: Layout + Clone,
+    {
+        self.inner.into_cloned_layout().into()
+    }
+}
+
+impl<'data, L> ImageRef<'data, &'_ mut L> {
+    /// Convert this image into one with an owned layout by cloning it.
+    pub fn into_cloned_layout(self) -> ImageRef<'data, L>
+    where
+        L: Layout + Clone,
+    {
+        self.inner.into_cloned_layout().into()
     }
 }
 
@@ -1297,6 +1337,26 @@ impl<'data, L> ImageMut<'data, L> {
 
         let planes = IntoPlanesError::from_array(planes)?;
         Ok(planes.map(|(layout, buffer)| RawImage::from_buffer(layout, buffer).into()))
+    }
+}
+
+impl<'data, L> ImageMut<'data, &'_ L> {
+    /// Convert this image into one with an owned layout by cloning it.
+    pub fn into_cloned_layout(self) -> ImageMut<'data, L>
+    where
+        L: Layout + Clone,
+    {
+        self.inner.into_cloned_layout().into()
+    }
+}
+
+impl<'data, L> ImageMut<'data, &'_ mut L> {
+    /// Convert this image into one with an owned layout by cloning it.
+    pub fn into_cloned_layout(self) -> ImageMut<'data, L>
+    where
+        L: Layout + Clone,
+    {
+        self.inner.into_cloned_layout().into()
     }
 }
 

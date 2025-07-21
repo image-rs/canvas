@@ -1566,8 +1566,13 @@ impl<T> TexelRange<T> {
         })
     }
 
+    /// Get a copy of the texel witness for this range.
+    pub fn texel(self) -> Texel<T> {
+        self.texel
+    }
+
     /// Intrinsically, all ranges represent an aligned range of bytes.
-    fn aligned_byte_range(self) -> ops::Range<usize> {
+    pub(crate) fn aligned_byte_range(self) -> ops::Range<usize> {
         let scale = self.texel.align();
         scale * self.start_per_align..scale * self.end_per_align
     }
