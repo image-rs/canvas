@@ -116,7 +116,7 @@ pub enum Color {
     /// A LAB space based on contemporary perceptual understanding.
     ///
     /// > The newly defined SRLAB2 color model is a compromise between the simplicity of CIELAB and
-    /// the correctness of CIECAM02.
+    /// > the correctness of CIECAM02.
     ///
     /// By combining whitepoint adaption in the (more) precise model of CIECAM02 while performing
     /// the transfer function in the cone response space, this achieves a good uniformity by
@@ -501,6 +501,7 @@ impl Color {
         differencing: Differencing::Bt709,
     };
 
+    #[allow(clippy::wrong_self_convention)]
     pub(crate) fn to_xyz_slice(&self, pixel: &[[f32; 4]], xyz: &mut [[f32; 4]]) {
         // We can do shared pre-processing.
         if let Color::Rgb {
@@ -557,7 +558,7 @@ impl Color {
             }
 
             return;
-        } else if let Color::Oklab {} = self {
+        } else if let Color::Oklab = self {
             return oklab::to_xyz_slice(pixel, xyz);
         } else if let Color::SrLab2 { whitepoint } = self {
             return srlab2::to_xyz_slice(pixel, xyz, *whitepoint);
@@ -569,6 +570,7 @@ impl Color {
         }
     }
 
+    #[allow(clippy::wrong_self_convention)]
     pub(crate) fn from_xyz_slice(&self, xyz: &[[f32; 4]], pixel: &mut [[f32; 4]]) {
         if let Color::Rgb {
             primary,
@@ -619,7 +621,7 @@ impl Color {
                     *target_pix = transfer.from_optical_display([y, 0.0, 0.0, a]);
                 }
             }
-        } else if let Color::Oklab {} = self {
+        } else if let Color::Oklab = self {
             return oklab::from_xyz_slice(xyz, pixel);
         } else if let Color::SrLab2 { whitepoint } = self {
             return srlab2::from_xyz_slice(xyz, pixel, *whitepoint);
@@ -630,6 +632,7 @@ impl Color {
         }
     }
 
+    #[allow(clippy::wrong_self_convention)]
     pub(crate) fn to_xyz_once(&self, value: [f32; 4]) -> [f32; 4] {
         match self {
             Color::Oklab => oklab::oklab_to_xyz(value),
@@ -692,6 +695,7 @@ impl Color {
         }
     }
 
+    #[allow(clippy::wrong_self_convention)]
     pub(crate) fn from_xyz_once(&self, value: [f32; 4]) -> [f32; 4] {
         match self {
             Color::Oklab => oklab::oklab_from_xyz(value),
@@ -916,6 +920,7 @@ impl Transfer {
         [r, g, b, a]
     }
 
+    #[allow(clippy::type_complexity)]
     pub(crate) fn to_optical_display_slice(self) -> Option<fn(&[[f32; 4]], &mut [[f32; 4]])> {
         macro_rules! optical_by_display {
             ($what:ident: $($pattern:pat => $transfer:path,)*) => {

@@ -1278,7 +1278,7 @@ impl<E: LayoutEngine> AsCopyTarget<'_, E> {
 /// the first or only plane and does not contain any other internal padding buffers either.
 pub struct RangeEngine<L> {
     inner: Option<L>,
-    bytes: [Range<usize>; 1],
+    bytes: Range<usize>,
 }
 
 /// Applies an interior copy strategy but the bytes in the image are written to another plane.
@@ -1295,7 +1295,7 @@ impl<L: Layout> RangeEngine<L> {
         L: Clone,
     {
         let byte_len = layout.byte_len();
-        let bytes = [offset..offset + byte_len];
+        let bytes = offset..offset + byte_len;
 
         RangeEngine {
             inner: Some(layout.clone()),
@@ -1316,9 +1316,9 @@ impl<L: Layout> sealed::LayoutEngineCore for RangeEngine<L> {
     // Return a `Cloned<slice::Iter>`, not an array iterator. Note we aim to reduce the number of
     // distinct iterator types between all layout engines, even for distinct layouts etc. This is
     // compatible as best as possible and misses the loop in copy at most once..
-    #[allow(refining_impl_trait)]
+    #[expect(refining_impl_trait)]
     fn buffer_ranges(&self) -> core::iter::Cloned<core::slice::Iter<'_, Range<usize>>> {
-        (&self.bytes[..]).iter().cloned()
+        core::slice::from_ref(&self.bytes).iter().cloned()
     }
 
     fn image_offset(&self) -> usize {

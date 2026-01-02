@@ -217,7 +217,8 @@ impl<P> TexelBuffer<P> {
         }
 
         // Resize within capacity will not reallocate, thus not panic.
-        Ok(self.resize_bytes(bytes))
+        self.resize_bytes(bytes);
+        Ok(())
     }
 
     /// Reallocate the slice to contain exactly as many bytes as necessary.

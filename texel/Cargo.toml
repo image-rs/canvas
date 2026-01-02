@@ -2,7 +2,7 @@
 name = "image-texel"
 version = "0.5.0"
 edition = "2021"
-rust-version = "1.84"
+rust-version = "1.87"
 
 description = "A texel type and allocated buffers suitable for image data."
 authors = ["Aurelia Molzer <5550310+HeroicKatora@users.noreply.github.com>"]

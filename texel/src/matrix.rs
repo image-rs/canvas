@@ -446,7 +446,7 @@ impl<P> fmt::Debug for Layout<P> {
 
 impl<P> Clone for Layout<P> {
     fn clone(&self) -> Self {
-        Layout { ..*self }
+        *self
     }
 }
 

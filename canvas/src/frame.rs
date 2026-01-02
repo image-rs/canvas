@@ -199,7 +199,7 @@ impl Canvas {
     /// Get the matrix-like channel descriptor if the channels are `u8`.
     ///
     /// Returns `Some` only when texel is some multiple of `u8`.
-    pub fn channels_u8(&self) -> Option<ChannelsRef<u8>> {
+    pub fn channels_u8(&self) -> Option<ChannelsRef<'_, u8>> {
         let plane = self.inner.layout().as_plane()?;
         let layout = plane
             .as_channel_bytes()?
@@ -212,7 +212,7 @@ impl Canvas {
     /// Get the matrix-like channel descriptor if the channels are `u16`.
     ///
     /// Returns `Some` only when texel is some multiple of `u16`.
-    pub fn channels_u16(&self) -> Option<ChannelsRef<u16>> {
+    pub fn channels_u16(&self) -> Option<ChannelsRef<'_, u16>> {
         let plane = self.inner.layout().as_plane()?;
         let layout = plane
             .as_channel_bytes()?
@@ -225,7 +225,7 @@ impl Canvas {
     /// Get the matrix-like channel descriptor if the channels are `f32`.
     ///
     /// Returns `Some` only when texel is some multiple of `f32`.
-    pub fn channels_f32(&self) -> Option<ChannelsRef<f32>> {
+    pub fn channels_f32(&self) -> Option<ChannelsRef<'_, f32>> {
         let plane = self.inner.layout().as_plane()?;
         let layout = plane
             .as_channel_bytes()?
@@ -238,7 +238,7 @@ impl Canvas {
     /// Get the matrix-like channel descriptor if the channels are `u8`.
     ///
     /// Returns `Some` only when texel is some multiple of `u8`.
-    pub fn channels_u8_mut(&mut self) -> Option<ChannelsMut<u8>> {
+    pub fn channels_u8_mut(&mut self) -> Option<ChannelsMut<'_, u8>> {
         let plane = self.inner.layout().as_plane()?;
         let layout = plane
             .as_channel_bytes()?
@@ -251,7 +251,7 @@ impl Canvas {
     /// Get the matrix-like channel descriptor if the channels are `u16`.
     ///
     /// Returns `Some` only when texel is some multiple of `u16`.
-    pub fn channels_u16_mut(&mut self) -> Option<ChannelsMut<u16>> {
+    pub fn channels_u16_mut(&mut self) -> Option<ChannelsMut<'_, u16>> {
         let plane = self.inner.layout().as_plane()?;
         let layout = plane
             .as_channel_bytes()?
@@ -264,7 +264,7 @@ impl Canvas {
     /// Get the matrix-like channel descriptor if the channels are `f32`.
     ///
     /// Returns `Some` only when texel is some multiple of `f32`.
-    pub fn channels_f32_mut(&mut self) -> Option<ChannelsMut<f32>> {
+    pub fn channels_f32_mut(&mut self) -> Option<ChannelsMut<'_, f32>> {
         let plane = self.inner.layout().as_plane()?;
         let layout = plane
             .as_channel_bytes()?
@@ -316,12 +316,12 @@ impl Canvas {
 
         let mut layouts = [(); N].map(|()| None);
 
-        for i in 0..N {
+        for (i, layout) in layouts.iter_mut().enumerate() {
             if i > u8::MAX as usize {
                 return None;
             }
 
-            layouts[i] = Some(self.layout().plane(i as u8)?);
+            *layout = Some(self.layout().plane(i as u8)?);
         }
 
         let layouts = layouts.map(|layout| layout.unwrap());

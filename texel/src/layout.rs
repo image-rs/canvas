@@ -35,7 +35,7 @@ pub struct Bytes(pub usize);
 /// This type is a lower semi lattice. That is, given two elements the type formed by taking the
 /// minimum of size and alignment individually will always form another valid element. This
 /// operation is implemented in the [`Self::infimum`] method.
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Ord, Hash)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub struct TexelLayout {
     size: usize,
     align: usize,
@@ -274,9 +274,9 @@ pub trait RasterMut<Pixel>: Raster<Pixel> {
         let Coord(bx, by) = image.layout().dimensions();
         for y in 0..by {
             for x in 0..bx {
-                let mut pixel = Self::get(image.as_ref().as_deref(), Coord(x, y)).unwrap();
+                let mut pixel = Self::get(image.as_ref().into_deref(), Coord(x, y)).unwrap();
                 f(x, y, &mut pixel);
-                Self::put(image.as_mut().as_deref_mut(), Coord(x, y), pixel);
+                Self::put(image.as_mut().into_deref_mut(), Coord(x, y), pixel);
             }
         }
     }
@@ -402,7 +402,7 @@ impl AlignedOffset {
 
     /// Try to construct an aligned offset.
     pub fn new(offset: usize) -> Option<Self> {
-        if offset % Self::ALIGN == 0 && offset <= isize::MAX as usize {
+        if offset.is_multiple_of(Self::ALIGN) && offset <= isize::MAX as usize {
             Some(AlignedOffset(offset))
         } else {
             None
@@ -537,7 +537,7 @@ impl TexelLayout {
 
     /// Get the minimum required alignment of the element.
     pub const fn align(self) -> usize {
-        self.size
+        self.align
     }
 
     pub const fn superset_of(&self, other: TexelLayout) -> bool {
@@ -561,13 +561,13 @@ impl Layout for Bytes {
     }
 }
 
-impl<'lt, T: Layout + ?Sized> Layout for &'lt T {
+impl<T: Layout + ?Sized> Layout for &'_ T {
     fn byte_len(&self) -> usize {
         (**self).byte_len()
     }
 }
 
-impl<'lt, T: Layout + ?Sized> Layout for &'lt mut T {
+impl<T: Layout + ?Sized> Layout for &'_ mut T {
     fn byte_len(&self) -> usize {
         (**self).byte_len()
     }

@@ -267,7 +267,7 @@ impl<L> AtomicImage<L> {
     ///
     /// You can also compare the allocation with [`Self::ptr_eq`] or ignore the layout and compare
     /// buffer contents with [`Self::as_capacity_atomic_buf`].
-    pub fn compare(&self) -> impl core::cmp::Eq + core::cmp::PartialEq + '_
+    pub fn compare(&self) -> impl core::cmp::Eq + '_
     where
         L: core::cmp::Eq,
     {
@@ -410,7 +410,8 @@ impl<'data> AtomicImageRef<'data, Bytes> {
     ///
     /// # Examples
     ///
-    /// You can create a buffer, then later transfer data and layout through [`data`].
+    /// You can create a buffer, then later transfer data and layout through the
+    /// [`data`][`crate::image::data`] module.
     ///
     /// ```
     /// use core::cell::Cell;

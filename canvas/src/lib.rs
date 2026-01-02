@@ -63,6 +63,9 @@ extern crate std;
 #[macro_use]
 extern crate alloc;
 
+#[path = "../docs/mod.rs"]
+pub mod docs;
+
 mod arch;
 mod bits;
 /// Putting it all together with a buffer type.

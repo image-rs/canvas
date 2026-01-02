@@ -664,7 +664,8 @@ impl SampleParts {
     fn color_index(parts: &[Option<ColorChannel>; 4], model: ColorChannelModel) -> Option<u8> {
         let mut unused = [true; 4];
         let mut color_index = [0; 4];
-        for (part, pos) in parts.into_iter().zip(&mut color_index) {
+
+        for (part, pos) in parts.iter().zip(&mut color_index) {
             if let Some(p) = part {
                 let idx = p.canonical_index_in(model)?;
                 if !core::mem::take(&mut unused[idx as usize]) {
@@ -748,13 +749,11 @@ impl Block {
     }
 
     pub(crate) fn block_width(&self, pixels: u32) -> u32 {
-        let div = self.width();
-        pixels / div + if pixels % div == 0 { 0 } else { 1 }
+        pixels.div_ceil(self.width())
     }
 
     pub(crate) fn block_height(&self, pixels: u32) -> u32 {
-        let div = self.height();
-        pixels / div + if pixels % div == 0 { 0 } else { 1 }
+        pixels.div_ceil(self.height())
     }
 }
 
@@ -766,7 +765,7 @@ impl CanvasLayout {
 
     /// Create from a list of planes, and the texel they describe when merged.
     pub fn with_planes(layers: &[PlaneBytes], texel: Texel) -> Result<Self, LayoutError> {
-        if layers.len() == 0 {
+        if layers.is_empty() {
             return Err(LayoutError::NO_PLANES);
         }
 
@@ -1011,7 +1010,7 @@ impl CanvasLayout {
         let height = usize::try_from(this.bytes.height).map_err(LayoutError::height_error)?;
         let ok = height
             .checked_mul(lines)
-            .map_or(false, |len| len < isize::MAX as usize);
+            .is_some_and(|len| len < isize::MAX as usize);
 
         if ok {
             Ok(this)
@@ -1029,8 +1028,8 @@ impl PlaneBytes {
 
     pub(crate) fn sub_offset(&mut self, offset: usize) {
         let mut spec = self.matrix.spec();
-        assert!(offset % spec.element.size() == 0);
-        assert!(offset % 256 == 0);
+        assert!(offset.is_multiple_of(spec.element.size()));
+        assert!(offset.is_multiple_of(256));
 
         spec.offset = spec.offset.saturating_sub(offset);
         self.matrix = StridedBytes::new(spec).unwrap();
@@ -1041,7 +1040,7 @@ impl PlaneBytes {
         Some(ChannelBytes {
             channel_stride: channel_layout.size(),
             channels,
-            inner: self.matrix.clone(),
+            inner: self.matrix,
             texel: self.texel.clone(),
         })
     }
@@ -1070,8 +1069,10 @@ impl PlaneBytes {
             unreachable!("No texel with zero bytes");
         }
 
-        if self.matrix.spec().height_stride % usize::from(self.texel.bits.bytes()) == 0 {
-            let pitch = self.matrix.spec().height_stride / usize::from(self.texel.bits.bytes());
+        let tex_bytes = usize::from(self.texel.bits.bytes());
+
+        if self.matrix.spec().height_stride.is_multiple_of(tex_bytes) {
+            let pitch = self.matrix.spec().height_stride / tex_bytes;
             return Self::fill_indices_constant_size(idx, iter, pitch, chunk);
         }
 
@@ -1116,7 +1117,7 @@ impl PlaneBytes {
 
             for (&[x, y], idx) in iter.iter().zip(&mut idx[..]) {
                 let texindex = (x as usize) * pitch + (y as usize);
-                *idx = texindex as usize;
+                *idx = texindex;
             }
         }
 

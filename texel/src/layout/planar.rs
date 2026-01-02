@@ -165,7 +165,7 @@ impl<const N: usize> PlaneBytes<N> {
     /// ```
     #[must_use]
     pub fn retain_coefficients_like(&self, texel: TexelLayout) -> Self {
-        let matrices = self.planes.inner.clone();
+        let matrices = self.planes.inner;
         let inner = matrices.map(|plane| {
             if plane.inner.element() == texel {
                 plane
@@ -303,7 +303,7 @@ impl<T, const N: usize> PlaneMatrices<T, N> {
     /// This method panics if the overall layout length would exceed `isize::MAX`.
     pub fn new(texel: Texel<T>, inner: [Matrix<T>; N]) -> Self {
         use crate::layout::{Decay, TryMend};
-        let bytes = inner.each_ref().map(|m| MatrixBytes::decay(m));
+        let bytes = inner.each_ref().map(MatrixBytes::decay);
         let planes = PlaneBytes::new(bytes);
         texel
             .try_mend(&planes)
