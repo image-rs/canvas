@@ -87,7 +87,7 @@ impl FromBits {
         let channels = parts.channels();
 
         for (bits, (channel, pos)) in bits.zip(channels) {
-            if let Some(_) = channel {
+            if channel.is_some() {
                 vals[pos as usize] = bits;
             }
         }
@@ -156,7 +156,7 @@ impl FromBits {
             UInt2x4 => 0..2 2..4 4..6 6..8
         });
 
-        filled.into_iter().filter_map(|x| x)
+        filled.into_iter().flatten()
     }
 
     /// Extract bit as a big-endian interpretation.
@@ -178,11 +178,7 @@ impl FromBits {
 
         let shift = self.begin - start_byte * 8;
         let bitlen = self.len + shift;
-        let copylen = if bitlen % 8 == 0 {
-            bitlen / 8
-        } else {
-            bitlen / 8 + 1
-        };
+        let copylen = bitlen.div_ceil(8);
 
         let mut be_bytes = [0; 8];
         let initlen = copylen.min(8).min(from_bytes.len());
@@ -202,11 +198,7 @@ impl FromBits {
 
         let shift = self.begin - start_byte * 8;
         let bitlen = self.len + shift;
-        let copylen = if bitlen % 8 == 0 {
-            bitlen / 8
-        } else {
-            bitlen / 8 + 1
-        };
+        let copylen = bitlen.div_ceil(8);
 
         let mut be_bytes = [0; 8];
         let initlen = copylen.min(8).min(texel_bytes.len());

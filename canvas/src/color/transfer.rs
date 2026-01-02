@@ -104,7 +104,7 @@ pub fn transfer_eo_srgb(val: f32) -> f32 {
     if val < -0.04045 {
         -pow((-val + 0.055) / 1.055, 2.4)
     } else if val <= 0.04045 {
-        return val / 12.92;
+        val / 12.92
     } else {
         pow((val + 0.055) / 1.055, 2.4)
     }

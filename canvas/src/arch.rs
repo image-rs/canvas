@@ -23,6 +23,7 @@ mod x86_avx2;
 #[cfg(any(target_arch = "x86", target_arch = "x86_64"))]
 mod x86_ssse3;
 
+#[expect(clippy::type_complexity)]
 pub(crate) struct ShuffleOps {
     // 8-bit, note we may use them for unsigned and signed.
     pub(crate) shuffle_u8x4: fn(&mut [[u8; 4]], [u8; 4]),
@@ -90,6 +91,7 @@ impl ShuffleOps {
     // May be unused if no architecture features are detected at compile time or runtime.
     #[allow(dead_code)]
     #[cfg(any(target_arch = "x86", target_arch = "x86_64"))]
+    #[expect(clippy::missing_transmute_annotations)]
     unsafe fn with_x86_ssse3(mut self) -> Self {
         self.shuffle_u8x4 =
             unsafe { transmute::<unsafe fn(&mut [[u8; 4]], [u8; 4]), _>(x86_ssse3::shuffle_u8x4) };
@@ -106,6 +108,7 @@ impl ShuffleOps {
     // May be unused if no architecture features are detected at compile time or runtime.
     #[allow(dead_code)]
     #[cfg(any(target_arch = "x86", target_arch = "x86_64"))]
+    #[expect(clippy::missing_transmute_annotations)]
     unsafe fn with_x86_avx2(mut self) -> Self {
         // Note: On Ivy Bridge these have the same *throughput* of 256bit-per-cycle as their SSSE3
         // equivalents until Icelake. With Icelake they are twice as fast at 512bit-per-cycle.

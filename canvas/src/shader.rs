@@ -459,6 +459,12 @@ impl Converter {
     }
 }
 
+impl Default for Converter {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl<'data> ConverterRun<'data> {
     /// Define a canvas of input color data.
     ///
@@ -602,8 +608,8 @@ impl<'data> ConverterRun<'data> {
             return Err(ConversionError::OutputColorDoesNotMatchPlanes);
         }
 
-        // Check that we did not overflow our index range for any plane indices.
-        if {
+        {
+            // Check that we did not overflow our index range for any plane indices.
             let ConverterBuffer {
                 in_plane,
                 in_cell,
@@ -614,7 +620,8 @@ impl<'data> ConverterRun<'data> {
                 out_atomic,
                 out_data,
             } = &self.buffers;
-            [
+
+            let lengths = [
                 in_plane.len(),
                 in_cell.len(),
                 in_atomic.len(),
@@ -623,11 +630,11 @@ impl<'data> ConverterRun<'data> {
                 out_cell.len(),
                 out_atomic.len(),
                 out_data.len(),
-            ]
-            .iter()
-            .any(|&len| len >= usize::from(u16::MAX))
-        } {
-            return Err(ConversionError::UnsupportedInputLayout);
+            ];
+
+            if lengths.iter().any(|&len| len >= usize::from(u16::MAX)) {
+                return Err(ConversionError::UnsupportedInputLayout);
+            }
         }
 
         // We can not use this optimization with non-slice planes. FIXME: we really should be able
@@ -674,7 +681,8 @@ impl<'data> ConverterRun<'data> {
         };
 
         // FIXME: texel errors?
-        Ok(self.rt.with_filled_texels(&self.info, &ops, plane_io))
+        self.rt.with_filled_texels(&self.info, &ops, plane_io);
+        Ok(())
     }
 
     fn layout_in(&self, color_in_plane: PlaneIdx) -> Result<&PlaneBytes, ConversionError> {
@@ -768,12 +776,12 @@ impl ConverterRt {
 
         let pixel_out = if let Some(ref recolor) = ops.recolor {
             (recolor.from)(
-                &ops.info,
+                ops.info,
                 &self.pixel_in_buffer,
                 &mut self.neutral_color_buffer,
             );
             (recolor.into)(
-                &ops.info,
+                ops.info,
                 &self.neutral_color_buffer,
                 &mut self.pixel_out_buffer,
             );
@@ -1046,12 +1054,12 @@ impl ConverterRt {
         let super_height = core::cmp::max(b0.height(), b1.height());
 
         // All currently supported texels are a power-of-two.
-        assert!(super_width % b0.width() == 0);
-        assert!(super_width % b1.width() == 0);
-        assert!(super_height % b0.height() == 0);
-        assert!(super_height % b1.height() == 0);
+        assert!(super_width.is_multiple_of(b0.width()));
+        assert!(super_width.is_multiple_of(b1.width()));
+        assert!(super_height.is_multiple_of(b0.height()));
+        assert!(super_height.is_multiple_of(b1.height()));
 
-        let sampled_with = |w, bs| w / bs + if w % bs == 0 { 0 } else { 1 };
+        let sampled_with = |w: u32, bs| w.div_ceil(bs);
 
         let sb_width = sampled_with(info.layout.in_layout.width, super_width);
         let sb_height = sampled_with(info.layout.in_layout.height, super_height);
@@ -1155,14 +1163,14 @@ impl ConverterRt {
         };
 
         (ops.fill_in_index)(
-            &info,
+            info,
             self.in_coords.as_slice(),
             &mut self.in_index_list,
             in_chunk,
         );
 
         (ops.fill_out_index)(
-            &info,
+            info,
             self.out_coords.as_slice(),
             &mut self.out_index_list,
             out_chunk,
@@ -1201,7 +1209,7 @@ impl ConverterRt {
         info.common_pixel
             .action(ResizeAction(&mut self.pixel_in_buffer, pixels));
 
-        if let Some(_) = ops.recolor {
+        if ops.recolor.is_some() {
             info.common_pixel
                 .action(ResizeAction(&mut self.neutral_color_buffer, pixels));
             info.common_pixel
@@ -1476,7 +1484,7 @@ impl ConverterRt {
 
             for (&index, from) in idx.zip(texels) {
                 if let Some(into) = texel_slice.get(index..index + 1) {
-                    into.read_from_slice(core::slice::from_ref(&from));
+                    into.read_from_slice(core::slice::from_ref(from));
                 }
             }
         }
@@ -1661,7 +1669,7 @@ impl ConverterRt {
                 }
             }
 
-            return actual as usize;
+            actual as usize
         }
     }
 
@@ -1799,9 +1807,9 @@ impl CommonPixel {
         let (encoding, len) = info.layout.in_layout.texel.bits.bit_encoding();
 
         if encoding[..len as usize] == [BitEncoding::UInt; M][..len as usize] {
-            return Self::expand_ints::<N>(info, bits, in_texel, pixel_buf);
+            Self::expand_ints::<N>(info, bits, in_texel, pixel_buf)
         } else if encoding[..len as usize] == [BitEncoding::Float; M][..len as usize] {
-            return Self::expand_floats(info, bits[0], in_texel, pixel_buf);
+            Self::expand_floats(info, bits[0], in_texel, pixel_buf)
         } else {
             // FIXME(color): error treatment..
             debug_assert!(false, "{:?}", &encoding[..len as usize]);
@@ -1847,7 +1855,7 @@ impl CommonPixel {
         }
 
         impl<Expanded, const N: usize> GenericTexelAction<()> for ExpandAction<'_, Expanded, N> {
-            fn run<T>(self, texel: Texel<T>) -> () {
+            fn run<T>(self, texel: Texel<T>) {
                 let texel_slice = self.in_texel.as_texels(texel);
                 let pixel_slice = self.pixel_buf.as_mut_texels(self.expand.array::<N>());
 
@@ -2092,13 +2100,13 @@ impl CommonPixel {
                 let bits = FromBits::for_pixel(bits, parts);
                 // TODO: pre-select SIMD version from `info.ops`?
                 if let SampleBits::UInt8x4 = info.layout.out_layout.texel.bits {
-                    return Self::join_uint8x4(ops, bits, pixel_buf, out_texels);
+                    Self::join_uint8x4(ops, bits, pixel_buf, out_texels)
                 } else if let SampleBits::UInt16x4 = info.layout.out_layout.texel.bits {
-                    return Self::join_uint16x4(ops, bits, pixel_buf, out_texels);
+                    Self::join_uint16x4(ops, bits, pixel_buf, out_texels)
                 } else if let SampleBits::UInt8x3 = info.layout.out_layout.texel.bits {
-                    return Self::join_uint8x3(ops, bits, pixel_buf, out_texels);
+                    Self::join_uint8x3(ops, bits, pixel_buf, out_texels)
                 } else if let SampleBits::UInt16x3 = info.layout.out_layout.texel.bits {
-                    return Self::join_uint16x3(ops, bits, pixel_buf, out_texels);
+                    Self::join_uint16x3(ops, bits, pixel_buf, out_texels)
                 } else {
                     Self::join_bits(info, ops, [bits], pixel_buf, out_texels)
                 }
@@ -2154,9 +2162,9 @@ impl CommonPixel {
         let (encoding, len) = info.layout.out_layout.texel.bits.bit_encoding();
 
         if encoding[..len as usize] == [BitEncoding::UInt; M][..len as usize] {
-            return Self::join_ints(info, bits, pixel_buf, out_texels);
+            Self::join_ints(info, bits, pixel_buf, out_texels)
         } else if encoding[..len as usize] == [BitEncoding::Float; M][..len as usize] {
-            return Self::join_floats(info, bits[0], pixel_buf, out_texels);
+            Self::join_floats(info, bits[0], pixel_buf, out_texels)
         } else {
             // FIXME(color): error treatment..
             debug_assert!(false, "{:?}", &encoding[..len as usize]);
@@ -2182,7 +2190,7 @@ impl CommonPixel {
         where
             F: FnMut(&Expanded, &FromBits, u8) -> u32,
         {
-            fn run<T>(mut self, texel: Texel<T>) -> () {
+            fn run<T>(mut self, texel: Texel<T>) {
                 let texel_slice = self.out_texels.as_mut_texels(texel);
                 let pixel_slice = self.pixel_buf.as_texels(self.join.array::<N>());
 
@@ -2269,7 +2277,7 @@ impl CommonPixel {
         let mut shuffle = [0x80u8; 4];
         for (idx, bits) in (0u8..4).zip(&bits) {
             if bits.len > 0 {
-                shuffle[(bits.begin / 8) as usize] = idx;
+                shuffle[bits.begin / 8] = idx;
             }
         }
 
@@ -2297,7 +2305,7 @@ impl CommonPixel {
         let mut shuffle = [0x80u8; 4];
         for (idx, bits) in (0u8..4).zip(&bits) {
             if bits.len > 0 {
-                shuffle[(bits.begin / 16) as usize] = idx;
+                shuffle[bits.begin / 16] = idx;
             }
         }
 
@@ -2319,7 +2327,7 @@ impl CommonPixel {
         let mut shuffle = [0x80u8; 3];
         for (idx, bits) in (0u8..4).zip(&bits) {
             if bits.len > 0 {
-                shuffle[(bits.begin / 8) as usize] = idx;
+                shuffle[bits.begin / 8] = idx;
             }
         }
 
@@ -2346,7 +2354,7 @@ impl CommonPixel {
         let mut shuffle = [0x80u8; 3];
         for (idx, bits) in (0u8..4).zip(&bits) {
             if bits.len > 0 {
-                shuffle[(bits.begin / 16) as usize] = idx;
+                shuffle[bits.begin / 16] = idx;
             }
         }
 
@@ -2508,7 +2516,7 @@ impl TexelKind {
             }
         }
 
-        TexelKind::from(self).action(ToSize)
+        self.action(ToSize)
     }
 }
 

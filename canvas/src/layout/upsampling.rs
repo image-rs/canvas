@@ -13,7 +13,7 @@ pub(crate) struct Yuv420p {
 impl Yuv420p {
     pub fn from_width_height(channel: TexelLayout, width: u32, height: u32) -> Option<Self> {
         use core::convert::TryFrom;
-        if width % 2 != 0 || height % 2 != 0 {
+        if !width.is_multiple_of(2) || !height.is_multiple_of(2) {
             return None;
         }
 

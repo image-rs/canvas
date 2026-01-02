@@ -402,7 +402,7 @@ impl AlignedOffset {
 
     /// Try to construct an aligned offset.
     pub fn new(offset: usize) -> Option<Self> {
-        if offset % Self::ALIGN == 0 && offset <= isize::MAX as usize {
+        if offset.is_multiple_of(Self::ALIGN) && offset <= isize::MAX as usize {
             Some(AlignedOffset(offset))
         } else {
             None
