@@ -739,7 +739,7 @@ impl<'data> ConverterRun<'data> {
 impl ConverterPlaneHandle<'_> {
     /// Define that this plane is the input (or output) color of the conversion.
     ///
-    /// The last modification performed through a [`PlaneHandle`] overrules any previous
+    /// The last modification performed through a [`ConverterPlaneHandle`] overrules any previous
     /// definition. This function should only be called if the color information is supplied by a
     /// single plane. If the color information in the layout disagrees, running will return an
     /// error.

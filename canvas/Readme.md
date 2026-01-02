@@ -3,9 +3,9 @@
 Provides a planar, colored, convertible frame buffer based on `image-texel`.
 
 **Work-In-Progress**: Do not use in production yet. The version is above
-`0.0.*` incidentally, the API may change rapidly. That said, we will adhere to
-semantic versioning and the byte-slice-based interfaces won't be removed as
-they are the selling point of the library.
+`0.*.0` and the API is somewhat stable but will still change. That said, we
+will adhere to semantic versioning and most byte-slice-based interfaces won't
+be removed as they are the selling point of the library.
 
 ## Goals
 

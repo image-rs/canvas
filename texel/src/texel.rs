@@ -498,7 +498,7 @@ impl atomic_buf {
     ///
     /// The bytes need to be aligned to `ALIGNMENT`. Returns `None` if these checks fail and return
     /// the newly wrapped buffer in `Some` otherwise.
-    pub fn from_bytes(bytes: AtomicSliceRef<u8>) -> Option<&Self> {
+    pub fn from_bytes(bytes: AtomicSliceRef<'_, u8>) -> Option<&Self> {
         if bytes.start % Self::ALIGNMENT == 0 {
             let offset = bytes.start / core::mem::size_of::<AtomicPart>();
             let len = bytes.len().div_ceil(core::mem::size_of::<AtomicPart>());

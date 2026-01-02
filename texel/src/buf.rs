@@ -1128,7 +1128,7 @@ impl atomic_buf {
     /// The alignment of `P` is already checked to be smaller than `MAX_ALIGN` through the
     /// constructor of `Texel`. The slice will have the maximum length possible but may leave
     /// unused bytes in the end.
-    pub fn as_texels<P>(&self, texel: Texel<P>) -> AtomicSliceRef<P> {
+    pub fn as_texels<P>(&self, texel: Texel<P>) -> AtomicSliceRef<'_, P> {
         use crate::texels::U8;
 
         let buffer = AtomicSliceRef {

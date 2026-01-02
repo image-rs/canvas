@@ -410,7 +410,8 @@ impl<'data> AtomicImageRef<'data, Bytes> {
     ///
     /// # Examples
     ///
-    /// You can create a buffer, then later transfer data and layout through [`data`].
+    /// You can create a buffer, then later transfer data and layout through the
+    /// [`data`][`crate::image::data`] module.
     ///
     /// ```
     /// use core::cell::Cell;
