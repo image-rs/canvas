@@ -354,7 +354,7 @@ impl<'data> StridedBufferRef<'data> {
     pub fn as_ref(&self) -> StridedBufferRef<'_> {
         StridedBufferRef {
             layout: self.layout,
-            data: &*self.data,
+            data: self.data,
         }
     }
 }
@@ -481,7 +481,7 @@ impl<T: StridedLayout> layout::Decay<T> for StridedBytes {
 
 impl<P: AsTexel> StridedLayout for layout::Matrix<P> {
     fn strided(&self) -> StridedBytes {
-        let matrix: layout::MatrixBytes = self.clone().into();
+        let matrix = layout::MatrixBytes::from(*self);
         StridedBytes::with_row_major(matrix)
     }
 }
@@ -494,7 +494,7 @@ impl<P> Layout for Strides<P> {
 
 impl<P> StridedLayout for Strides<P> {
     fn strided(&self) -> StridedBytes {
-        self.inner.clone()
+        self.inner
     }
 }
 

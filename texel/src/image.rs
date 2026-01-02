@@ -1397,7 +1397,7 @@ impl core::fmt::Debug for IntoPlanesError {
 // which we know are semantically equivalent. In the general case these would go through checks
 // that ensure the new layout is consistent with the data.
 impl<'data, 'l, L: Layout> ImageRef<'data, &'l L> {
-    pub(crate) fn as_deref(self) -> ImageRef<'data, &'l L::Target>
+    pub(crate) fn into_deref(self) -> ImageRef<'data, &'l L::Target>
     where
         L: ops::Deref,
         L::Target: Layout,
@@ -1407,7 +1407,7 @@ impl<'data, 'l, L: Layout> ImageRef<'data, &'l L> {
 }
 
 impl<'data, 'l, L: Layout> ImageMut<'data, &'l mut L> {
-    pub(crate) fn as_deref_mut(self) -> ImageMut<'data, &'l mut L::Target>
+    pub(crate) fn into_deref_mut(self) -> ImageMut<'data, &'l mut L::Target>
     where
         L: ops::DerefMut,
         L::Target: Layout,

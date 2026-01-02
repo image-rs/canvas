@@ -196,7 +196,7 @@ unsafe impl bytemuck::Zeroable for MaxAligned {}
 unsafe impl bytemuck::Pod for MaxAligned {}
 
 /// Wraps a type by value but removes its alignment requirement.
-#[repr(packed(1))]
+#[repr(C, packed(1))]
 // Deriving Clone works by Copy, which is why it works at all.
 #[derive(Clone, Copy)]
 pub struct Unaligned<T>(pub T);
@@ -518,19 +518,21 @@ impl atomic_buf {
     /// wrapped buffer in `Some` otherwise.
     pub fn from_bytes_mut(bytes: &mut [u8]) -> Option<&mut Self> {
         if bytes.as_ptr() as usize % Self::ALIGNMENT != 0 {
-            None
-        } else if bytes.len() % core::mem::size_of::<MaxAtomic>() != 0 {
-            None
-        } else {
-            let len = bytes.len() / core::mem::size_of::<AtomicPart>();
-            let ptr = bytes.as_mut_ptr() as *mut AtomicPart;
-            // SAFETY: We fulfill the alignment and length requirements for this cast, i.e. there
-            // are enough bytes available in this slice. Additionally, we still guarantee that this
-            // is at least aligned to `MAX_ALIGN`. We also have the shared read-write provenance on
-            // our pointer that a shared reference to atomic requires.
-            let atomics = ptr::slice_from_raw_parts_mut(ptr, len);
-            Some(unsafe { &mut *(atomics as *mut Self) })
+            return None;
         }
+
+        if bytes.len() % core::mem::size_of::<MaxAtomic>() != 0 {
+            return None;
+        }
+
+        let len = bytes.len() / core::mem::size_of::<AtomicPart>();
+        let ptr = bytes.as_mut_ptr() as *mut AtomicPart;
+        // SAFETY: We fulfill the alignment and length requirements for this cast, i.e. there
+        // are enough bytes available in this slice. Additionally, we still guarantee that this
+        // is at least aligned to `MAX_ALIGN`. We also have the shared read-write provenance on
+        // our pointer that a shared reference to atomic requires.
+        let atomics = ptr::slice_from_raw_parts_mut(ptr, len);
+        Some(unsafe { &mut *(atomics as *mut Self) })
     }
 
     /// Wrap aligned bytes in an atomic buffer.
@@ -1101,6 +1103,7 @@ impl<P> Texel<P> {
     ///
     /// Note that the size (in bytes) of the slice will be shortened if the size of `P` is not a
     /// divisor of the input slice's size.
+    #[expect(clippy::needless_lifetimes)]
     pub fn to_slice<'buf>(self, buffer: &'buf [MaxAligned]) -> &'buf [P] {
         self.cast_buf(buf::new(buffer))
     }
@@ -1109,6 +1112,7 @@ impl<P> Texel<P> {
     ///
     /// Note that the size (in bytes) of the slice will be shortened if the size of `P` is not a
     /// divisor of the input slice's size.
+    #[expect(clippy::needless_lifetimes)]
     pub fn to_mut_slice<'buf>(self, buffer: &'buf mut [MaxAligned]) -> &'buf mut [P] {
         self.cast_mut_buf(buf::new_mut(buffer))
     }
@@ -1116,6 +1120,7 @@ impl<P> Texel<P> {
     /// Try to reinterpret a slice of bytes as a slice of the texel.
     ///
     /// This returns `Some` if the buffer is suitably aligned, and `None` otherwise.
+    #[expect(clippy::needless_lifetimes)]
     pub fn try_to_slice<'buf>(self, bytes: &'buf [u8]) -> Option<&'buf [P]> {
         if bytes.as_ptr() as usize % mem::align_of::<P>() == 0 {
             // SAFETY:
@@ -1132,6 +1137,7 @@ impl<P> Texel<P> {
     /// Try to reinterpret a slice of bytes as a slice of the texel.
     ///
     /// This returns `Some` if the buffer is suitably aligned, and `None` otherwise.
+    #[expect(clippy::needless_lifetimes)]
     pub fn try_to_slice_mut<'buf>(self, bytes: &'buf mut [u8]) -> Option<&'buf mut [P]> {
         if let Some(slice) = self.try_to_slice(bytes) {
             // SAFETY:
@@ -1162,6 +1168,7 @@ impl<P> Texel<P> {
     /// // Forces a copy. `texel.unaligned().copy` would work, too.
     /// assert_eq!(u64::from_be(unaligned[0].0), 0x0000_0001_0002_0003);
     /// ```
+    #[expect(clippy::needless_lifetimes)]
     pub fn to_unaligned_slice<'buf>(self, bytes: &'buf [u8]) -> &'buf [Unaligned<P>] {
         self.unaligned().try_to_slice(bytes).unwrap()
     }
@@ -1181,6 +1188,7 @@ impl<P> Texel<P> {
     /// unaligned[0].0 = u64::from_be(0x0000_0001_0002_0003);
     /// assert_eq!(raw_buffer.map(u16::from_be), [0, 1, 2, 3]);
     /// ```
+    #[expect(clippy::needless_lifetimes)]
     pub fn to_unaligned_slice_mut<'buf>(self, bytes: &'buf mut [u8]) -> &'buf mut [Unaligned<P>] {
         self.unaligned().try_to_slice_mut(bytes).unwrap()
     }
@@ -1189,6 +1197,7 @@ impl<P> Texel<P> {
     ///
     /// Note that the size (in bytes) of the slice will be shortened if the size of `P` is not a
     /// divisor of the input slice's size.
+    #[expect(clippy::needless_lifetimes)]
     pub fn to_cell<'buf>(self, buffer: &'buf [MaxCell]) -> &'buf Cell<[P]> {
         cell_buf::from_slice(buffer).as_texels(self)
     }
@@ -1196,6 +1205,7 @@ impl<P> Texel<P> {
     /// Reinterpret a slice of texel as memory.
     ///
     /// Note that you can convert a reference to a single value by [`core::slice::from_ref`].
+    #[expect(clippy::needless_lifetimes)]
     pub fn try_to_cell<'buf>(self, bytes: &'buf [Cell<u8>]) -> Option<&'buf Cell<[P]>> {
         // Safety:
         // - The `pod`-ness certified by `self` ensures the cast of the contents of the memory is
@@ -1232,6 +1242,7 @@ impl<P> Texel<P> {
     /// let raw_buffer = raw_buffer.map(Cell::into_inner);
     /// assert_eq!(raw_buffer.map(u16::from_be), [0, 1, 2, 3]);
     /// ```
+    #[expect(clippy::needless_lifetimes)]
     pub fn to_unaligned_cell<'buf>(self, bytes: &'buf [Cell<u8>]) -> &'buf Cell<[Unaligned<P>]> {
         self.unaligned().try_to_cell(bytes).unwrap()
     }
@@ -1297,6 +1308,7 @@ impl<P> Texel<P> {
     /// Reinterpret a slice of texel as memory.
     ///
     /// Note that you can convert a reference to a single value by [`core::slice::from_ref`].
+    #[expect(clippy::needless_lifetimes)]
     pub fn to_bytes<'buf>(self, texel: &'buf [P]) -> &'buf [u8] {
         // Safety:
         // * lifetime is not changed
@@ -1308,6 +1320,7 @@ impl<P> Texel<P> {
     /// Reinterpret a mutable slice of texel as memory.
     ///
     /// Note that you can convert a reference to a single value by [`core::slice::from_mut`].
+    #[expect(clippy::needless_lifetimes)]
     pub fn to_mut_bytes<'buf>(self, texel: &'buf mut [P]) -> &'buf mut [u8] {
         // Safety:
         // * lifetime is not changed
@@ -1319,6 +1332,7 @@ impl<P> Texel<P> {
     /// Reinterpret a slice of texel as memory.
     ///
     /// Note that you can convert a reference to a single value by [`core::slice::from_ref`].
+    #[expect(clippy::needless_lifetimes)]
     pub fn cell_bytes<'buf>(self, texel: &'buf [Cell<P>]) -> &'buf Cell<[u8]> {
         let ptr: *const [u8] =
             { ptr::slice_from_raw_parts(texel.as_ptr() as *const u8, mem::size_of_val(texel)) };
@@ -1382,7 +1396,7 @@ impl<P> Texel<P> {
     /// Compare a slices with untyped memory.
     ///
     /// TODO: expose this, but under what name?
-    pub(crate) fn cell_bytes_eq<'a, 'b>(self, a: &'a [Cell<P>], rhs: &[u8]) -> bool {
+    pub(crate) fn cell_bytes_eq(self, a: &[Cell<P>], rhs: &[u8]) -> bool {
         let len = mem::size_of_val(a);
 
         if len != mem::size_of_val(rhs) {
@@ -1390,7 +1404,7 @@ impl<P> Texel<P> {
         }
 
         // Safety: see `cell_memory_eq`.
-        let lhs: &'a [u8] = unsafe { slice::from_raw_parts(a.as_ptr() as *const u8, len) };
+        let lhs: &[u8] = unsafe { slice::from_raw_parts(a.as_ptr() as *const u8, len) };
 
         // Really these two should not be overlapping! If the compiler knew, maybe a better memory
         // compare that is more aware of the cache effects of loading? But to be honest it should
@@ -1464,6 +1478,7 @@ impl<P> Texel<P> {
         self.store_atomic_slice_unchecked(b, source);
     }
 
+    #[expect(clippy::needless_lifetimes)]
     pub(crate) fn cast_buf<'buf>(self, buffer: &'buf buf) -> &'buf [P] {
         debug_assert_eq!(buffer.as_ptr() as usize % mem::align_of::<MaxAligned>(), 0);
         debug_assert_eq!(buffer.as_ptr() as usize % mem::align_of::<P>(), 0);
@@ -1481,6 +1496,7 @@ impl<P> Texel<P> {
         }
     }
 
+    #[expect(clippy::needless_lifetimes)]
     pub(crate) fn cast_mut_buf<'buf>(self, buffer: &'buf mut buf) -> &'buf mut [P] {
         debug_assert_eq!(buffer.as_ptr() as usize % mem::align_of::<MaxAligned>(), 0);
         debug_assert_eq!(buffer.as_ptr() as usize % mem::align_of::<P>(), 0);
@@ -1543,6 +1559,8 @@ impl MaxAtomic {
 
     /// Create a vector of atomic zero-bytes.
     pub const fn zero() -> Self {
+        // We need this as the array initializer (until `const { }` blocks).
+        #[expect(clippy::declare_interior_mutable_const)]
         const Z: AtomicPart = AtomicPart::new(0);
         MaxAtomic([Z; ATOMIC_PARTS])
     }
@@ -1621,7 +1639,7 @@ impl MaxCell {
 /// This is a pure marker type.
 impl<P> Clone for Texel<P> {
     fn clone(&self) -> Self {
-        Texel(PhantomData)
+        *self
     }
 }
 
@@ -1633,6 +1651,7 @@ impl<P> PartialEq for Texel<P> {
 
 impl<P> Eq for Texel<P> {}
 
+#[expect(clippy::non_canonical_partial_ord_impl)]
 impl<P> PartialOrd for Texel<P> {
     fn partial_cmp(&self, _: &Self) -> Option<Ordering> {
         Some(Ordering::Equal)

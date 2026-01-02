@@ -200,8 +200,11 @@ impl Buffer {
 
     /// Calculates the number of elements to have a byte buffer of requested length.
     fn alloc_len(length: usize) -> usize {
-        const CHUNK_SIZE: usize = mem::size_of::<MaxAligned>();
-        assert!(CHUNK_SIZE > 1);
+        const CHUNK_SIZE: usize = {
+            let size = mem::size_of::<MaxAligned>();
+            assert!(size > 1);
+            size
+        };
 
         // We allocated enough chunks for at least the length. This can never overflow.
         length / CHUNK_SIZE + usize::from(length % CHUNK_SIZE != 0)
@@ -209,6 +212,7 @@ impl Buffer {
 }
 
 impl CellBuffer {
+    #[expect(clippy::declare_interior_mutable_const)]
     const ELEMENT: MaxCell = MaxCell::zero();
 
     /// Allocate a new [`CellBuffer`] with a number of bytes.
@@ -305,6 +309,7 @@ impl CellBuffer {
 }
 
 impl AtomicBuffer {
+    #[expect(clippy::declare_interior_mutable_const)]
     const ELEMENT: MaxAtomic = MaxAtomic::zero();
 
     /// Allocate a new [`AtomicBuffer`] with a number of bytes.
@@ -819,7 +824,7 @@ impl From<&'_ buf> for Buffer {
 
 impl Default for &'_ buf {
     fn default() -> Self {
-        buf::new(&mut [])
+        buf::new(&[])
     }
 }
 
@@ -831,13 +836,13 @@ impl Default for &'_ mut buf {
 
 impl borrow::Borrow<buf> for Buffer {
     fn borrow(&self) -> &buf {
-        &**self
+        self
     }
 }
 
 impl borrow::BorrowMut<buf> for Buffer {
     fn borrow_mut(&mut self) -> &mut buf {
-        &mut **self
+        self
     }
 }
 
@@ -1437,7 +1442,7 @@ impl<'lt, P> AtomicSliceRef<'lt, P> {
 
 impl<P> Clone for AtomicSliceRef<'_, P> {
     fn clone(&self) -> Self {
-        AtomicSliceRef { ..*self }
+        *self
     }
 }
 
@@ -1473,7 +1478,7 @@ impl<P> AtomicRef<'_, P> {
 
 impl<P> Clone for AtomicRef<'_, P> {
     fn clone(&self) -> Self {
-        AtomicRef { ..*self }
+        *self
     }
 }
 
@@ -1613,13 +1618,13 @@ impl<T> core::ops::Index<TexelRange<T>> for cell_buf {
 
 impl Default for &'_ cell_buf {
     fn default() -> Self {
-        cell_buf::new(&mut [])
+        cell_buf::new(&[])
     }
 }
 
 impl Default for &'_ atomic_buf {
     fn default() -> Self {
-        atomic_buf::new(&mut [])
+        atomic_buf::new(&[])
     }
 }
 
