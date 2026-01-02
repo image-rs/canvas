@@ -537,7 +537,7 @@ impl TexelLayout {
 
     /// Get the minimum required alignment of the element.
     pub const fn align(self) -> usize {
-        self.size
+        self.align
     }
 
     pub const fn superset_of(&self, other: TexelLayout) -> bool {
