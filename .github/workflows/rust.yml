@@ -39,7 +39,7 @@ jobs:
         cache-on-failure: true
     - name: miri-test
       run: |
-        cargo +nightly miri test -p image-texel
+        cargo +nightly miri test -p image-texel -p matrix-slice
   rustfmt:
     runs-on: ubuntu-latest
     steps:

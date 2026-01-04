@@ -1,5 +1,5 @@
 [workspace]
-members = [".", "canvas", "drm", "texel"]
+members = [".", "canvas", "drm", "matrix-slice", "texel"]
 resolver = "2"
 
 [profile.release]
