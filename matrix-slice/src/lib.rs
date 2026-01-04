@@ -116,6 +116,27 @@ impl<T> Default for BlockRef<'_, T> {
 }
 
 impl<'data, T> BlockRef<'data, T> {
+    /// Create a new block reference from a raw slice and pitch.
+    ///
+    /// The resulting block refers to the whole matrix.
+    ///
+    /// # Panics
+    ///
+    /// Panics if the length of `data` is not a multiple of `pitch`.
+    pub fn new(data: &'data [T], pitch: usize) -> Self {
+        assert!(data.len().is_multiple_of(pitch));
+
+        BlockRef {
+            block: BlockSlice {
+                rows: data.len() / pitch,
+                cols: pitch,
+                pitch,
+            },
+            data: NonNull::from_ref(data).cast(),
+            lifetime: PhantomData,
+        }
+    }
+
     /// Number of rows in this block.
     pub fn rows(&self) -> usize {
         self.block.rows
@@ -444,6 +465,27 @@ impl<T> Default for BlockMut<'_, T> {
 }
 
 impl<'data, T> BlockMut<'data, T> {
+    /// Create a new block reference from a raw slice and pitch.
+    ///
+    /// The resulting block refers to the whole matrix.
+    ///
+    /// # Panics
+    ///
+    /// Panics if the length of `data` is not a multiple of `pitch`.
+    pub fn new(data: &'data mut [T], pitch: usize) -> Self {
+        assert!(data.len().is_multiple_of(pitch));
+
+        BlockMut {
+            block: BlockSlice {
+                rows: data.len() / pitch,
+                cols: pitch,
+                pitch,
+            },
+            data: NonNull::from_ref(data).cast(),
+            lifetime: PhantomData,
+        }
+    }
+
     /// Number of rows in this block.
     pub fn rows(&self) -> usize {
         self.block.rows
