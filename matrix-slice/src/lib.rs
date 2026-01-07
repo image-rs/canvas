@@ -499,7 +499,7 @@ impl<'data, T> BlockMut<'data, T> {
                 cols: pitch,
                 pitch,
             },
-            data: NonNull::from_ref(data).cast(),
+            data: NonNull::from_mut(data).cast(),
             lifetime: PhantomData,
         }
     }
