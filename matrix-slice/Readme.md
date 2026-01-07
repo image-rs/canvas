@@ -3,7 +3,36 @@
 A sound way of handling 2D matrix slices for Rust.
 
 ```rust
-let mut 
+let mut data = vec![
+    0, 1, 2, 3,
+    4, 5, 6, 7,
+    8, 9,10,11,
+];
+
+let matrix = matrix_slice::BlockMut::new(&mut data, 4);
+let (mut lhs, mut rhs) = matrix.split_at_col(2);
+
+assert_eq!(lhs[(0, 0)], 0);
+assert_eq!(rhs[(0, 1)], 3);
+
+// Completely independent though data address ranges overlap.
+lhs[(0, 0)] = rhs[(0, 1)];
+assert_eq!(lhs[(0, 0)], 3);
+
+// Safe to send to another thread.
+std::thread::scope(|scope| {
+    scope.spawn(move || {
+        lhs[(1, 1)] = 42;
+    });
+
+    scope.spawn(move || {
+        rhs[(1, 1)] = 0xbeef;
+    });
+});
+
+// After their borrow ends, see the changes:
+assert_eq!(data[5], 42);
+assert_eq!(data[7], 0xbeef);
 ```
 
 ## The problem
@@ -66,32 +95,8 @@ that invariably requires us to return a reference. Those are road bumps however
 nothing fundamentally blocking our type from working.
 
 The question of design will be discussed in more detail in the future
-documentation.
+documentation.array
 
-## Technical footnotes
+## Footnotes
 
-¹Technically, the sharing predicate / invariant depends on the pointee type but
-access is closely guarded to most code. To crates, stable Rust provides *one*
-escape hatch in the form of `UnsafeCell<T>`, which allows shared mutation, and
-your own types can only make use of this through composition (fields in
-`struct`, `enum`, and on nightly within `union`). Additionally, any operation
-that such a custom type implements must still conform to the requirements of
-the underlying type's operational semantics and thus sharing predicates if
-references to it are involved.
-
-²In contrast to C++ where `T*` and `T const *` are both 'pointers' but have
-pointee types that _differ_ in their _qualifiers_. So while they are distinct
-on a type-level (including type mismatche shenanigans with `decltype(auto)`) on
-an operation semantics level we can always `const_cast` the difference away and
-the compiler can distinguish and *optimize* only in a very limited number of
-cases. Also programmers can accidentally introduce paradoxical `T const&&`
-types in their programs, which contributes significantly to a quirky and
-lighthearted work environment. Remember: the clearest way of letting people
-know you are taking control of a resource is to explicitly say you're copying
-it (/s, [summarized from this gem](https://stackoverflow.com/a/60587511)). Also
-you know need to explain what it means to return a `const T` even though
-returning is a common way of initializing a totally non-const value. I suppose
-[the analogy][Sandor Dargo] of buying a house that you're not allowed to modify
-is more hilarious in Germany (see UrhG §1 (1) No. 4).
-
-[Sandor Dargo]: https://www.sandordargo.com/blog/2020/11/18/when-use-const-3-return-types)
+¹² See the [development log](./docs/development_log.md) in the documentation.

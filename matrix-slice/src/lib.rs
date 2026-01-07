@@ -41,6 +41,24 @@
 #![no_std]
 use core::{cell::Cell, fmt, marker::PhantomData, ops, ptr::NonNull};
 
+/// The Readme of the crate and links to further documentation.
+///
+/// Note: This module only exists on `cfg(doc)` builds, do not refer to it.
+///
+#[cfg(doc)]
+#[doc = include_str!("../Readme.md")]
+pub mod docs {
+    /// A discussion of the approach, alternatives, trade-offs and context.
+    ///
+    #[doc = include_str!("../docs/development_log.md")]
+    pub const DEVELOPMENT_NOTES: () = ();
+
+    /// Documentation of each released version.
+    ///
+    #[doc = include_str!("../Changes.md")]
+    pub const CHANGELOG: () = ();
+}
+
 /// Create a block reference from a full matrix represented as an array of rows.
 ///
 /// # Examples
