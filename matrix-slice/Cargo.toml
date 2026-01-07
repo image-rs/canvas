@@ -1,12 +1,13 @@
 [package]
 name = "matrix-slice"
-version = "1.0.0"
+version = "1.0.1"
 edition = "2024"
 
 description = "Safe abstractions for two-dimensional slices."
 authors = ["Aurelia Molzer <5550310+197g@users.noreply.github.com>"]
 license = "MIT OR Apache-2.0"
 documentation = "https://docs.rs/matrix-slice"
+readme = "Readme.md"
 repository = "https://github.com/image-rs/canvas/tree/HEAD/matrix-slice"
 categories = ["no-std", "data-structures", "rust-patterns"]
 
