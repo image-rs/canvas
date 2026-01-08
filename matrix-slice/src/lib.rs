@@ -1080,4 +1080,30 @@ mod tests {
 
         block.split_at_row_checked(2).unwrap();
     }
+
+    /// Check our pointer derivation does not cause retagging that would cause any block to lose
+    /// provenance over its items. Access individual rows (derived slices) from an overlapping split
+    /// concurrently.
+    #[test]
+    fn soundness_interleaved_block_access() {
+        let data = &mut [[0u32; 4]; 4];
+        let block = super::from_array_rows_mut(data);
+
+        let (mut lhs, rhs) = block.split_at_col(2);
+
+        for (left, right) in lhs.reborrow().iter_rows_mut().zip(rhs.iter_rows_mut()) {
+            left[0] = right[0];
+            left[1] = right[1];
+            right.fill(1);
+        }
+
+        // Check that this pointer is still valid.
+        for row in lhs.iter_rows_mut() {
+            row.fill(2);
+        }
+
+        for row in data.iter() {
+            assert_eq!(row, &[2, 2, 1, 1]);
+        }
+    }
 }
