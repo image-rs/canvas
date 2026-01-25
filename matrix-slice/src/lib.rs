@@ -255,6 +255,64 @@ impl<'data, T> BlockRef<'data, T> {
         }
     }
 
+    /// Choose a single row and refer to its data.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// let data = &[
+    ///     [0, 1, 2],
+    ///     [3, 4, 5],
+    ///     [6, 7, 8],
+    /// ];
+    ///
+    /// let block = matrix_slice::from_array_rows(data);
+    /// let row = block.row(1);
+    /// assert_eq!(row[0], 3);
+    /// ```
+    pub fn row(self, row: usize) -> VecRef<'data, T> {
+        let (_, block, offset) = self.block.split_at_row(row).unwrap();
+        assert!(block.rows >= 1);
+
+        VecRef {
+            block: VectorSlice {
+                count: block.cols,
+                pitch: 1,
+            },
+            data: unsafe { self.data.add(offset) },
+            lifetime: self.lifetime,
+        }
+    }
+
+    /// Choose a single column and refer to its data.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// let data = &[
+    ///     [0, 1, 2],
+    ///     [3, 4, 5],
+    ///     [6, 7, 8],
+    /// ];
+    ///
+    /// let block = matrix_slice::from_array_rows(data);
+    /// let row = block.col(1);
+    /// assert_eq!(row[0], 1);
+    /// ```
+    pub fn col(self, col: usize) -> VecRef<'data, T> {
+        let (_, block, offset) = self.block.split_at_col(col).unwrap();
+        assert!(block.cols >= 1);
+
+        VecRef {
+            block: VectorSlice {
+                count: block.rows,
+                pitch: block.pitch,
+            },
+            data: unsafe { self.data.add(offset) },
+            lifetime: self.lifetime,
+        }
+    }
+
     /// Choose a range of rows and contract the block to that.
     ///
     /// The argument type is flexible, allowing ranges (`1..3`), half open ranges (`2..` and `..2`)
@@ -283,10 +341,13 @@ impl<'data, T> BlockRef<'data, T> {
     {
         let (start, len) = range.into_start_and_len(self.block.rows)?;
         let (_, block, offset) = self.block.split_at_row(start)?;
+        // Safety: ensures that the resulting block is more constrained, this property should be
+        // ensured by our sealed `MatrixIndex` implementations.
         assert!(block.rows >= len);
 
         Some(BlockRef {
             block: BlockSlice { rows: len, ..block },
+            // SAFETY: offset is in-bounds as per `split_at_row` contract.
             data: unsafe { self.data.add(offset) },
             lifetime: self.lifetime,
         })
@@ -384,7 +445,7 @@ impl<T> ops::Index<(usize, usize)> for BlockRef<'_, T> {
     type Output = T;
 
     fn index(&self, index: (usize, usize)) -> &Self::Output {
-        let idx = self.block.in_bounds_index(index.0, index.1);
+        let idx = self.block.in_bounds_offset(index.0, index.1);
         // SAFETY: Index is bounded by `total_span` which itself is a lower estimate of the
         // provenance of the pointer.
         unsafe { &*self.data.as_ptr().add(idx) }
@@ -604,6 +665,66 @@ impl<'data, T> BlockMut<'data, T> {
         }
     }
 
+    /// Choose a single row and refer to its data.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// let data = &mut [
+    ///     [0, 1, 2],
+    ///     [3, 4, 5],
+    ///     [6, 7, 8],
+    /// ];
+    ///
+    /// let mut block = matrix_slice::from_array_rows_mut(data);
+    /// let mut row = block.reborrow().row(1);
+    /// row[0] = 0x42;
+    /// assert_eq!(block[(1, 0)], 0x42);
+    /// ```
+    pub fn row(self, row: usize) -> VecMut<'data, T> {
+        let (_, block, offset) = self.block.split_at_row(row).unwrap();
+        assert!(block.rows >= 1);
+
+        VecMut {
+            block: VectorSlice {
+                count: block.cols,
+                pitch: 1,
+            },
+            data: unsafe { self.data.add(offset) },
+            lifetime: self.lifetime,
+        }
+    }
+
+    /// Choose a single column and refer to its data.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// let data = &mut [
+    ///     [0, 1, 2],
+    ///     [3, 4, 5],
+    ///     [6, 7, 8],
+    /// ];
+    ///
+    /// let mut block = matrix_slice::from_array_rows_mut(data);
+    /// let mut row = block.reborrow().col(1);
+    /// row[0] = 0x42;
+    /// assert_eq!(block[(0, 1)], 0x42);
+    /// ```
+    pub fn col(self, col: usize) -> VecMut<'data, T> {
+        let (_, block, offset) = self.block.split_at_col(col).unwrap();
+        assert!(block.cols >= 1);
+
+        VecMut {
+            block: VectorSlice {
+                count: block.rows,
+                pitch: block.pitch,
+            },
+            data: unsafe { self.data.add(offset) },
+            lifetime: self.lifetime,
+        }
+    }
+
     /// Choose a range of rows and contract the block to that.
     ///
     /// The argument type is flexible, allowing ranges (`1..3`), half open ranges (`2..` and `..2`)
@@ -783,6 +904,7 @@ impl<'data, T> BlockMut<'data, Cell<T>> {
     ///
     /// This is the equivalent of [`Cell::get_mut`] over elements in this slice.
     pub fn as_cell_items(self) -> BlockMut<'data, T> {
+        // SAFETY: `Cell<T>` has the same layout as `T`.
         BlockMut {
             data: self.data.cast(),
             block: self.block,
@@ -795,7 +917,7 @@ impl<T> ops::Index<(usize, usize)> for BlockMut<'_, T> {
     type Output = T;
 
     fn index(&self, index: (usize, usize)) -> &Self::Output {
-        let idx = self.block.in_bounds_index(index.0, index.1);
+        let idx = self.block.in_bounds_offset(index.0, index.1);
         // SAFETY: Index is bounded by `total_span` which itself is a lower estimate of the
         // provenance of the pointer.
         unsafe { &*self.data.as_ptr().add(idx) }
@@ -804,7 +926,7 @@ impl<T> ops::Index<(usize, usize)> for BlockMut<'_, T> {
 
 impl<T> ops::IndexMut<(usize, usize)> for BlockMut<'_, T> {
     fn index_mut(&mut self, index: (usize, usize)) -> &mut Self::Output {
-        let idx = self.block.in_bounds_index(index.0, index.1);
+        let idx = self.block.in_bounds_offset(index.0, index.1);
         // SAFETY: Index is bounded by `total_span` which itself is a lower estimate of the
         // provenance of the pointer.
         unsafe { &mut *self.data.as_ptr().add(idx) }
@@ -878,6 +1000,11 @@ impl BlockSlice {
         self.pitch = self.cols;
     }
 
+    /// Split into two block descriptors.
+    ///
+    /// Returns `Some` with two valid blocks. The first block is in-bounds. Also returns an offset
+    /// that is in-bounds of the current block and such that the elements valid for both blocks do
+    /// not alias. The second block is in-bounds when interpreted as start at the offset.
     fn split_at_row(self, mid: usize) -> Option<(BlockSlice, BlockSlice, usize)> {
         let n = self.rows.checked_sub(mid)?;
 
@@ -928,12 +1055,66 @@ impl BlockSlice {
     }
 
     /// Return the absolute position of the element, if in bounds. Otherwise, panic.
-    fn in_bounds_index(&self, row: usize, col: usize) -> usize {
+    fn in_bounds_offset(&self, row: usize, col: usize) -> usize {
         assert!(row < self.rows);
         assert!(col < self.cols);
         let idx = row * self.pitch + col;
         debug_assert!(idx < self.total_span());
         idx
+    }
+}
+
+/// Represents the provenance of a pointer to a single column/row of a matrix.
+///
+/// FIXME: before exposing this consider `PartialEq, … Ord` implications. These were added to
+/// satisfy the `Pointee` trait requirements but really what does ordering mean? We have chosen the
+/// field `pitch` to be last but that is super arbitrary.
+#[derive(Copy, Clone, Debug, Hash, PartialEq, Eq, PartialOrd, Ord)]
+struct VectorSlice {
+    count: usize,
+    pitch: usize,
+}
+
+const _: () = {
+    // As per Rust 1.92's `Pointee` trait. Suspicious: `Ord`. See comment on `VectorSlice`.
+    use core::{fmt, hash};
+
+    fn _can_eventually_be_ptr_metadata<
+        // Missing: `Freeze` which is unstable
+        Metadata: fmt::Debug + Copy + Send + Sync + Ord + hash::Hash + Unpin,
+    >() {
+    }
+
+    let _ = _can_eventually_be_ptr_metadata::<VectorSlice>;
+};
+
+impl VectorSlice {
+    /// Split into two vector descriptors.
+    ///
+    /// Returns `Some` with two valid slice. The first slice is in-bounds. Also returns an offset
+    /// that is in-bounds of the current slice and such that the elements valid for both blocks do
+    /// not alias. The second block is in-bounds when interpreted as start at the offset.
+    fn split_at(self, mid: usize) -> Option<(VectorSlice, VectorSlice, usize)> {
+        let right_count = self.count.checked_sub(mid)?;
+
+        let left = VectorSlice {
+            count: mid,
+            pitch: self.pitch,
+        };
+
+        let right = VectorSlice {
+            count: right_count,
+            pitch: self.pitch,
+        };
+
+        let offset = mid * self.pitch;
+        Some((left, right, offset))
+    }
+
+    /// Return the absolute position of the element, if in bounds. Otherwise, panic.
+    fn in_bounds_offset(&self, index: usize) -> usize {
+        assert!(index < self.count);
+        index * self.pitch
     }
 }
 
@@ -1055,6 +1236,346 @@ mod sealed {
         fn into_start_and_len(self, dim: usize) -> Option<(usize, usize)> {
             Some((0, dim))
         }
+    }
+}
+
+/// A reference to a single column/row of a matrix.
+///
+/// This is similar to `&[T]` but with a pitch potentially different from `1` between its elements,
+/// i.e. there is no guarantee of contiguity. As a consequence this does not have a simple
+/// past-the-end pointer like a slice would have. For an empty slice the only guaranteed-valid
+/// pointer is the base pointer itself while for larger slices the last guaranteed-valid pointer is
+/// one-past the last element, _not_ one additional pitch.
+///
+/// Created from its constructors or a block reference via the [`BlockRef::col`] and
+/// [`BlockRef::row`] methods.
+#[derive(Copy, Clone)]
+pub struct VecRef<'a, T> {
+    data: NonNull<T>,
+    block: VectorSlice,
+    lifetime: PhantomData<&'a [T]>,
+}
+
+// SAFETY: See `&[T]`. The reference can be used to, potentially, get a `&T` for each element in
+// the block and thus the block itself provides the exact same properties as `T`. The `VecRef` is
+// then `&[T]` itself and thus has properties of a reference to such a type. Refer to the
+// reference: <https://doc.rust-lang.org/stable/std/primitive.reference.html>
+//
+// We have `&T: Sync` iff `T: Sync`
+unsafe impl<T> Sync for VecRef<'_, T> where T: Sync {}
+// We have `&T: Send` iff `T: Sync`
+unsafe impl<T> Send for VecRef<'_, T> where T: Sync {}
+
+impl<'data, T> VecRef<'data, T> {
+    /// Create a new vector reference from a raw slice and pitch.
+    ///
+    /// The resulting block refers to the first column of the matrix.
+    ///
+    /// # Panics
+    ///
+    /// Panics if the pitch is zero.
+    pub fn new(data: &'data [T], pitch: usize) -> Self {
+        assert_ne!(pitch, 0);
+
+        VecRef {
+            // Safety: construction implies `count * pitch <= data.len()`.
+            block: VectorSlice {
+                count: data.len() / pitch,
+                pitch,
+            },
+            data: NonNull::from(data).cast(),
+            lifetime: PhantomData,
+        }
+    }
+
+    /// Create a new vector reference from a raw slice with pitch `1`.
+    pub fn from_slice(data: &'data [T]) -> Self {
+        VecRef {
+            block: VectorSlice {
+                count: data.len(),
+                pitch: 1,
+            },
+            data: NonNull::from(data).cast(),
+            lifetime: PhantomData,
+        }
+    }
+
+    /// Number of elements in this vector.
+    pub fn len(&self) -> usize {
+        self.block.count
+    }
+
+    /// Whether this vector is empty.
+    pub fn is_empty(&self) -> bool {
+        self.block.count == 0
+    }
+
+    /// Divide into two vectors at the given element.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use matrix_slice::VecRef;
+    ///
+    /// let data = &[0, 1, 2, 3, 4, 5];
+    ///
+    /// let block = VecRef::new(data, 1);
+    /// let (left, right) = block.split_at(2);
+    ///
+    /// assert_eq!(left[1], 1);
+    /// assert_eq!(right[3], 5);
+    /// ```
+    pub fn split_at(self, mid: usize) -> (VecRef<'data, T>, VecRef<'data, T>) {
+        self.split_at_checked(mid).unwrap()
+    }
+
+    /// Divide into two vectors at the given element.
+    ///
+    /// See [`Self::split_at`] but returns `None` if out of bounds.
+    pub fn split_at_checked(self, mid: usize) -> Option<(VecRef<'data, T>, VecRef<'data, T>)> {
+        if let Some((lhs, rhs, offset)) = self.block.split_at(mid) {
+            Some((
+                VecRef {
+                    data: self.data,
+                    block: lhs,
+                    lifetime: self.lifetime,
+                },
+                VecRef {
+                    data: unsafe { self.data.add(offset) },
+                    block: rhs,
+                    lifetime: self.lifetime,
+                },
+            ))
+        } else {
+            None
+        }
+    }
+
+    /// Choose a range of elements and contract the vector to that.
+    pub fn select<R>(self, range: R) -> Option<VecRef<'data, T>>
+    where
+        R: MatrixIndex,
+    {
+        let (start, len) = range.into_start_and_len(self.block.count)?;
+        let (_, block, offset) = self.block.split_at(start)?;
+        // Safety: ensures that the resulting block is more constrained, this property should be
+        // ensured by our sealed `MatrixIndex` implementations.
+        assert!(block.count >= len);
+
+        Some(VecRef {
+            block: VectorSlice {
+                count: len,
+                ..block
+            },
+            // SAFETY: offset is in-bounds as per `split_at` contract.
+            data: unsafe { self.data.add(offset) },
+            lifetime: self.lifetime,
+        })
+    }
+}
+
+impl<T> ops::Index<usize> for VecRef<'_, T> {
+    type Output = T;
+
+    fn index(&self, index: usize) -> &Self::Output {
+        let idx = self.block.in_bounds_offset(index);
+        // SAFETY: Index is bounded by `total_span` which itself is a lower estimate of the
+        // provenance of the pointer.
+        unsafe { &*self.data.as_ptr().add(idx) }
+    }
+}
+
+/// A reference to a single column/row of a matrix.
+///
+/// This is similar to `&[T]` but with a pitch potentially different from `1` between its elements,
+/// i.e. there is no guarantee of contiguity. As a consequence this does not have a simple
+/// past-the-end pointer like a slice would have. For an empty slice the only guaranteed-valid
+/// pointer is the base pointer itself while for larger slices the last guaranteed-valid pointer is
+/// one-past the last element, _not_ one additional pitch.
+///
+/// Created from its constructors or a block reference via the [`BlockMut::col`] and
+/// [`BlockMut::row`] methods.
+pub struct VecMut<'a, T> {
+    data: NonNull<T>,
+    block: VectorSlice,
+    lifetime: PhantomData<&'a mut [T]>,
+}
+
+// SAFETY: See `VecRef` but with `&mut [T]`.
+//
+// We have `&mut T: Sync` iff `T: Sync`
+unsafe impl<T> Sync for VecMut<'_, T> where T: Sync {}
+// We have `&mut T: Send` iff `T: Send`
+unsafe impl<T> Send for VecMut<'_, T> where T: Sync {}
+
+impl<'data, T> VecMut<'data, T> {
+    /// Create a new vector reference from a raw slice and pitch.
+    ///
+    /// The resulting block refers to the first column of the matrix.
+    pub fn new(data: &'data mut [T], pitch: usize) -> Self {
+        VecMut {
+            // Safety: construction implies `count * pitch <= data.len()`.
+            block: VectorSlice {
+                count: data.len() / pitch,
+                pitch,
+            },
+            data: NonNull::from(data).cast(),
+            lifetime: PhantomData,
+        }
+    }
+
+    /// Create a new vector reference from a raw slice with pitch `1`.
+    pub fn from_slice(data: &'data mut [T]) -> Self {
+        VecMut {
+            block: VectorSlice {
+                count: data.len(),
+                pitch: 1,
+            },
+            data: NonNull::from(data).cast(),
+            lifetime: PhantomData,
+        }
+    }
+
+    /// Number of elements in this vector.
+    pub fn len(&self) -> usize {
+        self.block.count
+    }
+
+    /// Whether this vector is empty.
+    pub fn is_empty(&self) -> bool {
+        self.block.count == 0
+    }
+
+    /// Divide into two vectors at the given element.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use matrix_slice::VecMut;
+    ///
+    /// let data = &mut [0, 1, 2, 3, 4, 5];
+    ///
+    /// let block = VecMut::new(data, 1);
+    /// let (left, right) = block.split_at(2);
+    ///
+    /// assert_eq!(left[1], 1);
+    /// assert_eq!(right[3], 5);
+    /// ```
+    pub fn split_at(self, mid: usize) -> (VecMut<'data, T>, VecMut<'data, T>) {
+        self.split_at_checked(mid).unwrap()
+    }
+
+    /// Divide into two vectors at the given element.
+    ///
+    /// See [`Self::split_at`] but returns `None` if out of bounds.
+    pub fn split_at_checked(self, mid: usize) -> Option<(VecMut<'data, T>, VecMut<'data, T>)> {
+        if let Some((lhs, rhs, offset)) = self.block.split_at(mid) {
+            Some((
+                VecMut {
+                    data: self.data,
+                    block: lhs,
+                    lifetime: self.lifetime,
+                },
+                VecMut {
+                    data: unsafe { self.data.add(offset) },
+                    block: rhs,
+                    lifetime: self.lifetime,
+                },
+            ))
+        } else {
+            None
+        }
+    }
+
+    /// Choose a range of elements and contract the vector to that.
+    pub fn select<R>(self, range: R) -> Option<VecMut<'data, T>>
+    where
+        R: MatrixIndex,
+    {
+        let (start, len) = range.into_start_and_len(self.block.count)?;
+        let (_, block, offset) = self.block.split_at(start)?;
+        // Safety: ensures that the resulting block is more constrained, this property should be
+        // ensured by our sealed `MatrixIndex` implementations.
+        assert!(block.count >= len);
+
+        Some(VecMut {
+            block: VectorSlice {
+                count: len,
+                ..block
+            },
+            // SAFETY: offset is in-bounds as per `split_at` contract.
+            data: unsafe { self.data.add(offset) },
+            lifetime: self.lifetime,
+        })
+    }
+
+    /// Turn this unique reference into a shared reference.
+    pub fn cast_const(self) -> VecRef<'data, T> {
+        // SAFETY: shared access can always be re-tagged from unique access.
+        VecRef {
+            data: self.data,
+            block: self.block,
+            lifetime: PhantomData,
+        }
+    }
+
+    /// Create a unique reference to this block with a shorter lifetime.
+    pub fn reborrow(&mut self) -> VecMut<'_, T> {
+        // SAFETY: Unique access is created by deriving it from our current pointer so the
+        // provenance is the same, and temporally it can not overlap access through the current
+        // value due to the lifetime enforcing a borrow relationship.
+        VecMut {
+            data: self.data,
+            block: self.block,
+            lifetime: PhantomData,
+        }
+    }
+
+    /// Modify the item type to a `Cell`, allowing interior mutability.
+    ///
+    /// This is the equivalent of [`Cell::from_mut`] over elements in this slice.
+    pub fn as_cells(self) -> VecMut<'data, Cell<T>> {
+        // SAFETY: `Cell<T>` has the same layout as `T`.
+        VecMut {
+            data: self.data.cast(),
+            block: self.block,
+            lifetime: PhantomData,
+        }
+    }
+}
+
+impl<'data, T> VecMut<'data, Cell<T>> {
+    /// Modify the item type from a `Cell` to its interior type.
+    ///
+    /// This is the equivalent of [`Cell::get_mut`] over elements in this slice.
+    pub fn as_cell_items(self) -> VecMut<'data, T> {
+        // SAFETY: `Cell<T>` has the same layout as `T`.
+        VecMut {
+            data: self.data.cast(),
+            block: self.block,
+            lifetime: PhantomData,
+        }
+    }
+}
+
+impl<T> ops::Index<usize> for VecMut<'_, T> {
+    type Output = T;
+
+    fn index(&self, index: usize) -> &Self::Output {
+        let idx = self.block.in_bounds_offset(index);
+        // SAFETY: Index is bounded by `total_span` which itself is a lower estimate of the
+        // provenance of the pointer.
+        unsafe { &*self.data.as_ptr().add(idx) }
+    }
+}
+
+impl<T> ops::IndexMut<usize> for VecMut<'_, T> {
+    fn index_mut(&mut self, index: usize) -> &mut Self::Output {
+        let idx = self.block.in_bounds_offset(index);
+        // SAFETY: Index is bounded by `total_span` which itself is a lower estimate of the
+        // provenance of the pointer. By construction the `VecMut` has exclusive access to all
+        // elements reachable as multiples of its pitch. We access exactly one of them here.
+        unsafe { &mut *self.data.as_ptr().add(idx) }
     }
 }
 
