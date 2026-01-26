@@ -1107,7 +1107,17 @@ impl VectorSlice {
             pitch: self.pitch,
         };
 
-        let offset = mid * self.pitch;
+        // We need to make sure that this is in-bounds of the allocation. Note that the provenance
+        // stretches only past our last element, not an additional pitch past it. So we can use the
+        // simple formula only if there are elements covered by the right part of the split.
+        // Fortunately the opposite of this implies that the right does not cover any elements and
+        // we can thus use any inbounds pointer; like the zero offset.
+        let offset = if right_count == 0 {
+            0
+        } else {
+            mid * self.pitch
+        };
+
         Some((left, right, offset))
     }
 
