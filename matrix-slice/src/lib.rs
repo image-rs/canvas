@@ -358,16 +358,36 @@ impl<'data, T> BlockRef<'data, T> {
     /// The argument type is flexible, allowing ranges (`1..3`), half open ranges (`2..` and `..2`)
     /// among others. See the [`MatrixIndex`] trait, which is sealed though as its details are not
     /// yet finalized.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// let data = &[
+    ///     [0, 1],
+    ///     [3, 4],
+    ///     [6, 7],
+    /// ];
+    ///
+    /// let mut block = matrix_slice::from_array_rows(data);
+    ///
+    /// assert!(block.reborrow().select_cols(1..).is_some_and(|b| b.cols() == 1));
+    /// assert!(block.reborrow().select_cols(2..).is_some_and(|b| b.cols() == 0));
+    /// assert!(block.reborrow().select_cols(3..).is_none());
+    /// ```
     pub fn select_cols<R>(self, range: R) -> Option<BlockRef<'data, T>>
     where
         R: MatrixIndex,
     {
-        let (start, len) = range.into_start_and_len(self.block.rows)?;
+        let (start, len) = range.into_start_and_len(self.block.cols)?;
         let (_, block, offset) = self.block.split_at_col(start)?;
-        assert!(block.cols >= len);
+        debug_assert!(block.cols >= len);
 
         Some(BlockRef {
             block: BlockSlice { cols: len, ..block },
+            // SAFETY: `split_at_col` guarantees that `offset` is in-bounds of the
+            // provenance tracked by `self.block`, which is in-sync with the pointer field
+            // (but we not necessary access these without synchronization). By extension
+            // of being in-bounds of the allocation the offset does not overflow `isize`.
             data: unsafe { self.data.add(offset) },
             lifetime: self.lifetime,
         })
@@ -767,16 +787,37 @@ impl<'data, T> BlockMut<'data, T> {
     /// The argument type is flexible, allowing ranges (`1..3`), half open ranges (`2..` and `..2`)
     /// among others. See the [`MatrixIndex`] trait, which is sealed though as its details are not
     /// yet finalized.
+    ///
+    /// ```
+    /// let data = &mut [
+    ///     [0, 1],
+    ///     [3, 4],
+    ///     [6, 7],
+    /// ];
+    ///
+    /// let mut block = matrix_slice::from_array_rows_mut(data);
+    ///
+    /// assert!(block.reborrow().select_cols(1..).is_some_and(|b| b.cols() == 1));
+    /// assert!(block.reborrow().select_cols(2..).is_some_and(|b| b.cols() == 0));
+    /// assert!(block.reborrow().select_cols(3..).is_none());
+    /// ```
     pub fn select_cols<R>(self, range: R) -> Option<BlockMut<'data, T>>
     where
         R: MatrixIndex,
     {
-        let (start, len) = range.into_start_and_len(self.block.rows)?;
+        let (start, len) = range.into_start_and_len(self.block.cols)?;
         let (_, block, offset) = self.block.split_at_col(start)?;
-        assert!(block.cols >= len);
+        debug_assert!(block.cols >= len);
 
         Some(BlockMut {
             block: BlockSlice { cols: len, ..block },
+            // SAFETY:
+            // - `split_at_col` guarantees that `offset` is in-bounds of the provenance tracked by
+            // `self.block`, which is in-sync with the pointer field (but we not necessary access
+            // these without synchronization). By extension of being in-bounds of the allocation
+            // the offset does not overflow `isize`.
+            // - the block has access to a subset of elements as `self` which is consumed. This
+            // holds because `into_start_and_len` ensures that `start + len <= self.block.cols`.
             data: unsafe { self.data.add(offset) },
             lifetime: self.lifetime,
         })
@@ -1193,16 +1234,19 @@ mod sealed {
     use core::ops;
 
     pub trait Sealed {
+        /// SAFETY: It is crucial that `start + len <= dim` holds if `Some` is returned.
         fn into_start_and_len(self, dim: usize) -> Option<(usize, usize)>;
     }
 
     pub trait SealedOneSided {
+        /// SAFETY: It is crucial that `split <= dim` holds if `Some` is returned.
         fn into_split_point(self, dim: usize) -> Option<(bool, usize)>;
     }
 
     impl Sealed for ops::Range<usize> {
         fn into_start_and_len(self, dim: usize) -> Option<(usize, usize)> {
             if self.start <= self.end && self.end <= dim {
+                // SAFETY: overflow can not have occurred, so `self.start + len = self.end <= dim`.
                 Some((self.start, self.end - self.start))
             } else {
                 None
@@ -1215,6 +1259,7 @@ mod sealed {
             let start = *self.start();
             let end = *self.end();
             if start <= end && end < dim {
+                // SAFETY: overflow can not have occurred, so `self.start + len = self.end + 1 <= dim`.
                 Some((start, end - start + 1))
             } else {
                 None
@@ -1225,6 +1270,7 @@ mod sealed {
     impl Sealed for ops::RangeFrom<usize> {
         fn into_start_and_len(self, dim: usize) -> Option<(usize, usize)> {
             if self.start <= dim {
+                // SAFETY: overflow can not have occurred, so `self.start + len = dim <= dim`.
                 Some((self.start, dim - self.start))
             } else {
                 None
@@ -1235,6 +1281,7 @@ mod sealed {
     impl Sealed for ops::RangeTo<usize> {
         fn into_start_and_len(self, dim: usize) -> Option<(usize, usize)> {
             if self.end <= dim {
+                // SAFETY: `self.end <= dim` by test.
                 Some((0, self.end))
             } else {
                 None
@@ -1245,6 +1292,7 @@ mod sealed {
     impl Sealed for ops::RangeToInclusive<usize> {
         fn into_start_and_len(self, dim: usize) -> Option<(usize, usize)> {
             if self.end < dim {
+                // SAFETY: `self.end + 1 <= dim` by test.
                 Some((0, self.end + 1))
             } else {
                 None
@@ -1254,6 +1302,7 @@ mod sealed {
 
     impl Sealed for ops::RangeFull {
         fn into_start_and_len(self, dim: usize) -> Option<(usize, usize)> {
+            // SAFETY: `dim <= dim` by tautology.
             Some((0, dim))
         }
     }
@@ -1261,6 +1310,7 @@ mod sealed {
     impl SealedOneSided for ops::RangeFrom<usize> {
         fn into_split_point(self, dim: usize) -> Option<(bool, usize)> {
             if self.start <= dim {
+                // SAFETY: `self.start <= dim` by test.
                 Some((false, self.start))
             } else {
                 None
@@ -1271,6 +1321,7 @@ mod sealed {
     impl SealedOneSided for ops::RangeTo<usize> {
         fn into_split_point(self, dim: usize) -> Option<(bool, usize)> {
             if self.end <= dim {
+                // SAFETY: `self.end <= dim` by test.
                 Some((true, self.end))
             } else {
                 None
@@ -1281,6 +1332,7 @@ mod sealed {
     impl SealedOneSided for ops::RangeToInclusive<usize> {
         fn into_split_point(self, dim: usize) -> Option<(bool, usize)> {
             if self.end < dim {
+                // SAFETY: `self.end <= dim` by test.
                 Some((true, self.end + 1))
             } else {
                 None
