@@ -1382,23 +1382,10 @@ impl<'data, T> VecRef<'data, T> {
     /// Divide into two vectors at the given element.
     ///
     /// See [`Self::split_at`] but returns `None` if out of bounds.
-    pub fn split_at_checked(self, mid: usize) -> Option<(VecRef<'data, T>, VecRef<'data, T>)> {
-        if let Some((lhs, rhs, offset)) = self.block.split_at(mid) {
-            Some((
-                VecRef {
-                    data: self.data,
-                    block: lhs,
-                    lifetime: self.lifetime,
-                },
-                VecRef {
-                    data: unsafe { self.data.add(offset) },
-                    block: rhs,
-                    lifetime: self.lifetime,
-                },
-            ))
-        } else {
-            None
-        }
+    pub fn split_at_checked(mut self, mid: usize) -> Option<(VecRef<'data, T>, VecRef<'data, T>)> {
+        // Let's assume this will collapse during const-prop after the type here is inserted.
+        let tail = self.split_off(mid..)?;
+        Some((self, tail))
     }
 
     /// Take part of the vector.
@@ -1477,6 +1464,24 @@ impl<'data, T> VecRef<'data, T> {
             data: unsafe { self.data.add(offset) },
             lifetime: self.lifetime,
         })
+    }
+
+    /// # Examples
+    ///
+    /// ```
+    /// let data = &[
+    ///     [0, 1, 2],
+    ///     [3, 4, 5],
+    ///     [6, 7, 8],
+    /// ];
+    ///
+    /// let block = matrix_slice::from_array_rows(data);
+    /// let column = block.col(1);
+    ///
+    /// assert!(column.iter().eq(&[1, 4, 7]));
+    /// ```
+    pub fn iter(self) -> IterVec<'data, T> {
+        IterVec { vec: self }
     }
 }
 
@@ -1708,6 +1713,27 @@ impl<'data, T> VecMut<'data, T> {
             lifetime: PhantomData,
         }
     }
+
+    /// # Examples
+    ///
+    /// ```
+    /// let data = &mut [
+    ///     [0, 1, 2],
+    ///     [3, 4, 5],
+    ///     [6, 7, 8],
+    /// ];
+    ///
+    /// let mut block = matrix_slice::from_array_rows_mut(data);
+    ///
+    /// for item in block.reborrow().col(1) {
+    ///     *item *= 2;
+    /// }
+    ///
+    /// assert!(block.col(1).iter().eq(&[2, 8, 14]));
+    /// ```
+    pub fn iter(self) -> IterVecMut<'data, T> {
+        IterVecMut { vec: self }
+    }
 }
 
 impl<'data, T> VecMut<'data, Cell<T>> {
@@ -1744,6 +1770,87 @@ impl<T> ops::IndexMut<usize> for VecMut<'_, T> {
         unsafe { &mut *self.data.as_ptr().add(idx) }
     }
 }
+
+/// Iterate over the rows of a block in a matrix.
+///
+/// We assume row-major matrices here, a row is a contiguous slice of items.
+pub struct IterVec<'a, T> {
+    // FIXME: see `std::slice::Iter` which stores the end pointer instead of the full
+    // representation. That way we do not update two fields each time, i.e. iterating only updates
+    // a pointer and not a pointer _and_ a `count` field in `block`.
+    vec: VecRef<'a, T>,
+}
+
+impl<'data, T> IntoIterator for VecRef<'data, T> {
+    type Item = &'data T;
+    type IntoIter = IterVec<'data, T>;
+
+    fn into_iter(self) -> Self::IntoIter {
+        self.iter()
+    }
+}
+
+// FIXME: if budget allows it we should implement common inner-iteration methods such as
+// `for_each`, `collect`, `all` by doing pointer arithmetic on a range iterator which avoids all
+// writes to the value's tracking state itself.
+impl<'data, T> Iterator for IterVec<'data, T> {
+    type Item = &'data T;
+
+    fn next(&mut self) -> Option<Self::Item> {
+        let base = self.vec.split_off(..1)?;
+        Some(unsafe { &*base.data.as_ptr() })
+    }
+
+    fn size_hint(&self) -> (usize, Option<usize>) {
+        let remain = self.vec.len();
+        (remain, Some(remain))
+    }
+
+    fn count(self) -> usize {
+        self.vec.len()
+    }
+}
+
+impl<'data, T> core::iter::FusedIterator for IterVec<'data, T> {}
+
+/// Iterate over mutable rows of a block in a matrix.
+///
+/// We assume row-major matrices here, a row is a contiguous slice of items.
+pub struct IterVecMut<'a, T> {
+    vec: VecMut<'a, T>,
+}
+
+impl<'data, T> IntoIterator for VecMut<'data, T> {
+    type Item = &'data mut T;
+    type IntoIter = IterVecMut<'data, T>;
+
+    fn into_iter(self) -> Self::IntoIter {
+        self.iter()
+    }
+}
+
+// FIXME: if budget allows it we should implement common inner-iteration methods such as
+// `for_each`, `collect`, `all` by doing pointer arithmetic on a range iterator which avoids all
+// writes to the value's tracking state itself.
+impl<'data, T> Iterator for IterVecMut<'data, T> {
+    type Item = &'data mut T;
+
+    fn next(&mut self) -> Option<Self::Item> {
+        let base = self.vec.split_off(..1)?;
+        Some(unsafe { &mut *base.data.as_ptr() })
+    }
+
+    fn size_hint(&self) -> (usize, Option<usize>) {
+        let remain = self.vec.len();
+        (remain, Some(remain))
+    }
+
+    fn count(self) -> usize {
+        self.vec.len()
+    }
+}
+
+impl<'data, T> core::iter::FusedIterator for IterVecMut<'data, T> {}
 
 /// Tests should also be ran under MIRI.
 #[cfg(test)]
