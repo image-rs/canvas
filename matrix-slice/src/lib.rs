@@ -280,10 +280,20 @@ impl<'data, T> BlockRef<'data, T> {
     /// assert_eq!(row[0], 3);
     /// ```
     pub fn row(self, row: usize) -> VecRef<'data, T> {
-        let (_, block, offset) = self.block.split_at_row(row).unwrap();
-        assert!(block.rows >= 1);
+        self.row_checked(row).unwrap()
+    }
 
-        VecRef {
+    /// Choose a single row and refer to its data.
+    ///
+    /// See [`Self::row`] but returns `None` if out of bounds.
+    pub fn row_checked(self, row: usize) -> Option<VecRef<'data, T>> {
+        let (_, block, offset) = self.block.split_at_row(row)?;
+
+        if block.rows == 0 {
+            return None;
+        }
+
+        Some(VecRef {
             block: VectorSlice {
                 count: block.cols,
                 pitch: 1,
@@ -294,7 +304,7 @@ impl<'data, T> BlockRef<'data, T> {
             // of being in-bounds of the allocation the offset does not overflow `isize`.
             data: unsafe { self.data.add(offset) },
             lifetime: self.lifetime,
-        }
+        })
     }
 
     /// Choose a single column and refer to its data.
@@ -313,10 +323,20 @@ impl<'data, T> BlockRef<'data, T> {
     /// assert_eq!(row[0], 1);
     /// ```
     pub fn col(self, col: usize) -> VecRef<'data, T> {
-        let (_, block, offset) = self.block.split_at_col(col).unwrap();
-        assert!(block.cols >= 1);
+        self.col_checked(col).unwrap()
+    }
 
-        VecRef {
+    /// Choose a single column and refer to its data.
+    ///
+    /// See [`Self::col`] but returns `None` if out of bounds.
+    pub fn col_checked(self, col: usize) -> Option<VecRef<'data, T>> {
+        let (_, block, offset) = self.block.split_at_col(col)?;
+
+        if block.cols == 0 {
+            return None;
+        }
+
+        Some(VecRef {
             block: VectorSlice {
                 count: block.rows,
                 pitch: block.pitch,
@@ -327,7 +347,7 @@ impl<'data, T> BlockRef<'data, T> {
             // of being in-bounds of the allocation the offset does not overflow `isize`.
             data: unsafe { self.data.add(offset) },
             lifetime: self.lifetime,
-        }
+        })
     }
 
     /// Choose a range of rows and contract the block to that.
@@ -749,17 +769,34 @@ impl<'data, T> BlockMut<'data, T> {
     /// assert_eq!(block[(1, 0)], 0x42);
     /// ```
     pub fn row(self, row: usize) -> VecMut<'data, T> {
-        let (_, block, offset) = self.block.split_at_row(row).unwrap();
-        assert!(block.rows >= 1);
+        self.row_checked(row).unwrap()
+    }
 
-        VecMut {
+    /// Choose a single row and refer to its data.
+    ///
+    /// See [`Self::row`] but returns `None` if out of bounds.
+    pub fn row_checked(self, row: usize) -> Option<VecMut<'data, T>> {
+        let (_, block, offset) = self.block.split_at_row(row)?;
+
+        if block.rows == 0 {
+            return None;
+        }
+
+        // - `split_at_row` guarantees that `offset` is in-bounds of the
+        // provenance tracked by `self.block`, which is in-sync with the pointer field
+        // (but we not necessary access these without synchronization). By extension
+        // of being in-bounds of the allocation the offset does not overflow `isize`.
+        // - the `block` has disjunct access to its column elements and contains
+        // at least one row of data as asserted. Elements within a row have pitch `1`.
+        Some(VecMut {
             block: VectorSlice {
                 count: block.cols,
                 pitch: 1,
             },
+            // SAFETY: see above.
             data: unsafe { self.data.add(offset) },
             lifetime: self.lifetime,
-        }
+        })
     }
 
     /// Choose a single column and refer to its data.
@@ -779,17 +816,35 @@ impl<'data, T> BlockMut<'data, T> {
     /// assert_eq!(block[(0, 1)], 0x42);
     /// ```
     pub fn col(self, col: usize) -> VecMut<'data, T> {
-        let (_, block, offset) = self.block.split_at_col(col).unwrap();
-        assert!(block.cols >= 1);
+        self.col_checked(col).unwrap()
+    }
 
-        VecMut {
+    /// Choose a single column and refer to its data.
+    ///
+    /// See [`Self::col`] but returns `None` if out of bounds.
+    pub fn col_checked(self, col: usize) -> Option<VecMut<'data, T>> {
+        let (_, block, offset) = self.block.split_at_col(col)?;
+
+        if block.cols == 0 {
+            return None;
+        }
+
+        // - `split_at_col` guarantees that `offset` is in-bounds of the
+        // provenance tracked by `self.block`, which is in-sync with the pointer field
+        // (but we not necessary access these without synchronization). By extension
+        // of being in-bounds of the allocation the offset does not overflow `isize`.
+        // - the `block` has disjunct access to its row elements and contains
+        // at least one column of data as asserted. Elements within a column have pitch
+        // `block.pitch`.
+        Some(VecMut {
             block: VectorSlice {
                 count: block.rows,
                 pitch: block.pitch,
             },
+            // SAFETY: see above.
             data: unsafe { self.data.add(offset) },
             lifetime: self.lifetime,
-        }
+        })
     }
 
     /// Choose a range of rows and contract the block to that.
