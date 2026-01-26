@@ -91,6 +91,7 @@ pub fn from_array_rows<'a, T, const N: usize>(data: &'a [[T; N]]) -> BlockRef<'a
 /// A reference to a block of a matrix with shared access to elements.
 #[derive(Copy, Clone)]
 pub struct BlockRef<'a, T> {
+    // Internal invariant: the size of the block is a subset of the provenance of the pointer.
     data: NonNull<T>,
     block: BlockSlice,
     lifetime: PhantomData<&'a [T]>,
@@ -200,6 +201,10 @@ impl<'data, T> BlockRef<'data, T> {
                     lifetime: self.lifetime,
                 },
                 BlockRef {
+                    // SAFETY: `split_at_col` guarantees that `offset` is in-bounds of the
+                    // provenance tracked by `self.block`, which is in-sync with the pointer field
+                    // (but we not necessary access these without synchronization). By extension
+                    // of being in-bounds of the allocation the offset does not overflow `isize`.
                     data: unsafe { self.data.add(offset) },
                     block: rhs,
                     lifetime: self.lifetime,
@@ -245,6 +250,10 @@ impl<'data, T> BlockRef<'data, T> {
                     lifetime: self.lifetime,
                 },
                 BlockRef {
+                    // SAFETY: `split_at_row` guarantees that `offset` is in-bounds of the
+                    // provenance tracked by `self.block`, which is in-sync with the pointer field
+                    // (but we not necessary access these without synchronization). By extension
+                    // of being in-bounds of the allocation the offset does not overflow `isize`.
                     data: unsafe { self.data.add(offset) },
                     block: rhs,
                     lifetime: self.lifetime,
@@ -271,17 +280,31 @@ impl<'data, T> BlockRef<'data, T> {
     /// assert_eq!(row[0], 3);
     /// ```
     pub fn row(self, row: usize) -> VecRef<'data, T> {
-        let (_, block, offset) = self.block.split_at_row(row).unwrap();
-        assert!(block.rows >= 1);
+        self.row_checked(row).unwrap()
+    }
 
-        VecRef {
+    /// Choose a single row and refer to its data.
+    ///
+    /// See [`Self::row`] but returns `None` if out of bounds.
+    pub fn row_checked(self, row: usize) -> Option<VecRef<'data, T>> {
+        let (_, block, offset) = self.block.split_at_row(row)?;
+
+        if block.rows == 0 {
+            return None;
+        }
+
+        Some(VecRef {
             block: VectorSlice {
                 count: block.cols,
                 pitch: 1,
             },
+            // SAFETY: `split_at_row` guarantees that `offset` is in-bounds of the
+            // provenance tracked by `self.block`, which is in-sync with the pointer field
+            // (but we not necessary access these without synchronization). By extension
+            // of being in-bounds of the allocation the offset does not overflow `isize`.
             data: unsafe { self.data.add(offset) },
             lifetime: self.lifetime,
-        }
+        })
     }
 
     /// Choose a single column and refer to its data.
@@ -300,17 +323,31 @@ impl<'data, T> BlockRef<'data, T> {
     /// assert_eq!(row[0], 1);
     /// ```
     pub fn col(self, col: usize) -> VecRef<'data, T> {
-        let (_, block, offset) = self.block.split_at_col(col).unwrap();
-        assert!(block.cols >= 1);
+        self.col_checked(col).unwrap()
+    }
 
-        VecRef {
+    /// Choose a single column and refer to its data.
+    ///
+    /// See [`Self::col`] but returns `None` if out of bounds.
+    pub fn col_checked(self, col: usize) -> Option<VecRef<'data, T>> {
+        let (_, block, offset) = self.block.split_at_col(col)?;
+
+        if block.cols == 0 {
+            return None;
+        }
+
+        Some(VecRef {
             block: VectorSlice {
                 count: block.rows,
                 pitch: block.pitch,
             },
+            // SAFETY: `split_at_col` guarantees that `offset` is in-bounds of the
+            // provenance tracked by `self.block`, which is in-sync with the pointer field
+            // (but we not necessary access these without synchronization). By extension
+            // of being in-bounds of the allocation the offset does not overflow `isize`.
             data: unsafe { self.data.add(offset) },
             lifetime: self.lifetime,
-        }
+        })
     }
 
     /// Choose a range of rows and contract the block to that.
@@ -341,7 +378,7 @@ impl<'data, T> BlockRef<'data, T> {
     {
         let (start, len) = range.into_start_and_len(self.block.rows)?;
         let (_, block, offset) = self.block.split_at_row(start)?;
-        // Safety: ensures that the resulting block is more constrained, this property should be
+        // SAFETY: ensures that the resulting block is more constrained, this property should be
         // ensured by our sealed `MatrixIndex` implementations.
         assert!(block.rows >= len);
 
@@ -358,16 +395,36 @@ impl<'data, T> BlockRef<'data, T> {
     /// The argument type is flexible, allowing ranges (`1..3`), half open ranges (`2..` and `..2`)
     /// among others. See the [`MatrixIndex`] trait, which is sealed though as its details are not
     /// yet finalized.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// let data = &[
+    ///     [0, 1],
+    ///     [3, 4],
+    ///     [6, 7],
+    /// ];
+    ///
+    /// let mut block = matrix_slice::from_array_rows(data);
+    ///
+    /// assert!(block.reborrow().select_cols(1..).is_some_and(|b| b.cols() == 1));
+    /// assert!(block.reborrow().select_cols(2..).is_some_and(|b| b.cols() == 0));
+    /// assert!(block.reborrow().select_cols(3..).is_none());
+    /// ```
     pub fn select_cols<R>(self, range: R) -> Option<BlockRef<'data, T>>
     where
         R: MatrixIndex,
     {
-        let (start, len) = range.into_start_and_len(self.block.rows)?;
+        let (start, len) = range.into_start_and_len(self.block.cols)?;
         let (_, block, offset) = self.block.split_at_col(start)?;
-        assert!(block.cols >= len);
+        debug_assert!(block.cols >= len);
 
         Some(BlockRef {
             block: BlockSlice { cols: len, ..block },
+            // SAFETY: `split_at_col` guarantees that `offset` is in-bounds of the
+            // provenance tracked by `self.block`, which is in-sync with the pointer field
+            // (but we not necessary access these without synchronization). By extension
+            // of being in-bounds of the allocation the offset does not overflow `isize`.
             data: unsafe { self.data.add(offset) },
             lifetime: self.lifetime,
         })
@@ -403,6 +460,10 @@ impl<'data, T> BlockRef<'data, T> {
     /// ```
     pub fn into_contiguous_slice(self) -> Option<&'data [T]> {
         if let Some(items) = self.block.contiguous_span() {
+            // SAFETY: `contiguous_span` ensures the block covers `items` contiguous elements.
+            // Since pointer provenance is a superset of block's element access that implies the
+            // pointer also has provenance for these elements. Since we have unique access to all
+            // the elements in the block we have non-aliased access to the whole slice.
             Some(unsafe { core::slice::from_raw_parts(self.data.as_ptr().cast(), items) })
         } else {
             None
@@ -419,8 +480,15 @@ impl<'data, T> BlockRef<'data, T> {
     ///
     /// The caller must choose `N` matching the number of columns.
     pub fn into_array_rows_checked<const N: usize>(self) -> Option<&'data [[T; N]]> {
-        if self.block.cols == self.block.pitch && self.block.cols == N {
-            Some(unsafe { core::slice::from_raw_parts(self.data.as_ptr().cast(), self.block.rows) })
+        if let Some(rows) = self.block.contiguous_arrays::<N>() {
+            // SAFETY: `` ensures the block covers `items` contiguous N-arrays of
+            // elements. Since pointer provenance is a superset of block's element access that
+            // implies the pointer also has provenance for these elements. Since we have unique
+            // access to all the elements in the block we have non-aliased access to the whole
+            // slice of elements. A slice and a slice of arrays have the same layout so the same
+            // holds for the correctly sized array the length of which `contiguous_arrays` promises
+            // to return.
+            Some(unsafe { core::slice::from_raw_parts(self.data.as_ptr().cast(), rows) })
         } else {
             None
         }
@@ -491,6 +559,8 @@ pub fn from_array_rows_mut<'a, T, const N: usize>(data: &'a mut [[T; N]]) -> Blo
 
 /// A reference to a block of a matrix with unique access to elements.
 pub struct BlockMut<'a, T> {
+    // Internal invariant: the size of the block is a subset of the provenance of the pointer. Also
+    // we never have two `BlockMut` with the same accessible elements active at the same time.
     data: NonNull<T>,
     block: BlockSlice,
     lifetime: PhantomData<&'a mut [T]>,
@@ -554,6 +624,9 @@ impl<'data, T> BlockMut<'data, T> {
     pub fn new(data: &'data mut [T], pitch: usize) -> Self {
         assert!(data.len().is_multiple_of(pitch));
 
+        // SAFETY:
+        // - construction implies `count * pitch <= data.len()` covering the provenance.
+        // - this is the only block with mutable access to the whole data.
         BlockMut {
             block: BlockSlice {
                 rows: data.len() / pitch,
@@ -603,6 +676,13 @@ impl<'data, T> BlockMut<'data, T> {
         mid: usize,
     ) -> Option<(BlockMut<'data, T>, BlockMut<'data, T>)> {
         if let Some((lhs, rhs, offset)) = self.block.split_at_col(mid) {
+            // SAFETY:
+            // - `split_at_col` guarantees that `offset` is in-bounds of the
+            // provenance tracked by `self.block`, which is in-sync with the pointer field
+            // (but we not necessary access these without synchronization). By extension
+            // of being in-bounds of the allocation the offset does not overflow `isize`.
+            // - the two blocks have disjunct access to the same elements as the input that is
+            // consumed by this operation.
             Some((
                 BlockMut {
                     data: self.data,
@@ -648,6 +728,13 @@ impl<'data, T> BlockMut<'data, T> {
         mid: usize,
     ) -> Option<(BlockMut<'data, T>, BlockMut<'data, T>)> {
         if let Some((lhs, rhs, offset)) = self.block.split_at_row(mid) {
+            // SAFETY:
+            // - `split_at_row` guarantees that `offset` is in-bounds of the
+            // provenance tracked by `self.block`, which is in-sync with the pointer field
+            // (but we not necessary access these without synchronization). By extension
+            // of being in-bounds of the allocation the offset does not overflow `isize`.
+            // - the two blocks have disjunct access to the same elements as the input that is
+            // consumed by this operation.
             Some((
                 BlockMut {
                     data: self.data,
@@ -682,17 +769,34 @@ impl<'data, T> BlockMut<'data, T> {
     /// assert_eq!(block[(1, 0)], 0x42);
     /// ```
     pub fn row(self, row: usize) -> VecMut<'data, T> {
-        let (_, block, offset) = self.block.split_at_row(row).unwrap();
-        assert!(block.rows >= 1);
+        self.row_checked(row).unwrap()
+    }
 
-        VecMut {
+    /// Choose a single row and refer to its data.
+    ///
+    /// See [`Self::row`] but returns `None` if out of bounds.
+    pub fn row_checked(self, row: usize) -> Option<VecMut<'data, T>> {
+        let (_, block, offset) = self.block.split_at_row(row)?;
+
+        if block.rows == 0 {
+            return None;
+        }
+
+        // - `split_at_row` guarantees that `offset` is in-bounds of the
+        // provenance tracked by `self.block`, which is in-sync with the pointer field
+        // (but we not necessary access these without synchronization). By extension
+        // of being in-bounds of the allocation the offset does not overflow `isize`.
+        // - the `block` has disjunct access to its column elements and contains
+        // at least one row of data as asserted. Elements within a row have pitch `1`.
+        Some(VecMut {
             block: VectorSlice {
                 count: block.cols,
                 pitch: 1,
             },
+            // SAFETY: see above.
             data: unsafe { self.data.add(offset) },
             lifetime: self.lifetime,
-        }
+        })
     }
 
     /// Choose a single column and refer to its data.
@@ -712,17 +816,35 @@ impl<'data, T> BlockMut<'data, T> {
     /// assert_eq!(block[(0, 1)], 0x42);
     /// ```
     pub fn col(self, col: usize) -> VecMut<'data, T> {
-        let (_, block, offset) = self.block.split_at_col(col).unwrap();
-        assert!(block.cols >= 1);
+        self.col_checked(col).unwrap()
+    }
 
-        VecMut {
+    /// Choose a single column and refer to its data.
+    ///
+    /// See [`Self::col`] but returns `None` if out of bounds.
+    pub fn col_checked(self, col: usize) -> Option<VecMut<'data, T>> {
+        let (_, block, offset) = self.block.split_at_col(col)?;
+
+        if block.cols == 0 {
+            return None;
+        }
+
+        // - `split_at_col` guarantees that `offset` is in-bounds of the
+        // provenance tracked by `self.block`, which is in-sync with the pointer field
+        // (but we not necessary access these without synchronization). By extension
+        // of being in-bounds of the allocation the offset does not overflow `isize`.
+        // - the `block` has disjunct access to its row elements and contains
+        // at least one column of data as asserted. Elements within a column have pitch
+        // `block.pitch`.
+        Some(VecMut {
             block: VectorSlice {
                 count: block.rows,
                 pitch: block.pitch,
             },
+            // SAFETY: see above.
             data: unsafe { self.data.add(offset) },
             lifetime: self.lifetime,
-        }
+        })
     }
 
     /// Choose a range of rows and contract the block to that.
@@ -757,6 +879,13 @@ impl<'data, T> BlockMut<'data, T> {
 
         Some(BlockMut {
             block: BlockSlice { rows: len, ..block },
+            // SAFETY:
+            // - `split_at_row` guarantees that `offset` is in-bounds of the provenance tracked by
+            // `self.block`, which is in-sync with the pointer field (but we not necessary access
+            // these without synchronization). By extension of being in-bounds of the allocation
+            // the offset does not overflow `isize`.
+            // - the block has access to a subset of elements as `self` which is consumed. This
+            // holds because `into_start_and_len` ensures that `start + len <= self.block.rows`.
             data: unsafe { self.data.add(offset) },
             lifetime: self.lifetime,
         })
@@ -767,16 +896,37 @@ impl<'data, T> BlockMut<'data, T> {
     /// The argument type is flexible, allowing ranges (`1..3`), half open ranges (`2..` and `..2`)
     /// among others. See the [`MatrixIndex`] trait, which is sealed though as its details are not
     /// yet finalized.
+    ///
+    /// ```
+    /// let data = &mut [
+    ///     [0, 1],
+    ///     [3, 4],
+    ///     [6, 7],
+    /// ];
+    ///
+    /// let mut block = matrix_slice::from_array_rows_mut(data);
+    ///
+    /// assert!(block.reborrow().select_cols(1..).is_some_and(|b| b.cols() == 1));
+    /// assert!(block.reborrow().select_cols(2..).is_some_and(|b| b.cols() == 0));
+    /// assert!(block.reborrow().select_cols(3..).is_none());
+    /// ```
     pub fn select_cols<R>(self, range: R) -> Option<BlockMut<'data, T>>
     where
         R: MatrixIndex,
     {
-        let (start, len) = range.into_start_and_len(self.block.rows)?;
+        let (start, len) = range.into_start_and_len(self.block.cols)?;
         let (_, block, offset) = self.block.split_at_col(start)?;
-        assert!(block.cols >= len);
+        debug_assert!(block.cols >= len);
 
         Some(BlockMut {
             block: BlockSlice { cols: len, ..block },
+            // SAFETY:
+            // - `split_at_col` guarantees that `offset` is in-bounds of the provenance tracked by
+            // `self.block`, which is in-sync with the pointer field (but we not necessary access
+            // these without synchronization). By extension of being in-bounds of the allocation
+            // the offset does not overflow `isize`.
+            // - the block has access to a subset of elements as `self` which is consumed. This
+            // holds because `into_start_and_len` ensures that `start + len <= self.block.cols`.
             data: unsafe { self.data.add(offset) },
             lifetime: self.lifetime,
         })
@@ -812,6 +962,10 @@ impl<'data, T> BlockMut<'data, T> {
     /// ```
     pub fn into_contiguous_slice(self) -> Option<&'data mut [T]> {
         if let Some(items) = self.block.contiguous_span() {
+            // SAFETY: `contiguous_span` ensures the block covers `items` contiguous elements.
+            // Since pointer provenance is a superset of block's element access that implies the
+            // pointer also has provenance for these elements. Since we have unique access to all
+            // the elements in the block we have non-aliased access to the whole slice.
             Some(unsafe { core::slice::from_raw_parts_mut(self.data.as_ptr().cast(), items) })
         } else {
             None
@@ -845,10 +999,15 @@ impl<'data, T> BlockMut<'data, T> {
     /// assert!(block.reborrow().into_array_rows_checked::<3>().is_some());
     /// ```
     pub fn into_array_rows_checked<const N: usize>(self) -> Option<&'data mut [[T; N]]> {
-        if self.block.cols == self.block.pitch && self.block.cols == N {
-            Some(unsafe {
-                core::slice::from_raw_parts_mut(self.data.as_ptr().cast(), self.block.rows)
-            })
+        if let Some(rows) = self.block.contiguous_arrays::<N>() {
+            // SAFETY: `` ensures the block covers `items` contiguous N-arrays of
+            // elements. Since pointer provenance is a superset of block's element access that
+            // implies the pointer also has provenance for these elements. Since we have unique
+            // access to all the elements in the block we have non-aliased access to the whole
+            // slice of elements. A slice and a slice of arrays have the same layout so the same
+            // holds for the correctly sized array the length of which `contiguous_arrays` promises
+            // to return.
+            Some(unsafe { core::slice::from_raw_parts_mut(self.data.as_ptr().cast(), rows) })
         } else {
             None
         }
@@ -974,6 +1133,16 @@ impl BlockSlice {
     fn contiguous_span(&self) -> Option<usize> {
         if self.cols == self.pitch {
             Some(self.rows * self.cols)
+        } else {
+            None
+        }
+    }
+
+    /// The number of rows if this block is contiguous (cols equals pitch) and matching a static
+    /// count of column elements.
+    fn contiguous_arrays<const N: usize>(&self) -> Option<usize> {
+        if self.cols == self.pitch && self.cols == N {
+            Some(self.rows)
         } else {
             None
         }
@@ -1193,16 +1362,19 @@ mod sealed {
     use core::ops;
 
     pub trait Sealed {
+        /// SAFETY: It is crucial that `start + len <= dim` holds if `Some` is returned.
         fn into_start_and_len(self, dim: usize) -> Option<(usize, usize)>;
     }
 
     pub trait SealedOneSided {
+        /// SAFETY: It is crucial that `split <= dim` holds if `Some` is returned.
         fn into_split_point(self, dim: usize) -> Option<(bool, usize)>;
     }
 
     impl Sealed for ops::Range<usize> {
         fn into_start_and_len(self, dim: usize) -> Option<(usize, usize)> {
             if self.start <= self.end && self.end <= dim {
+                // SAFETY: overflow can not have occurred, so `self.start + len = self.end <= dim`.
                 Some((self.start, self.end - self.start))
             } else {
                 None
@@ -1215,6 +1387,7 @@ mod sealed {
             let start = *self.start();
             let end = *self.end();
             if start <= end && end < dim {
+                // SAFETY: overflow can not have occurred, so `self.start + len = self.end + 1 <= dim`.
                 Some((start, end - start + 1))
             } else {
                 None
@@ -1225,6 +1398,7 @@ mod sealed {
     impl Sealed for ops::RangeFrom<usize> {
         fn into_start_and_len(self, dim: usize) -> Option<(usize, usize)> {
             if self.start <= dim {
+                // SAFETY: overflow can not have occurred, so `self.start + len = dim <= dim`.
                 Some((self.start, dim - self.start))
             } else {
                 None
@@ -1235,6 +1409,7 @@ mod sealed {
     impl Sealed for ops::RangeTo<usize> {
         fn into_start_and_len(self, dim: usize) -> Option<(usize, usize)> {
             if self.end <= dim {
+                // SAFETY: `self.end <= dim` by test.
                 Some((0, self.end))
             } else {
                 None
@@ -1245,6 +1420,7 @@ mod sealed {
     impl Sealed for ops::RangeToInclusive<usize> {
         fn into_start_and_len(self, dim: usize) -> Option<(usize, usize)> {
             if self.end < dim {
+                // SAFETY: `self.end + 1 <= dim` by test.
                 Some((0, self.end + 1))
             } else {
                 None
@@ -1254,6 +1430,7 @@ mod sealed {
 
     impl Sealed for ops::RangeFull {
         fn into_start_and_len(self, dim: usize) -> Option<(usize, usize)> {
+            // SAFETY: `dim <= dim` by tautology.
             Some((0, dim))
         }
     }
@@ -1261,6 +1438,7 @@ mod sealed {
     impl SealedOneSided for ops::RangeFrom<usize> {
         fn into_split_point(self, dim: usize) -> Option<(bool, usize)> {
             if self.start <= dim {
+                // SAFETY: `self.start <= dim` by test.
                 Some((false, self.start))
             } else {
                 None
@@ -1271,6 +1449,7 @@ mod sealed {
     impl SealedOneSided for ops::RangeTo<usize> {
         fn into_split_point(self, dim: usize) -> Option<(bool, usize)> {
             if self.end <= dim {
+                // SAFETY: `self.end <= dim` by test.
                 Some((true, self.end))
             } else {
                 None
@@ -1281,6 +1460,7 @@ mod sealed {
     impl SealedOneSided for ops::RangeToInclusive<usize> {
         fn into_split_point(self, dim: usize) -> Option<(bool, usize)> {
             if self.end < dim {
+                // SAFETY: `self.end <= dim` by test.
                 Some((true, self.end + 1))
             } else {
                 None
@@ -1301,6 +1481,7 @@ mod sealed {
 /// [`BlockRef::row`] methods.
 #[derive(Copy, Clone)]
 pub struct VecRef<'a, T> {
+    // Internal invariant: the size of the block is a subset of the provenance of the pointer.
     data: NonNull<T>,
     block: VectorSlice,
     lifetime: PhantomData<&'a [T]>,
@@ -1328,7 +1509,7 @@ impl<'data, T> VecRef<'data, T> {
         assert_ne!(pitch, 0);
 
         VecRef {
-            // Safety: construction implies `count * pitch <= data.len()`.
+            // SAFETY: construction implies `count * pitch <= data.len()`.
             block: VectorSlice {
                 count: data.len() / pitch,
                 pitch,
@@ -1507,6 +1688,8 @@ impl<T> ops::Index<usize> for VecRef<'_, T> {
 /// Created from its constructors or a block reference via the [`BlockMut::col`] and
 /// [`BlockMut::row`] methods.
 pub struct VecMut<'a, T> {
+    // Internal invariant: the size of the block is a subset of the provenance of the pointer. Also
+    // we never have two `VecMut` with the same accessible elements active at the same time.
     data: NonNull<T>,
     block: VectorSlice,
     lifetime: PhantomData<&'a mut [T]>,
@@ -1525,7 +1708,7 @@ impl<'data, T> VecMut<'data, T> {
     /// The resulting block refers to the first column of the matrix.
     pub fn new(data: &'data mut [T], pitch: usize) -> Self {
         VecMut {
-            // Safety: construction implies `count * pitch <= data.len()`.
+            // SAFETY: construction implies `count * pitch <= data.len()`.
             block: VectorSlice {
                 count: data.len() / pitch,
                 pitch,
