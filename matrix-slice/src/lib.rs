@@ -1173,11 +1173,21 @@ impl MatrixIndex for ops::RangeTo<usize> {}
 impl MatrixIndex for ops::RangeToInclusive<usize> {}
 impl MatrixIndex for ops::RangeFull {}
 
+pub trait OneSidedMatrixIndex: sealed::SealedOneSided {}
+
+impl OneSidedMatrixIndex for ops::RangeFrom<usize> {}
+impl OneSidedMatrixIndex for ops::RangeTo<usize> {}
+impl OneSidedMatrixIndex for ops::RangeToInclusive<usize> {}
+
 mod sealed {
     use core::ops;
 
     pub trait Sealed {
         fn into_start_and_len(self, dim: usize) -> Option<(usize, usize)>;
+    }
+
+    pub trait SealedOneSided {
+        fn into_split_point(self, dim: usize) -> Option<(bool, usize)>;
     }
 
     impl Sealed for ops::Range<usize> {
@@ -1235,6 +1245,36 @@ mod sealed {
     impl Sealed for ops::RangeFull {
         fn into_start_and_len(self, dim: usize) -> Option<(usize, usize)> {
             Some((0, dim))
+        }
+    }
+
+    impl SealedOneSided for ops::RangeFrom<usize> {
+        fn into_split_point(self, dim: usize) -> Option<(bool, usize)> {
+            if self.start <= dim {
+                Some((false, self.start))
+            } else {
+                None
+            }
+        }
+    }
+
+    impl SealedOneSided for ops::RangeTo<usize> {
+        fn into_split_point(self, dim: usize) -> Option<(bool, usize)> {
+            if self.end <= dim {
+                Some((true, self.end))
+            } else {
+                None
+            }
+        }
+    }
+
+    impl SealedOneSided for ops::RangeToInclusive<usize> {
+        fn into_split_point(self, dim: usize) -> Option<(bool, usize)> {
+            if self.end < dim {
+                Some((true, self.end + 1))
+            } else {
+                None
+            }
         }
     }
 }
@@ -1349,6 +1389,62 @@ impl<'data, T> VecRef<'data, T> {
         } else {
             None
         }
+    }
+
+    /// Take part of the vector.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use matrix_slice::VecRef;
+    ///
+    /// let data = &[0, 1, 2, 3, 4, 5];
+    /// let mut vec = VecRef::new(data, 1);
+    ///
+    /// // Does nothing.
+    /// assert!(vec.split_off(6..).is_some_and(|v| v.is_empty()));
+    /// assert!(vec.split_off(7..).is_none());
+    /// assert!(vec.split_off(..7).is_none());
+    ///
+    /// let right = vec.split_off(2..).unwrap();
+    /// assert_eq!(vec.len(), 2);
+    /// assert_eq!(right[3], 5);
+    /// ```
+    ///
+    /// You can also split off the start:
+    ///
+    /// ```
+    /// use matrix_slice::VecRef;
+    ///
+    /// let data = &[0, 1, 2, 3, 4, 5];
+    /// let mut vec = VecRef::new(data, 1);
+    /// let start = vec.split_off(..=2).unwrap();
+    ///
+    /// assert_eq!(vec[0], 3);
+    /// assert_eq!(start[0], 0);
+    /// ```
+    pub fn split_off<R>(&mut self, range: R) -> Option<Self>
+    where
+        R: OneSidedMatrixIndex,
+    {
+        let (is_front, split_point) = range.into_split_point(self.block.count)?;
+        let (left, right, offset) = self.block.split_at(split_point)?;
+
+        let ptr = self.data;
+        let (ours, theirs) = if is_front {
+            ((right, offset), (left, 0))
+        } else {
+            ((left, 0), (right, offset))
+        };
+
+        self.block = ours.0;
+        self.data = unsafe { ptr.add(ours.1) };
+
+        Some(VecRef {
+            block: theirs.0,
+            data: unsafe { ptr.add(theirs.1) },
+            lifetime: self.lifetime,
+        })
     }
 
     /// Choose a range of elements and contract the vector to that.
@@ -1485,6 +1581,66 @@ impl<'data, T> VecMut<'data, T> {
         } else {
             None
         }
+    }
+
+    /// Take part of the vector.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use matrix_slice::VecMut;
+    ///
+    /// let data = &mut [0, 1, 2, 3, 4, 5];
+    /// let mut vec = VecMut::new(data, 1);
+    ///
+    /// // Does nothing.
+    /// assert!(vec.split_off(6..).is_some_and(|v| v.is_empty()));
+    /// assert!(vec.split_off(7..).is_none());
+    /// assert!(vec.split_off(..7).is_none());
+    ///
+    /// let mut right = vec.split_off(2..).unwrap();
+    /// assert_eq!(vec.len(), 2);
+    /// assert_eq!(right[3], 5);
+    ///
+    /// // The two halves are disjoint:
+    /// right[0] = 0x42;
+    /// assert_eq!(vec[1], 1);
+    /// ```
+    ///
+    /// You can also split off the start:
+    ///
+    /// ```
+    /// use matrix_slice::VecMut;
+    ///
+    /// let data = &mut [0, 1, 2, 3, 4, 5];
+    /// let mut vec = VecMut::new(data, 1);
+    /// let start = vec.split_off(..=2).unwrap();
+    ///
+    /// assert_eq!(vec[0], 3);
+    /// assert_eq!(start[0], 0);
+    /// ```
+    pub fn split_off<R>(&mut self, range: R) -> Option<Self>
+    where
+        R: OneSidedMatrixIndex,
+    {
+        let (is_front, split_point) = range.into_split_point(self.block.count)?;
+        let (left, right, offset) = self.block.split_at(split_point)?;
+
+        let ptr = self.data;
+        let (ours, theirs) = if is_front {
+            ((right, offset), (left, 0))
+        } else {
+            ((left, 0), (right, offset))
+        };
+
+        self.block = ours.0;
+        self.data = unsafe { ptr.add(ours.1) };
+
+        Some(VecMut {
+            block: theirs.0,
+            data: unsafe { ptr.add(theirs.1) },
+            lifetime: self.lifetime,
+        })
     }
 
     /// Choose a range of elements and contract the vector to that.
