@@ -1,3 +1,14 @@
+## Version 1.1.2
+
+Fixes:
+- `Block{Ref,Mut}::select_cols` used the wrong size bound which would panic
+  further down if the selection was in-bounds for the number of rows instead.
+  This triggered a deterministic panic, not leading to out-of-bounds access.
+
+Additions:
+- Added `Block{Ref,Mut}::{col,row}_checked` methods that return an `Option`
+  instead of panicking on out-of-bounds access.
+
 ## Version 1.1.1
 
 Fixes:
