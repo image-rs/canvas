@@ -57,6 +57,11 @@ pub mod docs {
     ///
     #[doc = include_str!("../Changes.md")]
     pub const CHANGELOG: () = ();
+
+    /// What is possible for the future and features of the past.
+    ///
+    #[doc = include_str!("../docs/roadmap.md")]
+    pub const ROADMAP: () = ();
 }
 
 /// Create a block reference from a full matrix represented as an array of rows.
@@ -164,6 +169,16 @@ impl<'data, T> BlockRef<'data, T> {
     /// Number of columns in this block.
     pub fn cols(&self) -> usize {
         self.block.cols
+    }
+
+    /// Get a pointer to the first element of the block.
+    pub fn as_ptr(&self) -> *const T {
+        self.data.as_ptr()
+    }
+
+    /// Get a non-null pointer to the first element of the block.
+    pub fn as_non_null(&self) -> NonNull<T> {
+        self.data
     }
 
     /// Divide into two blocks at the given column.
@@ -646,6 +661,21 @@ impl<'data, T> BlockMut<'data, T> {
     /// Number of columns in this block.
     pub fn cols(&self) -> usize {
         self.block.cols
+    }
+
+    /// Get a pointer to the first element of the block.
+    pub fn as_ptr(&self) -> *const T {
+        self.data.as_ptr()
+    }
+
+    /// Get a mutable pointer to the first element of the block.
+    pub fn as_mut_ptr(&mut self) -> *mut T {
+        self.data.as_ptr()
+    }
+
+    /// Get a non-null pointer to the first element of the block.
+    pub fn as_non_null(&self) -> NonNull<T> {
+        self.data
     }
 
     /// Divide into two blocks at the given column.
