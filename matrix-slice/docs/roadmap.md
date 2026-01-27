@@ -6,11 +6,11 @@ that are completed or have a design should link to a section further down.
 
 - [ ] `BlockMut`: `rotate` for rotating rows/columns.
 - [ ] `BlockMut`: `flip` for flipping rows/columns.
-- [ ] `BlockMut`: `fill` for efficient initialization.
+- [x] `BlockMut`: `fill` for efficient initialization.
 - [ ] `BlockMut`: `copy_within` which will take some design to make sure the
   interface is not overloaded with parameters.
 - [ ] `BlockMut`: `swap`.
-- [ ] `BlockMut`: `copy_from_block(BlockRef)`, `swap_with_block`.
+- [x] `BlockMut`: `copy_from_block(BlockRef)`, `swap_with_block`.
 - [ ] `Block`: `split_*_unchecked` methods that forward the safety requirement to
   the caller.
 - [ ] `Block`: `split_{first,last}` to separate into a respective `Vec` and

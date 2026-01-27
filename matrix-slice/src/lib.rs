@@ -1088,6 +1088,174 @@ impl<'data, T> BlockMut<'data, T> {
     }
 }
 
+impl<T> BlockMut<'_, T> {
+    /// Fill the block with elements by cloning a given value.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// let mut data = &mut [
+    ///    [0, 0, 0],
+    ///    [1, 2, 3],
+    ///    [0, 0, 0],
+    /// ];
+    ///
+    /// let matrix = matrix_slice::from_array_rows_mut(data);
+    /// matrix.select(1..3, 1..3).unwrap().fill(0x42);
+    ///
+    /// let expected = [
+    ///    [0, 0, 0],
+    ///    [1, 0x42, 0x42],
+    ///    [0, 0x42, 0x42],
+    /// ];
+    ///
+    /// assert_eq!(*data, expected);
+    /// ```
+    pub fn fill(&mut self, value: T)
+    where
+        T: Clone,
+    {
+        for row in self.reborrow().iter_rows_mut() {
+            row.fill(value.clone());
+        }
+    }
+
+    /// Fill the block with elements by generating values from a function.
+    pub fn fill_with(&mut self, mut f: impl FnMut() -> T) {
+        for row in self.reborrow().iter_rows_mut() {
+            for el in row {
+                *el = f();
+            }
+        }
+    }
+
+    /// Clone elements from a source matrix block into this block.
+    ///
+    /// # Panics
+    ///
+    /// This function panics if the source and destination blocks have different shapes.
+    pub fn clone_from_block(&mut self, src: BlockRef<'_, T>)
+    where
+        T: Clone,
+    {
+        assert!(
+            self.block.rows == src.block.rows && self.block.cols == src.block.cols,
+            "source and destination blocks must have the same shape"
+        );
+
+        // Try to optimize for the contiguous case first, a large memcpy should be much faster than
+        // iteration. And we'll load from the fields in any case.
+        if let Some(dst_slice) = self.reborrow().into_contiguous_slice() {
+            if let Some(src_slice) = src.clone().into_contiguous_slice() {
+                dst_slice.clone_from_slice(src_slice);
+                return;
+            }
+        }
+
+        for (dst, src) in self.reborrow().iter_rows_mut().zip(src.iter_rows()) {
+            dst.clone_from_slice(src);
+        }
+    }
+
+    /// Copy elements from a source matrix block into this block.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// let mut data_a = &mut [
+    ///    [0, 0, 0, 0, 0],
+    ///    [0, 1, 2, 3, 0],
+    ///    [0, 0, 0, 0, 0],
+    /// ];
+    ///
+    /// let data_b = &[
+    ///   [7, 8, 9],
+    /// ];
+    ///
+    /// let matrix_a = matrix_slice::from_array_rows_mut(data_a);
+    /// let mut block_a = matrix_a.select(1..2, 1..4).unwrap();
+    /// let mut block_b = matrix_slice::from_array_rows(data_b);
+    ///
+    /// block_a.copy_from_block(block_b);
+    ///
+    /// assert_eq!(data_a[1], [0, 7, 8, 9, 0]);
+    /// ```
+    ///
+    /// # Panics
+    ///
+    /// This function panics if the source and destination blocks have different shapes.
+    pub fn copy_from_block(&mut self, src: BlockRef<'_, T>)
+    where
+        T: Copy,
+    {
+        assert!(
+            self.block.rows == src.block.rows && self.block.cols == src.block.cols,
+            "source and destination blocks must have the same shape"
+        );
+
+        // Try to optimize for the contiguous case first, a large memcpy should be much faster than
+        // iteration. And we'll load from the fields in any case.
+        if let Some(dst_slice) = self.reborrow().into_contiguous_slice() {
+            if let Some(src_slice) = src.clone().into_contiguous_slice() {
+                dst_slice.copy_from_slice(src_slice);
+                return;
+            }
+        }
+
+        for (dst, src) in self.reborrow().iter_rows_mut().zip(src.iter_rows()) {
+            dst.copy_from_slice(src);
+        }
+    }
+
+    /// Swap all elements with another matrix block.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// let mut data_a = [
+    ///    [0, 0, 0],
+    ///    [1, 2, 3],
+    ///    [0, 0, 0],
+    /// ];
+    ///
+    /// let mut data_b = [
+    ///   [7, 8, 9],
+    /// ];
+    ///
+    /// let matrix_a = matrix_slice::from_array_rows_mut(&mut data_a);
+    /// let mut block_a = matrix_a.select_rows(1..2).unwrap();
+    /// let mut block_b = matrix_slice::from_array_rows_mut(&mut data_b);
+    ///
+    /// block_a.swap_with_block(block_b.reborrow());
+    ///
+    /// assert_eq!(data_a[1], [7, 8, 9]);
+    /// assert_eq!(data_b, [[1, 2, 3]]);
+    /// ```
+    ///
+    /// # Panics
+    ///
+    /// This function panics if the source and destination blocks have different shapes.
+    pub fn swap_with_block(&mut self, mut other: BlockMut<'_, T>) {
+        assert!(
+            self.block.rows == other.block.rows && self.block.cols == other.block.cols,
+            "source and destination blocks must have the same shape"
+        );
+
+        // Try to optimize for the contiguous case first, a large memcpy should be much faster than
+        // iteration. And we'll load from the fields in any case.
+        if let Some(dst_slice) = self.reborrow().into_contiguous_slice() {
+            if let Some(src_slice) = other.reborrow().into_contiguous_slice() {
+                dst_slice.swap_with_slice(src_slice);
+                return;
+            }
+        }
+
+        for (a, b) in self.reborrow().iter_rows_mut().zip(other.iter_rows_mut()) {
+            a.swap_with_slice(b);
+        }
+    }
+}
+
 impl<'data, T> BlockMut<'data, Cell<T>> {
     /// Modify the item type from a `Cell` to its interior type.
     ///
