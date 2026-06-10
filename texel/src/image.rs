@@ -36,8 +36,8 @@ pub use data::{AsCopySource, AsCopyTarget, DataCells, DataMut, DataRef};
 /// lead to a diverging size of the memory buffer and the layout. Hence, access to the image pixels
 /// should not lead to panic unless an incorrectly implemented layout is used.
 ///
-/// It possible to convert the layout to a less strictly typed one without reallocating the buffer,
-/// by re-interpreting the bytes. For example, all standard layouts such as
+/// It is possible to convert the layout to a less strictly typed one without reallocating the
+/// buffer, by re-interpreting the bytes. For example, all standard layouts such as
 /// [`Matrix`](`crate::layout::Matrix`) can be weakened to [`Bytes`]. The reverse can not be done
 /// unchecked but is possible with fallible conversions.
 ///
